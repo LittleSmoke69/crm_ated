@@ -259,6 +259,7 @@ export default function GestorTrafegoClient({
     }>;
     consultor_total_leads?: number;
     consultor_total_deposited?: number;
+    ads_attribution_consultors?: Array<{ id: string; email: string; full_name: string | null }>;
   }>>(initialData?.metaCampaignsData || []);
   /** graph = Meta Graph API ao vivo; supabase = fallback quando live falha */
   const [metaMetricsSource, setMetaMetricsSource] = useState<'graph' | 'supabase' | null>(null);
@@ -1453,7 +1454,7 @@ export default function GestorTrafegoClient({
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Custo por resultado</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Leads consultores</th>
-                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase text-right">Depósito consultores</th>
+                        <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">Consultores Ads</th>
                         <th className="px-4 py-3 font-bold text-gray-600 dark:text-gray-400 uppercase">Atribuir consultores</th>
                       </tr>
                     </thead>
@@ -1475,8 +1476,18 @@ export default function GestorTrafegoClient({
                           <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">
                             {(Number(row.consultor_total_leads) || 0).toLocaleString('pt-BR')}
                           </td>
-                          <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-200">
-                            {formatMetaSpend(Number(row.consultor_total_deposited) || 0, metaFunnel?.currency)}
+                          <td className="px-4 py-3">
+                            {(row.ads_attribution_consultors?.length ?? 0) > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {(row.ads_attribution_consultors || []).map((c) => (
+                                  <span key={c.id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                    {c.full_name || c.email || c.id}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-400 italic">—</span>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             {(() => {
@@ -2513,12 +2524,6 @@ export default function GestorTrafegoClient({
                     <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Leads consultores</p>
                     <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
                       {(Number(campaignRow.consultor_total_leads) || 0).toLocaleString('pt-BR')}
-                    </p>
-                  </div>
-                  <div className="p-3 rounded-xl border border-gray-100 dark:border-[#383838] bg-gray-50 dark:bg-[#1e1e1e]">
-                    <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">Depósito consultores</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 mt-1">
-                      {(Number(campaignRow.consultor_total_deposited) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </p>
                   </div>
                 </div>

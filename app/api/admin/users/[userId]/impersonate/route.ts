@@ -4,7 +4,8 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
- * POST /api/admin/users/[userId]/impersonate - Permite ao admin fazer login como outro usuário
+ * POST /api/admin/users/[userId]/impersonate - Permite ao admin fazer login como outro usuário.
+ * Super admin pode impersonar qualquer perfil, inclusive outro super_admin; admin/dono_banca não impersonam outros administradores (regra abaixo).
  */
 export async function POST(
   req: NextRequest,
@@ -37,11 +38,7 @@ export async function POST(
       return errorResponse('Usuário não encontrado', 404);
     }
 
-    // 3. Super Admin não pode acessar conta de outro Super Admin (exceto a própria)
-    if (targetProfile.status === 'super_admin' && adminUserId !== targetUserId) {
-      return errorResponse('Não é possível acessar a conta de outro Super Admin por segurança.', 403);
-    }
-    // Admin comum não pode acessar conta de outro admin nem de super_admin
+    // 3. Admin comum (ou dono_banca) não pode acessar conta de outro admin nem de super_admin
     if (
       adminProfile.status !== 'super_admin' &&
       (targetProfile.status === 'admin' || targetProfile.status === 'super_admin') &&

@@ -7,8 +7,25 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse } from '@/lib/utils/response';
-import { getUserProfile, hasFullAdminAccess } from '@/lib/middleware/permissions';
+import { getUserProfile, hasFullAdminAccess, type UserProfile } from '@/lib/middleware/permissions';
 import { getTenantForUser, getRoleByCode, getVisibleSidebarCodesForRole, hasZaplotoTables } from '@/lib/services/zaploto-tenant-service';
+
+type MaturationAccessPayload = {
+  canAccess: boolean;
+  /** Status real do perfil (evita `sessionStorage` desatualizado no cliente). */
+  profileStatus: string | null;
+  /** Apenas super_admin/admin: ver todos os planos, card “Configurar plano de conversas”, Auto maturador no select. */
+  canManageAllMaturationPlans: boolean;
+};
+
+function buildMaturationAccessPayload(canAccess: boolean, profile: UserProfile | null): MaturationAccessPayload {
+  const status = profile?.status != null ? String(profile.status).trim() : null;
+  return {
+    canAccess,
+    profileStatus: status,
+    canManageAllMaturationPlans: status === 'super_admin' || status === 'admin',
+  };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,30 +33,30 @@ export async function GET(req: NextRequest) {
     const profile = await getUserProfile(userId);
 
     if (!profile) {
-      return successResponse({ canAccess: false });
+      return successResponse(buildMaturationAccessPayload(false, null));
     }
 
     if (hasFullAdminAccess(profile)) {
-      return successResponse({ canAccess: true });
+      return successResponse(buildMaturationAccessPayload(true, profile));
     }
 
     const hasTables = await hasZaplotoTables();
     if (!hasTables) {
-      return successResponse({ canAccess: false });
+      return successResponse(buildMaturationAccessPayload(false, profile));
     }
 
     const tenant = await getTenantForUser(userId);
     const zaplotoId = tenant?.id ?? '00000000-0000-0000-0000-000000000001';
     const role = await getRoleByCode(zaplotoId, profile.status || '');
     if (!role) {
-      return successResponse({ canAccess: false });
+      return successResponse(buildMaturationAccessPayload(false, profile));
     }
 
     const sidebarCodes = await getVisibleSidebarCodesForRole(zaplotoId, role.id);
     const canAccess = sidebarCodes.has('maturador');
 
-    return successResponse({ canAccess });
+    return successResponse(buildMaturationAccessPayload(canAccess, profile));
   } catch {
-    return successResponse({ canAccess: false });
+    return successResponse(buildMaturationAccessPayload(false, null));
   }
 }

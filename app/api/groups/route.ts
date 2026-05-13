@@ -3,6 +3,37 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { deduplicateGroupsByInstance, normalizeGroupId } from '@/lib/utils/group-utils';
+import { checkInstanceAccess } from '@/lib/utils/instance-access';
+
+function trimInstanceName(raw: string | null): string {
+  return String(raw ?? '').trim();
+}
+
+/**
+ * Monta query em `whatsapp_groups` para uma instância: próprio usuário + dono da instância
+ * (grupos sincronizados pelo dono passam a aparecer para quem tem `checkInstanceAccess`).
+ */
+function whatsappGroupsQueryForInstanceAccess(params: {
+  userId: string;
+  instanceNameTrimmed: string;
+  select: string;
+  ownerUserId: string | null;
+}) {
+  const { userId, instanceNameTrimmed, select, ownerUserId } = params;
+  let q = supabaseServiceRole
+    .from('whatsapp_groups')
+    .select(select)
+    .eq('instance_name', instanceNameTrimmed);
+
+  const owner = ownerUserId?.trim() || '';
+  if (owner && owner !== userId) {
+    q = q.or(`user_id.eq.${userId},user_id.eq.${owner}`);
+  } else {
+    q = q.eq('user_id', userId);
+  }
+
+  return q.order('group_subject', { ascending: true });
+}
 
 /**
  * GET /api/groups - Lista grupos salvos do usuário
@@ -14,7 +45,8 @@ export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const { searchParams } = req.nextUrl;
-    const instanceName = searchParams.get('instanceName');
+    const instanceNameRaw = searchParams.get('instanceName');
+    const instanceName = trimInstanceName(instanceNameRaw);
     const allInstances = searchParams.get('allInstances') === '1';
     const evolutionShape = searchParams.get('evolutionShape') === '1';
 
@@ -22,18 +54,42 @@ export async function GET(req: NextRequest) {
       if (!instanceName || allInstances) {
         return errorResponse('evolutionShape=1 requer instanceName (e não combina com allInstances=1)', 400);
       }
-      const { data, error } = await supabaseServiceRole
-        .from('whatsapp_groups')
-        .select('group_id, group_subject, picture_url, size')
-        .eq('user_id', userId)
+      const hasAccess = await checkInstanceAccess(req, userId, instanceName);
+      if (!hasAccess) {
+        return errorResponse('Acesso negado a esta instância.', 403);
+      }
+
+      const { data: evoInst, error: evoErr } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('user_id')
         .eq('instance_name', instanceName)
-        .order('group_subject', { ascending: true });
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (evoErr || !evoInst) {
+        return errorResponse('Instância não encontrada', 404);
+      }
+
+      const ownerUserId = evoInst.user_id != null ? String(evoInst.user_id) : null;
+
+      const { data, error } = await whatsappGroupsQueryForInstanceAccess({
+        userId,
+        instanceNameTrimmed: instanceName,
+        ownerUserId,
+        select: 'group_id, group_subject, picture_url, size',
+      });
 
       if (error) {
         return errorResponse(`Erro ao buscar grupos: ${error.message}`);
       }
 
-      const shaped = (data || []).map((row: { group_id: string; group_subject: string | null; picture_url: string | null; size: number | null }) => ({
+      const rows = (data || []) as unknown as {
+        group_id: string;
+        group_subject: string | null;
+        picture_url: string | null;
+        size: number | null;
+      }[];
+      const shaped = rows.map((row) => ({
         id: row.group_id,
         subject: row.group_subject ?? '',
         pictureUrl: row.picture_url ?? undefined,
@@ -50,7 +106,29 @@ export async function GET(req: NextRequest) {
       .order('group_subject', { ascending: true });
 
     if (instanceName && !allInstances) {
-      query = query.eq('instance_name', instanceName);
+      const hasAccess = await checkInstanceAccess(req, userId, instanceName);
+      if (!hasAccess) {
+        return errorResponse('Acesso negado a esta instância.', 403);
+      }
+
+      const { data: evoInst, error: evoErr } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('user_id')
+        .eq('instance_name', instanceName)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (evoErr || !evoInst) {
+        return errorResponse('Instância não encontrada', 404);
+      }
+
+      const ownerUserId = evoInst.user_id != null ? String(evoInst.user_id) : null;
+      query = whatsappGroupsQueryForInstanceAccess({
+        userId,
+        instanceNameTrimmed: instanceName,
+        ownerUserId,
+        select: 'group_id, group_subject, instance_name',
+      }) as unknown as typeof query;
     }
 
     const { data, error } = await query;
@@ -85,8 +163,14 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { instanceName, groupId, groupSubject, pictureUrl, size } = body;
 
-    if (!instanceName || !groupId) {
+    const instanceTrimmed = trimInstanceName(instanceName);
+    if (!instanceTrimmed || !groupId) {
       return errorResponse('instanceName e groupId são obrigatórios', 400);
+    }
+
+    const hasAccess = await checkInstanceAccess(req, userId, instanceTrimmed);
+    if (!hasAccess) {
+      return errorResponse('Acesso negado a esta instância.', 403);
     }
 
     const normalizedGroupId = normalizeGroupId(groupId);
@@ -95,14 +179,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Verifica se já existe (user + instance + group_id) para evitar duplicata
-    const { data: existing } = await supabaseServiceRole
+    const { data: existingRows, error: existingErr } = await supabaseServiceRole
       .from('whatsapp_groups')
       .select('id, group_subject, picture_url, size')
       .eq('user_id', userId)
-      .eq('instance_name', instanceName)
+      .eq('instance_name', instanceTrimmed)
       .eq('group_id', normalizedGroupId)
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    if (existingErr) {
+      return errorResponse(`Erro ao verificar grupo: ${existingErr.message}`);
+    }
+
+    const existing = existingRows?.[0];
 
     if (existing) {
       // Grupo já na base: não inserir de novo. Atualiza apenas se nome/outros campos mudaram (id do grupo mantém-se).
@@ -133,7 +222,7 @@ export async function POST(req: NextRequest) {
       .from('whatsapp_groups')
       .insert({
         user_id: userId,
-        instance_name: instanceName,
+        instance_name: instanceTrimmed,
         group_id: normalizedGroupId,
         group_subject: groupSubject || null,
         picture_url: pictureUrl || null,

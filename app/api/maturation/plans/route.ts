@@ -30,7 +30,9 @@ export async function GET(req: NextRequest) {
         .from('maturation_plans')
         .select('id, name, description, is_active, default_target_chat_id, steps_json, created_at, created_by')
         .eq('is_active', true)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .order('name', { ascending: true })
+        .order('id', { ascending: true });
       error = result.error;
       if (!error) {
         plans = result.data;

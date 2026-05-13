@@ -5,7 +5,7 @@ export type ScheduledJob = {
 
 /**
  * Fonte única dos agendamentos em produção na VPS (crontab via install-linux-cron).
- * Espelha ainda o netlify.toml legado; CRON_TZ=UTC no Linux preserva a mesma semântica de horários.
+ * CRON_TZ=UTC no Linux preserva a semântica de horários.
  */
 export const SCHEDULED_JOBS: ScheduledJob[] = [
   { name: 'process-campaign-queue', cron: '*/1 * * * *' },

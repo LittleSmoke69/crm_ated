@@ -156,6 +156,11 @@ export default function ConsultorPage() {
   const [selectedConsultorId, setSelectedConsultorId] = useState<string>('all');
   const [showConsultorDesempenhoFilter, setShowConsultorDesempenhoFilter] = useState(false);
   const [consultorDesempenhoSearchTerm, setConsultorDesempenhoSearchTerm] = useState('');
+  /** Consultores que têm atribuição de Ads (ads_attribution_consultor_ids) na banca selecionada. */
+  const [adsConsultors, setAdsConsultors] = useState<Array<{ id: string; email: string; full_name: string | null }>>([]);
+  /** IDs dos consultores selecionados no filtro de Ads (vazio = todos). */
+  const [adsConsultorFilter, setAdsConsultorFilter] = useState<string[]>([]);
+  const [showAdsConsultorPicker, setShowAdsConsultorPicker] = useState(false);
 
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
@@ -379,12 +384,26 @@ export default function ConsultorPage() {
       if (!target.closest('.banca-filter-container')) setShowBancaFilter(false);
       if (!target.closest('.winners-date-filter-container')) setShowWinnersDatePicker(false);
       if (!target.closest('.consultor-desempenho-filter-container')) { setShowConsultorDesempenhoFilter(false); setConsultorDesempenhoSearchTerm(''); }
+      if (!target.closest('.ads-consultor-picker-container')) setShowAdsConsultorPicker(false);
     };
-    if (showDatePicker || showBancaFilter || showWinnersDatePicker || showConsultorDesempenhoFilter) {
+    if (showDatePicker || showBancaFilter || showWinnersDatePicker || showConsultorDesempenhoFilter || showAdsConsultorPicker) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showBancaFilter, showWinnersDatePicker, showConsultorDesempenhoFilter]);
+  }, [showDatePicker, showBancaFilter, showWinnersDatePicker, showConsultorDesempenhoFilter, showAdsConsultorPicker]);
+
+  useEffect(() => {
+    if (!selectedBanca || !userId) { setAdsConsultors([]); setAdsConsultorFilter([]); return; }
+    fetch(`/api/consultor/ads-consultors?banca_url=${encodeURIComponent(selectedBanca)}`, {
+      headers: { 'X-User-Id': userId },
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.success) setAdsConsultors(Array.isArray(res.data?.consultors) ? res.data.consultors : []);
+      })
+      .catch(() => {});
+    setAdsConsultorFilter([]);
+  }, [userId, selectedBanca]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const parseMoneyValue = (value: unknown): number => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -534,7 +553,8 @@ export default function ConsultorPage() {
         selectedConsultorId === 'all' &&
         consultoresDaBanca.length > 0;
 
-      const requestKey = `${baseParams.toString()}|${userId || ''}|${selectedConsultorId}|${isProgressiveAll ? 'progressive' : 'single'}`;
+      const adsFilterKey = adsConsultorFilter.slice().sort().join(',');
+      const requestKey = `${baseParams.toString()}|${userId || ''}|${selectedConsultorId}|${isProgressiveAll ? 'progressive' : 'single'}|ads:${adsFilterKey}`;
       if (dataLoading && dashboardRequestKeyRef.current === requestKey) {
         return;
       }
@@ -547,7 +567,10 @@ export default function ConsultorPage() {
       setDashboardProgress(null);
 
       if (isProgressiveAll) {
-        const scope = consultoresDaBanca.filter((c) => Boolean(c.id) && Boolean(c.email));
+        const adsFilterSet = new Set(adsConsultorFilter);
+        const scope = consultoresDaBanca
+          .filter((c) => Boolean(c.id) && Boolean(c.email))
+          .filter((c) => adsFilterSet.size === 0 || adsFilterSet.has(c.id));
         const totalByStatus = scope.reduce((acc, item) => {
           const key = String(item.status || 'consultor').toLowerCase();
           acc[key] = (acc[key] || 0) + 1;
@@ -703,7 +726,7 @@ export default function ConsultorPage() {
     if (canFilterConsultorDesempenho && selectedConsultorId === 'all' && consultoresDaBanca.length === 0) return;
     loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, canFilterConsultorDesempenho, consultoresDaBanca.length]);
+  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, canFilterConsultorDesempenho, consultoresDaBanca.length, adsConsultorFilter.join(',')]);
 
   // Carrega lista de ganhadores quando banca, período ou consultor (admin) mudar
   useEffect(() => {
@@ -1569,13 +1592,69 @@ export default function ConsultorPage() {
                   </p>
                 </div>
                 <div className="rounded-xl border border-gray-200 dark:border-[#404040] p-4 bg-gray-50/60 dark:bg-[#1e1e1e]">
-                  <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Ads (Meta/Redirect)</p>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <p className="text-xs uppercase font-bold text-gray-500 dark:text-gray-400">Ads (Meta/Redirect)</p>
+                    {canFilterConsultorDesempenho && adsConsultors.length > 0 && (
+                      <div className="relative ads-consultor-picker-container">
+                        <button
+                          type="button"
+                          onClick={() => setShowAdsConsultorPicker((v) => !v)}
+                          className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${adsConsultorFilter.length > 0 ? 'bg-indigo-100 dark:bg-indigo-900/50 border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300' : 'border-gray-300 dark:border-[#404040] text-gray-500 dark:text-gray-400 hover:border-indigo-400 hover:text-indigo-600'}`}
+                        >
+                          {adsConsultorFilter.length > 0 ? `${adsConsultorFilter.length} consultores` : 'Filtrar consultores'}
+                        </button>
+                        {showAdsConsultorPicker && (
+                          <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] shadow-lg p-1.5 space-y-0.5">
+                            <div className="flex items-center justify-between px-1 pb-1 border-b border-gray-100 dark:border-[#3a3a3a]">
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Consultores com Ads</span>
+                              {adsConsultorFilter.length > 0 && (
+                                <button type="button" onClick={() => setAdsConsultorFilter([])} className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline">Limpar</button>
+                              )}
+                            </div>
+                            <div className="max-h-48 overflow-y-auto space-y-0.5">
+                              {adsConsultors.map((c) => {
+                                const sel = adsConsultorFilter.includes(c.id);
+                                return (
+                                  <label key={c.id} className={`flex items-center gap-2 cursor-pointer rounded px-1 py-0.5 ${sel ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'hover:bg-gray-50 dark:hover:bg-[#333]'}`}>
+                                    <input
+                                      type="checkbox"
+                                      className="shrink-0 accent-indigo-600"
+                                      checked={sel}
+                                      onChange={(e) => {
+                                        setAdsConsultorFilter((prev) => e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id));
+                                      }}
+                                    />
+                                    <span className={`text-[11px] leading-tight truncate ${sel ? 'text-indigo-800 dark:text-indigo-200 font-medium' : 'text-gray-700 dark:text-gray-300'}`}>
+                                      {c.full_name || c.email || c.id}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
                     R$ {(adsSummary?.total_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
                     Meta: R$ {(adsSummary?.meta_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Redirect clicks: {adsSummary?.redirect_clicks || 0}
                   </p>
+                  {adsConsultorFilter.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {adsConsultorFilter.map((id) => {
+                        const c = adsConsultors.find((x) => x.id === id);
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 text-[10px] font-medium px-2 py-0.5">
+                            {c?.full_name || c?.email || id}
+                            <button type="button" className="opacity-60 hover:opacity-100" onClick={() => setAdsConsultorFilter((prev) => prev.filter((x) => x !== id))}>×</button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 

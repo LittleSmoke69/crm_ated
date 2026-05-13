@@ -18,11 +18,12 @@ export async function GET(req: NextRequest) {
     const transferLogId = searchParams.get('transfer_log_id')?.trim();
     const gerenteParam = searchParams.get('gerente_user_id')?.trim() || null;
     const statusRaw = (searchParams.get('status')?.trim() ?? 'em_estoque').toLowerCase();
-    const allowedStatus = new Set(['em_estoque', 'repassado', 'cancelado', 'all']);
+    const allowedStatus = new Set(['em_estoque', 'repassado', 'cancelado', 'revertido', 'all']);
     const status = (allowedStatus.has(statusRaw) ? statusRaw : 'em_estoque') as
       | 'em_estoque'
       | 'repassado'
       | 'cancelado'
+      | 'revertido'
       | 'all';
 
     if (!bancaId) return errorResponse('banca_id é obrigatório.', 400);

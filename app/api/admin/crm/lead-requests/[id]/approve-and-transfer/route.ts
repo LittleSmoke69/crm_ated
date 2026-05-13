@@ -255,10 +255,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const shuffled = shuffle(matchingLeads);
     const selected = shuffled.slice(0, totalNeeded);
     const selectedIds = selected.map((l) => l.id as string);
-    const snapshotByLeadId = new Map<string, { balance?: number; total_depositado?: number; total_apostado?: number; total_ganho?: number; available_withdraw?: number; total_saque?: number; last_interaction?: string | null }>();
+    const snapshotByLeadId = new Map<
+      string,
+      {
+        email?: string | null;
+        balance?: number;
+        total_depositado?: number;
+        total_apostado?: number;
+        total_ganho?: number;
+        available_withdraw?: number;
+        total_saque?: number;
+        last_interaction?: string | null;
+      }
+    >();
     for (const l of selected) {
       const id = String(l.id);
+      const em = (l as { email?: string | null }).email;
       snapshotByLeadId.set(id, {
+        email: em != null && String(em).trim() !== '' ? String(em).trim().toLowerCase() : null,
         balance: l.balance != null ? Number(l.balance) : undefined,
         total_depositado: l.total_depositado != null ? Number(l.total_depositado) : undefined,
         total_apostado: l.total_apostado != null ? Number(l.total_apostado) : undefined,
@@ -296,6 +310,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const snap = snapshotByLeadId.get(String(leadId));
         return {
           lead_id: leadId,
+          email: snap?.email ?? null,
           balance: snap?.balance ?? null,
           last_interaction: snap?.last_interaction ?? null,
           total_depositado: snap?.total_depositado ?? null,

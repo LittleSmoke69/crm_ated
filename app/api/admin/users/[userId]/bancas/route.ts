@@ -8,7 +8,7 @@ import { recordHierarchyNetworkAudit } from '@/lib/admin/hierarchy-network-audit
 const LOG = '[PUT /api/admin/users/[userId]/bancas]';
 
 /** Status para os quais o GET retorna banca_ids (demais retornam []). Inclui admin para vínculo na hierarquia. PUT aceita qualquer usuário. */
-const STATUS_WITH_BANCAS = ['consultor', 'gerente', 'gestor', 'suporte', 'admin'];
+const STATUS_WITH_BANCAS = ['consultor', 'gerente', 'gestor', 'suporte', 'admin', 'super_admin'];
 
 /**
  * PUT /api/admin/users/[userId]/bancas - Define as bancas em que o consultor/gerente atua (admin)

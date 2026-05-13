@@ -11,6 +11,7 @@ const transferTypeEnum = z.enum(['TF', 'TF1', 'TF2', 'TF3']);
 
 const leadSnapshotSchema = z.object({
   lead_id: z.union([z.number(), z.string()]),
+  email: z.union([z.string(), z.null()]).optional(),
   name: z.union([z.string(), z.null()]).optional(),
   phone: z.union([z.string(), z.null()]).optional(),
   balance: z.union([z.number(), z.null()]).optional(),
@@ -116,6 +117,7 @@ export async function POST(req: NextRequest) {
         transferDeadlineDays: parsed.data.transfer_deadline_days,
         filtersSnapshot: parsed.data.filters_snapshot ?? null,
         leadSnapshots: parsed.data.lead_snapshots,
+        sourceTransferLogId: parsed.data.source_transfer_log_id?.trim() || null,
       });
 
       if (!reservation.ok) {

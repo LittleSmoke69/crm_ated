@@ -1,19 +1,26 @@
 /**
  * API Route: /api/maturation/master-instances
  *
- * GET: Lista todas as instâncias conectadas (mestre e normal) e dados do maturador
+ * GET: Lista instâncias do tenant para o Maturador (conectadas e desconectadas).
  *
- * - instances: todas as instâncias conectadas (status ok/open/connected), com is_master
- * - available: quantidade de instâncias mestres disponíveis para job de maturação
+ * - instances: instâncias ativas (`is_active !== false`) visíveis ao perfil; inclui **desconectadas**
+ *   (ex.: connection closed na Evolution) para a lista refletir queda de sessão;
+ *   `available` / mesh continuam usando só as conectadas com telefone.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
+import { evolutionMaturationDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
+import {
+  applyEvolutionInstancesVisibilityFilters,
+  resolveEvolutionMaturationVisibilityScope,
+  scopeForMaturationTenantWideInstanceList,
+  evolutionInstanceEligibleForMaturationStart,
+} from '@/lib/server/evolution-maturation-visibility';
 
-const isConnectedStatus = (status: string | null) =>
-  status === 'ok' || status === 'open' || status === 'connected';
+const isConnectedStatus = (status: string | null) => evolutionMaturationDbStatusIsConnected(status);
 
 const isNetworkError = (err: any) =>
   err?.message?.includes('fetch failed') ||
@@ -22,31 +29,39 @@ const isNetworkError = (err: any) =>
   err?.message?.includes('ETIMEDOUT') ||
   err?.message?.includes('ENOTFOUND');
 
+const EVOLUTION_SELECT = `
+  id,
+  user_id,
+  instance_name,
+  status,
+  is_master,
+  is_active,
+  phone_number,
+  blocked_from_maturation,
+  evolution_apis ( is_blocked_for_instances )
+`;
+
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req);
+    const { userId } = await requireAuth(req);
+
+    const scope = await resolveEvolutionMaturationVisibilityScope(supabaseServiceRole, req, userId);
+    if (!scope) {
+      return NextResponse.json({ error: 'Perfil não encontrado' }, { status: 404 });
+    }
 
     const maxRetries = 3;
-    let allConnected: any[] | null = null;
+    let allInstances: any[] | null = null;
     let connError: any = null;
 
+    const listScope = scopeForMaturationTenantWideInstanceList(scope);
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const result = await supabaseServiceRole
-        .from('evolution_instances')
-        .select(`
-          id,
-          instance_name,
-          status,
-          is_master,
-          is_active,
-          phone_number,
-          blocked_from_maturation,
-          evolution_apis ( is_blocked_for_instances )
-        `)
-        .eq('is_active', true)
-        .in('status', ['ok', 'open', 'connected'])
-        .order('is_master', { ascending: false })
-        .order('instance_name', { ascending: true });
+      let query = supabaseServiceRole.from('evolution_instances').select(EVOLUTION_SELECT);
+      query = applyEvolutionInstancesVisibilityFilters(query, listScope);
+      // Mesma regra da lista em GET /api/instances: excluir só arquivadas (is_active === false);
+      // is_active null/true seguem visíveis para não “sumir” instâncias ok legadas.
+      const result = await query.order('is_master', { ascending: false }).order('instance_name', { ascending: true });
 
       connError = result.error;
       if (!connError) {
@@ -57,7 +72,9 @@ export async function GET(req: NextRequest) {
           const api = Array.isArray(apis) ? apis[0] : apis;
           return api?.is_blocked_for_instances === true || api?.is_blocked_for_instances === 'true';
         };
-        allConnected = raw.filter((row: any) => !apisBlocked(row));
+        // Inclui desconectadas (ex.: status disconnected após connection closed no maturador)
+        // para o operador ver na lista e reconectar — não filtrar por evolutionMaturationDbStatusIsConnected aqui.
+        allInstances = raw.filter((row: any) => row?.is_active !== false && !apisBlocked(row));
         break;
       }
       if (isNetworkError(connError) && attempt < maxRetries) {
@@ -77,72 +94,78 @@ export async function GET(req: NextRequest) {
 
     await reconcileOrphanedMasterInstanceLocks(supabaseServiceRole);
 
-    // Busca master_instances para is_locked e available (só para as que estão no maturador)
     const { data: masterRows } = await supabaseServiceRole
       .from('master_instances')
       .select('id, evolution_instance_id, is_active, is_locked, locked_job_id')
       .eq('is_active', true);
 
-    const lockByEvolutionId = new Map<string, { is_locked: boolean; locked_job_id: string | null }>();
+    const masterIdByEvolutionId = new Map<string, string>();
     (masterRows || []).forEach((row: any) => {
-      lockByEvolutionId.set(row.evolution_instance_id, {
-        is_locked: !!row.is_locked,
-        locked_job_id: row.locked_job_id ?? null,
-      });
+      masterIdByEvolutionId.set(row.evolution_instance_id, row.id);
     });
 
-    const lockedJobIds = Array.from(
-      new Set(
-        (masterRows || [])
-          .map((row: any) => row.locked_job_id)
-          .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
-      )
-    );
-    const campaignByJobId = new Map<string, string | null>();
-    if (lockedJobIds.length > 0) {
-      const { data: lockedJobs } = await supabaseServiceRole
+    const masterIds = (masterRows || []).map((r: any) => r.id).filter(Boolean);
+    /** Vários jobs podem usar o mesmo master — is_locked na UI = “há maturação ativa”, não trava exclusiva. */
+    const activeMaturationByMasterId = new Map<string, { count: number; meshCampaignId: string | null }>();
+    if (masterIds.length > 0) {
+      const { data: activeJobs } = await supabaseServiceRole
         .from('maturation_jobs')
-        .select('id, campaign_id, status')
-        .in('id', lockedJobIds);
-      for (const job of lockedJobs || []) {
-        const active = ['queued', 'running', 'paused'].includes(job.status);
-        campaignByJobId.set(job.id, active ? (job.campaign_id ?? null) : null);
+        .select('master_instance_id, campaign_id')
+        .in('master_instance_id', masterIds)
+        .in('status', ['queued', 'running', 'paused']);
+      for (const j of activeJobs || []) {
+        const mid = j.master_instance_id as string;
+        const cur = activeMaturationByMasterId.get(mid) || { count: 0, meshCampaignId: null as string | null };
+        cur.count += 1;
+        if (j.campaign_id && !cur.meshCampaignId) cur.meshCampaignId = j.campaign_id as string;
+        activeMaturationByMasterId.set(mid, cur);
       }
     }
 
-    const instances = (allConnected || []).map((ei: any) => {
+    const instances = (allInstances || []).map((ei: any) => {
       const status = ei.status || null;
-      const inMaturador = lockByEvolutionId.has(ei.id);
-      const { is_locked = false, locked_job_id = null } = lockByEvolutionId.get(ei.id) || {};
-      const campaignId = locked_job_id ? campaignByJobId.get(locked_job_id) ?? null : null;
+      const inMaturador = masterIdByEvolutionId.has(ei.id);
+      const masterId = masterIdByEvolutionId.get(ei.id);
+      const act = masterId ? activeMaturationByMasterId.get(masterId) : undefined;
+      const hasActiveMaturation = (act?.count ?? 0) > 0;
+      const campaignId = act?.meshCampaignId ?? null;
+      const is_locked = hasActiveMaturation;
       const isMaster = !!ei.is_master;
       const connected = isConnectedStatus(status);
       const hasPhoneNumber = !!(ei.phone_number && String(ei.phone_number).trim());
       const blockedFromMaturation = ei.blocked_from_maturation === true;
-      // Só usar no maturador: conectado, telefone, não bloqueada pelo usuário e não bloqueada por outro job
-      const available = connected && hasPhoneNumber && !is_locked && !blockedFromMaturation;
+      const canStartMaturation = evolutionInstanceEligibleForMaturationStart(scope, {
+        id: ei.id,
+        user_id: ei.user_id ?? null,
+      });
+      const available =
+        connected && hasPhoneNumber && !blockedFromMaturation && canStartMaturation;
       return {
         id: inMaturador ? (masterRows?.find((r: any) => r.evolution_instance_id === ei.id)?.id ?? null) : null,
         evolution_instance_id: ei.id,
         instance_name: ei.instance_name,
         phone_number: ei.phone_number || null,
+        user_id: ei.user_id ?? null,
         status,
         is_master: !!ei.is_master,
         is_locked,
         available,
         has_phone_number: hasPhoneNumber,
         blocked_from_maturation: blockedFromMaturation,
+        can_start_maturation: canStartMaturation,
         campaign_id: campaignId,
-        campaign_status_label: campaignId ? 'em_campanha' : 'sem_campanha',
+        campaign_status_label: campaignId ? 'em_campanha' : hasActiveMaturation ? 'em_maturacao' : 'sem_campanha',
         source: inMaturador ? 'master_instances' : 'evolution_instances',
       };
     });
 
     const availableCount = instances.filter((i: any) => i.available).length;
+    const connectedCount = instances.filter((i: any) => isConnectedStatus(i.status)).length;
 
     return NextResponse.json({
       instances,
       total: instances.length,
+      connected: connectedCount,
       available: availableCount,
       masterTotal: instances.filter((i: any) => i.is_master).length,
     });

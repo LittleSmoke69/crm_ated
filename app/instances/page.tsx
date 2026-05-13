@@ -131,7 +131,7 @@ const InstancesPage = () => {
   } = useDashboardData();
 
   const [instanceName, setInstanceName] = useState('');
-  const [isMaster, setIsMaster] = useState(false);
+  const [isMaster, setIsMaster] = useState(true);
   const [maturationType, setMaturationType] = useState<'virgem' | 'maturado'>('maturado');
   const [qrCode, setQrCode] = useState('');
   const [qrTimer, setQrTimer] = useState(0);
@@ -192,6 +192,10 @@ const InstancesPage = () => {
   const [phoneValue, setPhoneValue] = useState('');
   const [selectedInstanceForPhone, setSelectedInstanceForPhone] = useState<WhatsAppInstance | null>(null);
   const [isSavingPhone, setIsSavingPhone] = useState(false);
+  /** Fluxo virgem: após salvar telefone, redireciona para o Maturador */
+  const navigateToMaturadorAfterPhoneRef = useRef(false);
+  /** Após fechar o modal do QR (virgem): abrir modal de telefone */
+  const pendingVirginPhoneAfterQrRef = useRef<{ id: string; instance_name: string } | null>(null);
   /** `instance_name` enquanto PATCH de blocked_from_maturation está em voo */
   const [maturationBlockSaving, setMaturationBlockSaving] = useState<string | null>(null);
   
@@ -226,6 +230,20 @@ const InstancesPage = () => {
     setNewlyConnectedInstance(instanceName);
     setShowExtractGroupsPrompt(true);
   };
+
+  const openVirginPhoneModalAfterQrIfNeeded = useCallback(() => {
+    const p = pendingVirginPhoneAfterQrRef.current;
+    if (!p) return;
+    pendingVirginPhoneAfterQrRef.current = null;
+    setSelectedInstanceForPhone({
+      id: p.id,
+      instance_name: p.instance_name,
+      status: 'disconnected',
+      number: '',
+    });
+    setPhoneValue('');
+    setIsPhoneModalOpen(true);
+  }, []);
   
   // Paginação e filtro de instâncias
   const [instanceFilter, setInstanceFilter] = useState<'todas' | 'connected' | 'disconnected'>('todas');
@@ -413,6 +431,7 @@ const InstancesPage = () => {
     }
 
     setLoading(true);
+    const creatingAsVirgem = maturationType === 'virgem';
     try {
       addLog(`Criando instância ${instanceName}...`, 'info');
 
@@ -435,75 +454,117 @@ const InstancesPage = () => {
 
       if (response.ok && data.success && data.data) {
         const instanceData = data.data;
-        // Tenta diferentes formatos de QR code
         const qrCodeValue = instanceData.qr_code || 
                           instanceData.qrcode?.base64 || 
                           instanceData.qrcode || 
                           '';
-        
-        console.log('QR Code recebido:', { 
-          hasQrCode: !!qrCodeValue, 
-          qrCodeLength: qrCodeValue?.length || 0,
-          instanceDataKeys: Object.keys(instanceData)
-        });
-        
+
+        if (creatingAsVirgem) {
+          navigateToMaturadorAfterPhoneRef.current = true;
+          pendingVirginPhoneAfterQrRef.current = {
+            id: instanceData.id,
+            instance_name: instanceName,
+          };
+        }
+
         if (qrCodeValue && qrCodeValue.trim().length > 0) {
-          // Limpa o QR code removendo espaços e quebras de linha
+          console.log('QR Code recebido:', { 
+            hasQrCode: !!qrCodeValue, 
+            qrCodeLength: qrCodeValue?.length || 0,
+            instanceDataKeys: Object.keys(instanceData)
+          });
+          
           const cleanQrCode = qrCodeValue.trim().replace(/\s/g, '');
           
-          // Valida se parece ser base64 válido
           if (/^[A-Za-z0-9+/=]+$/.test(cleanQrCode) && cleanQrCode.length >= 100) {
-            showToast('Instância criada com sucesso!', 'success');
-            addLog(`Instância ${instanceName} criada com QR Code válido`, 'success');
+            showToast(
+              creatingAsVirgem
+                ? 'Instância virgem criada! Escaneie o QR; em seguida pediremos o número para o Maturador.'
+                : 'Instância criada com sucesso!',
+              'success'
+            );
+            addLog(
+              creatingAsVirgem
+                ? `Instância virgem ${instanceName} criada — QR aberto; depois configure o telefone.`
+                : `Instância ${instanceName} criada com QR Code válido`,
+              'success'
+            );
             
-            // Define o QR code e configura o estado ANTES de abrir o modal
             setQrExpired(false);
             setQrCode(cleanQrCode);
-            setCurrentConnectingInstance(instanceName); // Marca qual instância está conectando
-            setIsReconnecting(false); // É criação, não reconexão
-            setQrTimer(QR_WINDOW_SECONDS); // Define o timer primeiro
-            // Abre o modal - o useEffect detectará a abertura e iniciará o timer
+            setCurrentConnectingInstance(instanceName);
+            setIsReconnecting(false);
+            setQrTimer(QR_WINDOW_SECONDS);
             setIsQRModalOpen(true);
             
-            // Limpa os campos e fecha o modal
             setInstanceName('');
             setIsMaster(false);
             setMaturationType('maturado');
             setIsCreateModalOpen(false);
-            
-            // NÃO recarrega os dados imediatamente após criar a instância
-            // O recarregamento será feito apenas quando:
-            // 1. O usuário verificar o status manualmente
-            // 2. O QR code expirar e precisar gerar novo
-            // 3. A instância realmente conectar (detectado pelo useEffect)
-            // Isso evita verificação prematura que pode marcar como conectada sem escanear
+            if (creatingAsVirgem) {
+              await loadInitialData();
+            }
           } else {
             console.warn('QR Code recebido não parece ser válido:', {
               length: cleanQrCode.length,
               startsWith: cleanQrCode.substring(0, 20),
             });
-            showToast('Instância criada, mas QR Code inválido. Verifique o status da instância.', 'info');
-            addLog(`Instância ${instanceName} criada com QR Code inválido. Verifique o status.`, 'info');
-            // Ainda tenta exibir, mas pode falhar
+            showToast(
+              creatingAsVirgem
+                ? 'Instância virgem criada; QR pode estar incompleto — escaneie se aparecer, depois configure o telefone.'
+                : 'Instância criada, mas QR Code inválido. Verifique o status da instância.',
+              'info'
+            );
+            addLog(
+              creatingAsVirgem
+                ? `Instância virgem ${instanceName} criada (QR inválido ou curto).`
+                : `Instância ${instanceName} criada com QR Code inválido. Verifique o status.`,
+              'info'
+            );
             setQrExpired(false);
             setQrCode(cleanQrCode);
-            setCurrentConnectingInstance(instanceName); // Marca qual instância está conectando
-            setIsReconnecting(false); // É criação, não reconexão
-            setQrTimer(QR_WINDOW_SECONDS); // Define o timer primeiro
-            setIsQRModalOpen(true); // Abre o modal mesmo com QR inválido
+            setCurrentConnectingInstance(instanceName);
+            setIsReconnecting(false);
+            setQrTimer(QR_WINDOW_SECONDS);
+            setIsQRModalOpen(true);
             
+            setInstanceName('');
+            setIsMaster(false);
+            setMaturationType('maturado');
+            setIsCreateModalOpen(false);
+            if (creatingAsVirgem) {
+              await loadInitialData();
+            }
+          }
+        } else {
+          if (creatingAsVirgem) {
+            pendingVirginPhoneAfterQrRef.current = null;
+            setSelectedInstanceForPhone({
+              id: instanceData.id,
+              instance_name: instanceName,
+              status: 'disconnected',
+              number: '',
+            });
+            setPhoneValue('');
+            setIsPhoneModalOpen(true);
+            showToast(
+              'Instância virgem criada sem QR na resposta. Informe o número da instância; depois você pode ir ao Maturador.',
+              'info'
+            );
+            addLog(`Instância virgem ${instanceName} criada sem QR — modal de telefone.`, 'info');
+            setInstanceName('');
+            setIsMaster(false);
+            setMaturationType('maturado');
+            setIsCreateModalOpen(false);
+            await loadInitialData();
+          } else {
+            showToast('Instância criada, mas QR Code não foi retornado. Verifique o status da instância.', 'info');
+            addLog(`Instância ${instanceName} criada sem QR Code. Verifique o status.`, 'info');
             setInstanceName('');
             setMaturationType('maturado');
             setIsCreateModalOpen(false);
-            // NÃO recarrega automaticamente - evita verificação prematura de status
+            await loadInitialData();
           }
-        } else {
-          showToast('Instância criada, mas QR Code não foi retornado. Verifique o status da instância.', 'info');
-          addLog(`Instância ${instanceName} criada sem QR Code. Verifique o status.`, 'info');
-          setInstanceName('');
-          setMaturationType('maturado');
-          setIsCreateModalOpen(false);
-          await loadInitialData();
         }
       } else {
         const errorMsg = data.error || data.message || 'Erro ao criar instância';
@@ -618,7 +679,8 @@ const InstancesPage = () => {
           setQrExpired(false);
           setCurrentConnectingInstance(null);
           setIsReconnecting(false);
-          
+          openVirginPhoneModalAfterQrIfNeeded();
+
           // Verifica se é nova instância conectada (não reconexão) e mostra modal apenas uma vez
           // handleCheckStatus é verificação manual, então não é nova instância
           showToast('Instância conectada!', 'success');
@@ -667,6 +729,7 @@ const InstancesPage = () => {
         setQrExpired(false);
         setCurrentConnectingInstance(null);
         setIsReconnecting(false);
+        openVirginPhoneModalAfterQrIfNeeded();
         showToast('Instância já está conectada!', 'success');
         await loadInitialData();
       } else if (payload.qrCode) {
@@ -713,6 +776,7 @@ const InstancesPage = () => {
   };
 
   const handleOpenPhoneModal = (inst: WhatsAppInstance) => {
+    navigateToMaturadorAfterPhoneRef.current = false;
     setSelectedInstanceForPhone(inst);
     setPhoneValue(inst.number || '');
     setIsPhoneModalOpen(true);
@@ -769,6 +833,10 @@ const InstancesPage = () => {
         showToast('Telefone atualizado com sucesso!', 'success');
         setIsPhoneModalOpen(false);
         await loadInitialData();
+        if (navigateToMaturadorAfterPhoneRef.current) {
+          navigateToMaturadorAfterPhoneRef.current = false;
+          window.location.href = withTenantSlug('/maturador');
+        }
       } else {
         showToast(data.error || 'Erro ao atualizar telefone', 'error');
       }
@@ -996,6 +1064,7 @@ const InstancesPage = () => {
             setCurrentConnectingInstance(null);
             setIsReconnecting(false);
             showExtractGroupsModalIfNeeded(instanceName, !wasReconnecting);
+            openVirginPhoneModalAfterQrIfNeeded();
             await loadInitialData();
           } else if (payload.qrCode) {
             console.log(`🔄 Novo QR Code recebido para ${instanceName}. Reiniciando timer.`);
@@ -1055,7 +1124,16 @@ const InstancesPage = () => {
     };
 
     refreshExpiredQrCode();
-  }, [qrExpired, isQRModalOpen, currentConnectingInstance, userId, isReconnecting, showToast, loadInitialData]);
+  }, [
+    qrExpired,
+    isQRModalOpen,
+    currentConnectingInstance,
+    userId,
+    isReconnecting,
+    showToast,
+    loadInitialData,
+    openVirginPhoneModalAfterQrIfNeeded,
+  ]);
 
   // Polling inteligente: verifica status apenas quando o modal está aberto
   // Verifica a cada 1 segundo se for reconexão, ou a cada 3 segundos se for criação
@@ -1093,7 +1171,8 @@ const InstancesPage = () => {
             
             // Mostra modal apenas para novas instâncias (não reconexões) e apenas uma vez
             showExtractGroupsModalIfNeeded(currentConnectingInstance, !wasReconnecting);
-            
+            openVirginPhoneModalAfterQrIfNeeded();
+
             // Recarrega dados após conectar (o banco já foi atualizado pela API)
             await loadInitialData();
           } else if (isEvolutionApiConnecting(payload) && payload.qrCode) {
@@ -1116,7 +1195,15 @@ const InstancesPage = () => {
     const interval = setInterval(checkConnectionStatus, intervalTime);
 
     return () => clearInterval(interval);
-  }, [isQRModalOpen, currentConnectingInstance, userId, isReconnecting, showToast, loadInitialData]);
+  }, [
+    isQRModalOpen,
+    currentConnectingInstance,
+    userId,
+    isReconnecting,
+    showToast,
+    loadInitialData,
+    openVirginPhoneModalAfterQrIfNeeded,
+  ]);
 
   // Verifica se a instância que está conectando realmente conectou (fallback)
   // Este useEffect é um backup caso o polling acima não detecte
@@ -1144,8 +1231,9 @@ const InstancesPage = () => {
       
       // Mostra modal apenas para novas instâncias (não reconexões) e apenas uma vez
       showExtractGroupsModalIfNeeded(currentConnectingInstance, !wasReconnecting);
+      openVirginPhoneModalAfterQrIfNeeded();
     }
-  }, [instances, isQRModalOpen, currentConnectingInstance, showToast]);
+  }, [instances, isQRModalOpen, currentConnectingInstance, showToast, openVirginPhoneModalAfterQrIfNeeded]);
 
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
@@ -1324,7 +1412,10 @@ const InstancesPage = () => {
                   Verificar todas
                 </button>
                 <button
-                  onClick={() => setIsCreateModalOpen(true)}
+                  onClick={() => {
+                    setIsMaster(true);
+                    setIsCreateModalOpen(true);
+                  }}
                   className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
                 >
                   <Plus className="w-5 h-5" />
@@ -1446,11 +1537,14 @@ const InstancesPage = () => {
                                       Compartilhada
                                     </span>
                                   )}
-                                  {/* Selo Em Maturação (virgem, bloqueada) */}
-                                  {(inst as any).is_locked === true && (inst as any).maturation_type === 'virgem' && (
+                                  {/* Selo legado: auto maturação antiga (maturation_status preenchido) */}
+                                  {(inst as any).maturation_type === 'virgem' &&
+                                    (inst as any).maturation_status &&
+                                    (inst as any).maturation_status !== 'completed' &&
+                                    (inst as any).maturation_status !== 'blocked' && (
                                     <span
                                       className="px-2 py-1 rounded text-xs font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 flex items-center gap-1 flex-shrink-0"
-                                      title="Instância em auto maturação por 5 dias - bloqueada para campanhas e fluxos"
+                                      title="Instância em fluxo automático legado (antes da rede mútua no Maturador)"
                                     >
                                       <Lock className="w-3 h-3" />
                                       Em Maturação
@@ -1673,7 +1767,10 @@ const InstancesPage = () => {
                 <p className="text-gray-500 text-lg font-medium mb-2">Nenhuma instância criada</p>
                 <p className="text-gray-400 text-sm mb-4">Crie sua primeira instância para começar</p>
                 <button
-                  onClick={() => setIsCreateModalOpen(true)}
+                  onClick={() => {
+                    setIsMaster(true);
+                    setIsCreateModalOpen(true);
+                  }}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
                 >
                   <Plus className="w-5 h-5" />
@@ -1728,7 +1825,6 @@ const InstancesPage = () => {
                       </div>
                       <div className="min-w-0">
                         <p className="font-semibold text-gray-800 dark:text-white text-sm">API WhatsApp (Não Oficial)</p>
-                        <p className="text-xs text-gray-500 dark:text-[#aaa]">Evolution API - Baileys</p>
                       </div>
                     </div>
                   </div>
@@ -1847,7 +1943,7 @@ const InstancesPage = () => {
                       <div className="min-w-0 flex-1">
                         <span className="font-semibold text-gray-800 dark:text-white text-sm block mb-0.5">Virgem</span>
                         <p className="text-xs text-gray-600 dark:text-[#aaa] leading-snug">
-                          Número novo. Após QR Code, auto maturação por 5 dias (bloqueada para campanhas/fluxos).
+                          Número novo. Sem trava automática ao conectar: após criar, informe o telefone e use o Maturador (rede mútua entre suas instâncias, plano do admin).
                         </p>
                       </div>
                     </div>
@@ -2066,33 +2162,33 @@ const InstancesPage = () => {
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
           
           {/* Modal */}
-          <div className="relative bg-white rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200">
+          <div className="relative bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center mb-5">
-              <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-                <Phone className="w-5 h-5 text-indigo-600" />
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <Phone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 Telefone da Instância
               </h2>
               <button
                 onClick={() => !isSavingPhone && setIsPhoneModalOpen(false)}
                 disabled={isSavingPhone}
-                className="p-2 hover:bg-gray-100 rounded-lg transition text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition text-gray-500 hover:text-gray-700 dark:text-[#aaa] dark:hover:text-white disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700/50 rounded-lg p-4">
                 <div className="flex gap-3">
-                  <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-sm text-amber-800">
+                  <Info className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-sm text-amber-800 dark:text-amber-200/90">
                     Precisamos do número de telefone da instância (com DDI e DDD) para as operações de maturação.
                   </p>
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1">
                   Número de Telefone (Ex: 5511999999999)
                 </label>
                 <input
@@ -2100,7 +2196,7 @@ const InstancesPage = () => {
                   value={phoneValue}
                   onChange={(e) => setPhoneValue(e.target.value.replace(/[^0-9]/g, ''))}
                   placeholder="DDI + DDD + Número"
-                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-700"
+                  className="w-full px-4 py-2 border-2 border-gray-200 dark:border-[#505050] rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-[#888]"
                   disabled={isSavingPhone}
                 />
               </div>
@@ -2109,14 +2205,14 @@ const InstancesPage = () => {
                 <button
                   onClick={() => setIsPhoneModalOpen(false)}
                   disabled={isSavingPhone}
-                  className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition disabled:opacity-50"
+                  className="flex-1 py-2.5 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg font-medium transition disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={handleSavePhone}
                   disabled={isSavingPhone || !phoneValue}
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {isSavingPhone ? (
                     <>
@@ -2288,6 +2384,7 @@ const InstancesPage = () => {
       <QRCodeModal
         isOpen={isQRModalOpen}
         onClose={() => {
+          openVirginPhoneModalAfterQrIfNeeded();
           // Quando fecha o modal sem escanear, para o polling e não atualiza status automaticamente
           console.log('🔒 Modal QR Code fechado manualmente. Parando polling e não atualizando status automaticamente.');
           setIsQRModalOpen(false);

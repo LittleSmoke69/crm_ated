@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { errorResponse, serverErrorResponse, successResponse } from '@/lib/utils/response';
-import { listConsultorsByBancaId, setCampaignConsultors } from '@/lib/services/meta-campaign-consultors';
+import { listConsultoresForAdsAttributionDropdown, setCampaignConsultors } from '@/lib/services/meta-campaign-consultors';
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,8 +10,14 @@ export async function GET(req: NextRequest) {
     if (!bancaId) {
       return errorResponse('banca_id é obrigatório.', 400);
     }
-    const consultors = await listConsultorsByBancaId(bancaId);
-    return successResponse({ consultors });
+    if (process.env.LOG_META_ADS_HIERARCHY === '1') {
+      console.info(
+        '[meta-ads-hierarchy] api_GET_campaign_consultors',
+        JSON.stringify({ banca_id: bancaId })
+      );
+    }
+    const consultors = await listConsultoresForAdsAttributionDropdown(bancaId);
+    return successResponse({ consultors, debug: consultors.length === 0 ? { banca_id: bancaId, empty: true, hint: 'Verifique logs [meta-ads-hierarchy] no servidor com LOG_META_ADS_HIERARCHY=1 para diagnóstico detalhado.' } : undefined });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado')) {
       return errorResponse(err.message, 403);

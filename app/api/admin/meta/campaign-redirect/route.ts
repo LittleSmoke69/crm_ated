@@ -1,6 +1,6 @@
 /**
  * GET /api/admin/meta/campaign-redirect?owner_user_id=uuid
- * Projetos `vsl_projects` onde `owner_user_id` = esse gestor (`profiles.status = gestor`).
+ * Projetos `vsl_projects` onde `owner_user_id` = gestor de tráfego, admin ou super_admin (`profiles.status`).
  * `redirect_slug_options`: linhas ativas de `redirect_slugs` por `project_id` (+ fallback slug do projeto).
  *
  * POST /api/admin/meta/campaign-redirect
@@ -11,6 +11,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { errorResponse, serverErrorResponse, successResponse } from '@/lib/utils/response';
+import { isTrafficManagerProfileStatus } from '@/lib/utils/traffic-manager-profile';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -35,18 +36,17 @@ async function userHasBancaInUserBancas(userId: string, bancaId: string): Promis
   return bids.includes(bid);
 }
 
-/** Dono do projeto é perfil `gestor` (quem cria VSL nesse papel). */
-async function isGestorProfile(userId: string): Promise<boolean> {
+/** Dono do projeto: gestor de tráfego, admin ou super_admin (mesmo critério da hierarquia em `user_bancas`). */
+async function isTrafficManagerOwnerProfile(userId: string): Promise<boolean> {
   const uid = String(userId ?? '').trim();
   if (!uid) return false;
   const { data: row, error } = await supabaseServiceRole
     .from('profiles')
-    .select('id')
+    .select('id, status')
     .eq('id', uid)
-    .eq('status', 'gestor')
     .maybeSingle();
   if (error || !row) return false;
-  return true;
+  return isTrafficManagerProfileStatus((row as { status?: string | null }).status);
 }
 
 export type RedirectSlugOptionRow = {
@@ -134,12 +134,12 @@ export async function GET(req: NextRequest) {
     await requireAdmin(req);
     const ownerUserId = req.nextUrl.searchParams.get('owner_user_id')?.trim() || '';
     if (!ownerUserId || !UUID_RE.test(ownerUserId)) {
-      return errorResponse('owner_user_id válido (UUID do perfil gestor) é obrigatório.', 400);
+      return errorResponse('owner_user_id válido (UUID do perfil gestor, admin ou super_admin) é obrigatório.', 400);
     }
 
-    const ownerIsGestor = await isGestorProfile(ownerUserId);
-    if (!ownerIsGestor) {
-      return errorResponse('owner_user_id deve ser um perfil com status «gestor».', 400);
+    const ownerOk = await isTrafficManagerOwnerProfile(ownerUserId);
+    if (!ownerOk) {
+      return errorResponse('owner_user_id deve ser um perfil «gestor», «admin» ou «super_admin».', 400);
     }
 
     const { data: projects, error } = await supabaseServiceRole
@@ -220,9 +220,12 @@ export async function POST(req: NextRequest) {
       if (redirectProject.owner_user_id == null) {
         return errorResponse('Só é possível vincular projetos VSL com dono (criador) definido.', 400);
       }
-      const ownerIsGestor = await isGestorProfile(String(redirectProject.owner_user_id));
-      if (!ownerIsGestor) {
-        return errorResponse('Só é possível vincular redirects criados por perfil gestor à campanha.', 400);
+      const ownerOk = await isTrafficManagerOwnerProfile(String(redirectProject.owner_user_id));
+      if (!ownerOk) {
+        return errorResponse(
+          'Só é possível vincular redirects cujo dono do projeto é gestor de tráfego, admin ou super_admin.',
+          400
+        );
       }
     }
 

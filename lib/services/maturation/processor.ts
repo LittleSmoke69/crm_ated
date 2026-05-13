@@ -1,6 +1,6 @@
 /**
  * Processor module for maturation steps.
- * Extracts the logic from the maturation-tick Netlify function to be shared with Next.js API routes.
+ * Compartilhado entre o tick agendado (ex.: cron Linux → maturation-tick) e rotas Next.js (ex.: /api/maturation/cron-tick).
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -8,6 +8,14 @@ import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-ins
 import { VIRGIN_AUTO_MATURATION_PLAN_ID } from '@/lib/maturation/job-lifecycle';
 import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
 import { MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
+import { evolutionMaturationDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
+import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
+import {
+  loadVirginMessagePlansFromDb,
+  meshMessagePlanIndex,
+  virginPlanToMeshPool,
+  virginWarmupPlanIndex,
+} from '@/lib/maturation/virgin-message-plans';
 
 /**
  * Quantos steps são reivindicados por lote no RPC claim_maturation_steps.
@@ -24,7 +32,6 @@ const FETCH_TIMEOUT_MS = 12000;
 const STUCK_PROCESSING_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutos
 const DEFAULT_MEDIA_BUCKET = 'maturation-videos';
 const VIRGIN_MEDIA_BUCKET = 'virgin-maturation-media';
-const VIRGIN_CONFIG_KEY_MESSAGES = 'messages';
 
 const VIRGIN_CONNECTION_TEST_MS = 24 * 60 * 60 * 1000;
 const VIRGIN_CONTACT_WARMUP_MS = 2 * 60 * 60 * 1000;
@@ -81,11 +88,157 @@ function extractErrorMessage(responseText: string, fallback: string): string {
   try {
     const data = JSON.parse(responseText);
     const raw = data?.response?.message ?? data?.message ?? data?.error;
-    if (Array.isArray(raw)) return raw.join('; ');
+    if (Array.isArray(raw)) {
+      return raw
+        .map((item: unknown) =>
+          typeof item === 'string'
+            ? item
+            : item != null && typeof item === 'object'
+              ? JSON.stringify(item)
+              : String(item)
+        )
+        .join('; ');
+    }
     if (typeof raw === 'string') return raw;
     if (raw && typeof raw === 'object') return JSON.stringify(raw);
   } catch {}
   return fallback;
+}
+
+/** Evolution sendText/sendMedia 400: destino não tem conta no WhatsApp — retry não ajuda. */
+function isEvolutionRecipientNotOnWhatsApp(params: { error?: string; httpStatus?: number }): boolean {
+  if (params.httpStatus !== 400) return false;
+  const e = params.error || '';
+  return /"exists"\s*:\s*false/i.test(e) || /\bexists\s*:\s*false\b/i.test(e);
+}
+
+function formatEvolutionRecipientNotOnWhatsAppError(error: string): string {
+  const m = error.match(/"number"\s*:\s*"([^"]+)"/);
+  if (m?.[1]) {
+    return `O número ${m[1]} não está no WhatsApp (conta inexistente). Ajuste o destino da maturação para um número com WhatsApp ativo.`;
+  }
+  return 'O destino não está no WhatsApp (exists=false). Confira o número usado na maturação.';
+}
+
+/** Chave estável para comparar destinos (Evolution / steps). */
+function normalizeMaturationDestKey(chatId: string): string {
+  const s = String(chatId || '').trim().toLowerCase();
+  if (!s) return '';
+  const local = s.split('@')[0] || s;
+  const digits = local.replace(/\D/g, '');
+  return digits.length >= 8 ? digits : local;
+}
+
+function isStoredErrorDestinoSemWhatsApp(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const e = error.toLowerCase();
+  return (
+    e.includes('não está no whatsapp') ||
+    e.includes('conta inexistente') ||
+    e.includes('exists=false') ||
+    e.includes('"exists":false') ||
+    /exists["']?\s*:\s*false/i.test(error)
+  );
+}
+
+async function fetchInvalidWhatsappDestKeysForJobIds(
+  supabase: SupabaseClient,
+  jobIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (jobIds.length === 0) return out;
+  const { data: failedRows, error } = await supabase
+    .from('maturation_steps')
+    .select('target_chat_id, error')
+    .in('job_id', jobIds)
+    .eq('status', 'failed');
+  if (error || !failedRows?.length) return out;
+  for (const row of failedRows as { target_chat_id?: string | null; error?: string | null }[]) {
+    const tid = row.target_chat_id && String(row.target_chat_id).trim();
+    if (!tid || !row.error || !isStoredErrorDestinoSemWhatsApp(row.error)) continue;
+    out.add(normalizeMaturationDestKey(tid));
+  }
+  return out;
+}
+
+/** Steps já falhados com exists=false (mesmo escopo de campanha ou job solto). */
+async function loadInvalidWhatsappDestKeysForScope(
+  supabase: SupabaseClient,
+  campaignId: string | null | undefined,
+  fallbackJobId: string
+): Promise<Set<string>> {
+  const cid = campaignId && String(campaignId).trim();
+  if (cid) {
+    const { data: jobs } = await supabase.from('maturation_jobs').select('id').eq('campaign_id', cid);
+    const jids = (jobs ?? []).map((j: { id: string }) => j.id).filter(Boolean);
+    return fetchInvalidWhatsappDestKeysForJobIds(supabase, jids);
+  }
+  return fetchInvalidWhatsappDestKeysForJobIds(supabase, [fallbackJobId]);
+}
+
+/**
+ * Mapa escopo → destinos sem WhatsApp já conhecidos (DB + enriquecido durante o tick).
+ * Escopo: `c:<campaign_id>` ou `j:<job_id>` (job sem campanha).
+ */
+async function loadInvalidWhatsappDestinationMapForRunningJobs(
+  supabase: SupabaseClient
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  const { data: running, error } = await supabase.from('maturation_jobs').select('id, campaign_id').eq('status', 'running');
+  if (error || !running?.length) return map;
+
+  const uniqueCids = [...new Set(running.map((r: { campaign_id?: string | null }) => r.campaign_id).filter(Boolean))] as string[];
+
+  for (const cid of uniqueCids) {
+    const set = await loadInvalidWhatsappDestKeysForScope(supabase, cid, '');
+    map.set(`c:${cid}`, set);
+  }
+
+  const soloJobIds = running
+    .filter((r: { campaign_id?: string | null }) => !r.campaign_id || !String(r.campaign_id).trim())
+    .map((r: { id: string }) => r.id);
+  if (soloJobIds.length === 0) return map;
+
+  const { data: soloFailed } = await supabase
+    .from('maturation_steps')
+    .select('job_id, target_chat_id, error')
+    .in('job_id', soloJobIds)
+    .eq('status', 'failed');
+
+  for (const row of soloFailed ?? []) {
+    const r = row as { job_id: string; target_chat_id?: string | null; error?: string | null };
+    const tid = r.target_chat_id && String(r.target_chat_id).trim();
+    if (!tid || !r.error || !isStoredErrorDestinoSemWhatsApp(r.error)) continue;
+    const sk = `j:${r.job_id}`;
+    if (!map.has(sk)) map.set(sk, new Set());
+    map.get(sk)!.add(normalizeMaturationDestKey(tid));
+  }
+
+  return map;
+}
+
+function maturationScopeKey(campaignId: string | null | undefined, jobId: string): string {
+  const cid = campaignId && String(campaignId).trim();
+  return cid ? `c:${cid}` : `j:${jobId}`;
+}
+
+export type ProcessStepOpts = {
+  /** Mutável durante o tick: passos seguintes e mesh evitam Evolution para o mesmo destino. */
+  invalidWhatsappDestByScope?: Map<string, Set<string>>;
+};
+
+function noteInvalidWhatsappDestination(
+  opts: ProcessStepOpts | undefined,
+  scopeKey: string,
+  destKey: string
+): void {
+  if (!opts?.invalidWhatsappDestByScope || !destKey) return;
+  let s = opts.invalidWhatsappDestByScope.get(scopeKey);
+  if (!s) {
+    s = new Set();
+    opts.invalidWhatsappDestByScope.set(scopeKey, s);
+  }
+  s.add(destKey);
 }
 
 function isConnectionClosedError(params: { error?: string; httpStatus?: number }): boolean {
@@ -285,10 +438,8 @@ async function sendText(params: {
   const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendText/${instanceName}`;
   const body = { number: numberNorm, text };
-  if (VERBOSE_EVOLUTION_LOGS) {
-    console.log(`${LOG_PREFIX} [Evolution API] sendText - URL: ${url}`);
-    console.log(`${LOG_PREFIX} [Evolution API] sendText - Body: number=${numberNorm}, text=${text?.substring(0, 50)}${text?.length > 50 ? '...' : ''}`);
-  }
+  console.log(`${LOG_PREFIX} [Evolution] POST ${url}`);
+  console.log(`${LOG_PREFIX} [Evolution] body: number=${numberNorm} text="${text?.substring(0, 80)}${(text?.length ?? 0) > 80 ? '…' : ''}"`);
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -302,20 +453,95 @@ async function sendText(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
     const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
-    if (evDetail) {
-      console.log(`${LOG_PREFIX} [Evolution API] sendText - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendText - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok && !rateLimited) {
-      console.warn(`${LOG_PREFIX} [Evolution API] sendText HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    if (response.ok) {
+      console.log(`${LOG_PREFIX} [Evolution] ✅ sendText HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm}`);
+      return { success: true, latencyMs, httpStatus: response.status };
     }
-    if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
+    if (rateLimited) {
+      console.warn(`${LOG_PREFIX} [Evolution] ⚠️ sendText HTTP ${response.status} RATE-LIMIT (${latencyMs}ms) → ${instanceName}`);
+    } else {
+      console.warn(`${LOG_PREFIX} [Evolution] ❌ sendText HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm}`);
+      console.warn(`${LOG_PREFIX} [Evolution] body resposta: ${responseText?.substring(0, 400)}`);
+    }
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
-    return { success: false, latencyMs, error: error.name === 'AbortError' ? 'Timeout' : error.message };
+    const msg = error.name === 'AbortError' ? `Timeout (>${FETCH_TIMEOUT_MS}ms)` : error.message;
+    console.warn(`${LOG_PREFIX} [Evolution] ❌ sendText EXCEPTION (${latencyMs}ms) → ${instanceName}: ${msg}`);
+    return { success: false, latencyMs, error: msg };
+  }
+}
+
+/**
+ * Evolution exige `media` / `audio` como string URL (http/https).
+ * Alguns payloads gravam objeto (ex.: { signedUrl } do Storage) — normaliza aqui.
+ */
+function coerceHttpMediaUrl(input: unknown, depth = 0): string | null {
+  if (input == null || depth > 6) return null;
+  if (typeof input === 'string') {
+    const t = input.trim();
+    return /^https?:\/\//i.test(t) ? t : null;
+  }
+  if (typeof input === 'object') {
+    if (input instanceof URL) {
+      return coerceHttpMediaUrl(input.href, depth + 1);
+    }
+    const ctor = (input as { constructor?: { name?: string } }).constructor?.name;
+    if (ctor === 'String') {
+      return coerceHttpMediaUrl(String(input as object), depth + 1);
+    }
+    if (Array.isArray(input) && input.length > 0) {
+      return coerceHttpMediaUrl(input[0], depth + 1);
+    }
+    if (!Array.isArray(input)) {
+      const o = input as Record<string, unknown>;
+      const keys = [
+        'signedUrl',
+        'signedURL',
+        'signed_url',
+        'url',
+        'publicUrl',
+        'publicURL',
+        'href',
+        'media',
+        'media_url',
+        'downloadUrl',
+        'downloadURL',
+        'data',
+        'path',
+        'fullPath',
+        'value',
+        'link',
+        'src',
+      ] as const;
+      for (const k of keys) {
+        const out = coerceHttpMediaUrl(o[k], depth + 1);
+        if (out) return out;
+      }
+    }
+  }
+  return null;
+}
+
+function logMediaUrlPreview(label: string, rawUrl: unknown): string {
+  const s = coerceHttpMediaUrl(rawUrl);
+  if (!s) {
+    if (rawUrl == null) return `${label}=(vazio)`;
+    try {
+      const j = typeof rawUrl === 'object' ? JSON.stringify(rawUrl).slice(0, 160) : String(rawUrl).slice(0, 160);
+      return `${label}=(não é URL) ${j}${String(j).length >= 160 ? '…' : ''}`;
+    } catch {
+      return `${label}=(tipo inválido)`;
+    }
+  }
+  try {
+    const u = new URL(s);
+    const pathPrev = u.pathname.length > 48 ? `${u.pathname.slice(0, 48)}…` : u.pathname;
+    return `${label}=${u.protocol}//${u.host}${pathPrev} len=${s.length}`;
+  } catch {
+    return s.length > 100 ? `${label}=${s.slice(0, 100)}…[${s.length}b]` : `${label}=${s}`;
   }
 }
 
@@ -324,20 +550,42 @@ async function sendMedia(params: {
   instanceName: string;
   apiKey: string;
   number: string;
-  mediaUrl: string;
-  mediaType: 'image' | 'video';
-  mimetype: string;
+  mediaUrl: unknown;
+  /** Mesmo shape do disparo em massa (grupos): mediatype, mimetype, fileName */
+  evolutionMeta: { mediatype: string; mimetype: string; fileName: string };
   caption?: string;
 }): Promise<{ success: boolean; latencyMs: number; httpStatus?: number; error?: string; mediaUrl?: string }> {
-  const { baseUrl, instanceName, apiKey, number, mediaUrl, mediaType, mimetype, caption } = params;
+  const { baseUrl, instanceName, apiKey, number, mediaUrl, evolutionMeta, caption } = params;
   const numberNorm = normalizeNumberForEvolution(number);
-  const url = `${normalizeBaseUrl(baseUrl)}/message/sendMedia/${instanceName}`;
-  const body: any = { number: numberNorm, mediatype: mediaType, mimetype, media: mediaUrl, fileName: mediaType === 'image' ? 'image.png' : 'file' };
-  if (caption) body.caption = caption;
-  if (VERBOSE_EVOLUTION_LOGS) {
-    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - URL: ${url}`);
-    console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Body: number=${numberNorm}, mediaType=${mediaType}, mediaUrl=${mediaUrl?.substring(0, 80)}...`);
+  const mediaStr = coerceHttpMediaUrl(mediaUrl);
+  if (!mediaStr || typeof mediaStr !== 'string') {
+    const hint =
+      typeof mediaUrl === 'object' && mediaUrl != null
+        ? JSON.stringify(mediaUrl).slice(0, 240)
+        : String(mediaUrl ?? '').slice(0, 120);
+    console.warn(`${LOG_PREFIX} [Evolution] sendMedia abort: media não é URL http(s) string | recebido=${hint}`);
+    return { success: false, latencyMs: 0, error: 'Campo media deve ser URL http(s) string para a Evolution' };
   }
+  /** Igual activation mass-send: sempre primitivo string no JSON (Evolution valida tipo). */
+  const mediaPrimitive = String(mediaStr);
+  if (!/^https?:\/\//i.test(mediaPrimitive)) {
+    console.warn(`${LOG_PREFIX} [Evolution] sendMedia abort: URL inválida após coerção`);
+    return { success: false, latencyMs: 0, error: 'Campo media deve ser URL http(s) string para a Evolution' };
+  }
+  const url = `${normalizeBaseUrl(baseUrl)}/message/sendMedia/${instanceName}`;
+  const body: Record<string, unknown> = {
+    number: numberNorm,
+    mediatype: evolutionMeta.mediatype,
+    mimetype: evolutionMeta.mimetype,
+    media: mediaPrimitive,
+    fileName: evolutionMeta.fileName,
+  };
+  if (caption) body.caption = caption;
+  const capLen = caption != null ? String(caption).length : 0;
+  console.log(`${LOG_PREFIX} [Evolution] POST ${url}`);
+  console.log(
+    `${LOG_PREFIX} [Evolution] sendMedia req: ${logMediaUrlPreview('media', mediaPrimitive)} | number=${numberNorm} | mediatype=${evolutionMeta.mediatype} | mimetype=${evolutionMeta.mimetype} | captionLen=${capLen} | fileName=${evolutionMeta.fileName}`
+  );
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -351,20 +599,33 @@ async function sendMedia(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
     const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
-    if (evDetail) {
-      console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendMedia - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok && !rateLimited) {
-      console.warn(`${LOG_PREFIX} [Evolution API] sendMedia HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    if (response.ok) {
+      console.log(
+        `${LOG_PREFIX} [Evolution] ✅ sendMedia HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm} | ${logMediaUrlPreview('media', mediaStr)}`
+      );
+      return { success: true, latencyMs, httpStatus: response.status, mediaUrl: mediaStr };
     }
-    if (response.ok) return { success: true, latencyMs, httpStatus: response.status, mediaUrl };
+    const bodySnippet = responseText?.substring(0, 1200) ?? '';
+    if (rateLimited) {
+      console.warn(
+        `${LOG_PREFIX} [Evolution] ⚠️ sendMedia HTTP ${response.status} RATE-LIMIT (${latencyMs}ms) → ${instanceName} | body: ${bodySnippet.slice(0, 400)}`
+      );
+    } else {
+      console.warn(
+        `${LOG_PREFIX} [Evolution] ❌ sendMedia HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm} | ${logMediaUrlPreview('media', mediaStr)}`
+      );
+      console.warn(`${LOG_PREFIX} [Evolution] sendMedia resposta (até 1200 chars): ${bodySnippet}`);
+    }
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
-    return { success: false, latencyMs, httpStatus: response.status, error: errorMsg, mediaUrl };
+    return { success: false, latencyMs, httpStatus: response.status, error: errorMsg, mediaUrl: mediaStr };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
-    return { success: false, latencyMs, error: error.name === 'AbortError' ? 'Timeout' : error.message, mediaUrl };
+    const msg = error.name === 'AbortError' ? `Timeout (>${FETCH_TIMEOUT_MS}ms)` : error.message;
+    console.warn(
+      `${LOG_PREFIX} [Evolution] ❌ sendMedia EXCEPTION (${latencyMs}ms) → ${instanceName}: ${msg} | ${logMediaUrlPreview('media', mediaStr)}`
+    );
+    return { success: false, latencyMs, error: msg, mediaUrl: mediaStr };
   }
 }
 
@@ -373,16 +634,26 @@ async function sendAudio(params: {
   instanceName: string;
   apiKey: string;
   number: string;
-  audioUrl: string;
+  audioUrl: unknown;
 }): Promise<{ success: boolean; latencyMs: number; httpStatus?: number; error?: string }> {
   const { baseUrl, instanceName, apiKey, number, audioUrl } = params;
   const numberNorm = normalizeNumberForEvolution(number);
-  const url = `${normalizeBaseUrl(baseUrl)}/message/sendWhatsAppAudio/${instanceName}`;
-  const body = { number: numberNorm, audio: audioUrl };
-  if (VERBOSE_EVOLUTION_LOGS) {
-    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - URL: ${url}`);
-    console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Body: number=${numberNorm}, audioUrl=${audioUrl?.substring(0, 80)}...`);
+  const audioStr = coerceHttpMediaUrl(audioUrl);
+  if (!audioStr) {
+    const hint =
+      typeof audioUrl === 'object' && audioUrl != null
+        ? JSON.stringify(audioUrl).slice(0, 240)
+        : String(audioUrl ?? '').slice(0, 120);
+    console.warn(`${LOG_PREFIX} [Evolution] sendWhatsAppAudio abort: audio não é URL http(s) string | recebido=${hint}`);
+    return { success: false, latencyMs: 0, error: 'Campo audio deve ser URL http(s) string para a Evolution' };
   }
+  const url = `${normalizeBaseUrl(baseUrl)}/message/sendWhatsAppAudio/${instanceName}`;
+  const audioPrimitive = String(audioStr);
+  const body: Record<string, unknown> = { number: numberNorm, audio: audioPrimitive };
+  console.log(`${LOG_PREFIX} [Evolution] POST ${url}`);
+  console.log(
+    `${LOG_PREFIX} [Evolution] sendAudio req: ${logMediaUrlPreview('audio', audioPrimitive)} | number=${numberNorm}`
+  );
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -396,24 +667,41 @@ async function sendAudio(params: {
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
     const responseText = await response.text();
-    const evDetail = MATURATION_VERBOSE_LOGS || VERBOSE_EVOLUTION_LOGS;
     const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
-    if (evDetail) {
-      console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Response: HTTP ${response.status}, latency=${latencyMs}ms`);
-      if (!response.ok) console.log(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio - Error body: ${responseText?.substring(0, 200)}`);
-    } else if (!response.ok && !rateLimited) {
-      console.warn(`${LOG_PREFIX} [Evolution API] sendWhatsAppAudio HTTP ${response.status}: ${responseText?.substring(0, 200)}`);
+    if (response.ok) {
+      console.log(
+        `${LOG_PREFIX} [Evolution] ✅ sendWhatsAppAudio HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm} | ${logMediaUrlPreview('audio', audioStr)}`
+      );
+      return { success: true, latencyMs, httpStatus: response.status };
     }
-    if (response.ok) return { success: true, latencyMs, httpStatus: response.status };
+    const bodySnippet = responseText?.substring(0, 1200) ?? '';
+    if (rateLimited) {
+      console.warn(
+        `${LOG_PREFIX} [Evolution] ⚠️ sendWhatsAppAudio HTTP ${response.status} RATE-LIMIT (${latencyMs}ms) → ${instanceName} | body: ${bodySnippet.slice(0, 400)}`
+      );
+    } else {
+      console.warn(
+        `${LOG_PREFIX} [Evolution] ❌ sendWhatsAppAudio HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm} | ${logMediaUrlPreview('audio', audioStr)}`
+      );
+      console.warn(`${LOG_PREFIX} [Evolution] sendWhatsAppAudio resposta (até 1200 chars): ${bodySnippet}`);
+    }
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
-    return { success: false, latencyMs, error: error.name === 'AbortError' ? 'Timeout' : error.message };
+    const msg = error.name === 'AbortError' ? `Timeout (>${FETCH_TIMEOUT_MS}ms)` : error.message;
+    console.warn(
+      `${LOG_PREFIX} [Evolution] ❌ sendWhatsAppAudio EXCEPTION (${latencyMs}ms) → ${instanceName}: ${msg} | ${logMediaUrlPreview('audio', audioStr)}`
+    );
+    return { success: false, latencyMs, error: msg };
   }
 }
 
-async function getSignedUrl(supabase: SupabaseClient, assetPath: string, bucket: string = DEFAULT_MEDIA_BUCKET): Promise<string | null> {
+async function getSignedUrl(
+  supabase: SupabaseClient,
+  assetPath: string,
+  bucket: string = DEFAULT_MEDIA_BUCKET
+): Promise<{ url: string | null; bucket: string; objectPath: string; errorMessage?: string }> {
   let b = bucket;
   let p = assetPath;
   if (assetPath.includes('/')) {
@@ -423,8 +711,18 @@ async function getSignedUrl(supabase: SupabaseClient, assetPath: string, bucket:
   }
   try {
     const { data, error } = await supabase.storage.from(b).createSignedUrl(p, 3600);
-    return error ? null : data?.signedUrl || null;
-  } catch { return null; }
+    if (error) {
+      return { url: null, bucket: b, objectPath: p, errorMessage: error.message };
+    }
+    const signed = data?.signedUrl?.trim() || null;
+    if (!signed) {
+      return { url: null, bucket: b, objectPath: p, errorMessage: 'Resposta sem signedUrl' };
+    }
+    return { url: signed, bucket: b, objectPath: p };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { url: null, bucket: b, objectPath: p, errorMessage: msg };
+  }
 }
 
 async function createMessage(supabase: SupabaseClient, params: any): Promise<void> {
@@ -449,18 +747,19 @@ function calculateBackoff(attempt: number): number {
   return backoffs[Math.min(attempt - 1, backoffs.length - 1)];
 }
 
-async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
+async function processStep(supabase: SupabaseClient, step: any, opts?: ProcessStepOpts): Promise<void> {
   const { id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts } = step;
-  logVerbose(
-    `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} type=${type} instance=${instance_name} destino=${target_chat_id ? `${String(target_chat_id).slice(0, 20)}...` : 'vazio'}`
-  );
 
   /**
    * O RPC claim_maturation_steps só enxerga jobs `running` no momento do claim, mas o mesmo tick
    * pode processar o lote segundos depois — se o usuário pausar nesse intervalo, sem este check
    * as mensagens ainda seriam enviadas. Também cobre catch-up longo e ticks encadeados.
    */
-  const { data: jobSnap } = await supabase.from('maturation_jobs').select('status, plan_id').eq('id', job_id).maybeSingle();
+  const { data: jobSnap } = await supabase
+    .from('maturation_jobs')
+    .select('status, plan_id, campaign_id')
+    .eq('id', job_id)
+    .maybeSingle();
   if (!jobSnap || jobSnap.status !== 'running') {
     const jst = jobSnap?.status;
     const revertPending = jst === 'paused';
@@ -521,6 +820,31 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     return;
   }
 
+  const scopeKey = maturationScopeKey(jobSnap.campaign_id as string | null | undefined, job_id);
+  const destKeyForWa = normalizeMaturationDestKey(String(target_chat_id));
+  const invalidWaSet = opts?.invalidWhatsappDestByScope?.get(scopeKey);
+  if (destKeyForWa && invalidWaSet?.has(destKeyForWa)) {
+    logVerbose(
+      `${LOG_MANUAL} ▶ step job=${job_id.slice(0, 8)}… idx=${step_index} type=${type} sender=${instance_name} → PULADO (destino sem WhatsApp já conhecido; sem Evolution) dest=${String(target_chat_id).slice(0, 28)}`
+    );
+    await supabase
+      .from('maturation_steps')
+      .update({
+        status: 'skipped',
+        error:
+          'Destino sem WhatsApp — pulado automaticamente (já registrado nesta campanha/job; nenhuma chamada à Evolution).',
+        locked_at: null,
+        locked_by: null,
+      })
+      .eq('id', id)
+      .eq('status', 'processing');
+    return;
+  }
+
+  console.log(
+    `${LOG_MANUAL} ▶ step job=${job_id.slice(0, 8)}… idx=${step_index} type=${type} sender=${instance_name} → destino=${target_chat_id ? String(target_chat_id).slice(0, 25) : '(vazio)'}`
+  );
+
   await createMessage(supabase, { jobId: job_id, stepId: id, direction: 'system', instanceLabel: instance_name, type: 'info', title: `⏳ Enviando ${type}...`, content: `Enviando ${type} pela instância ${instance_name}`, status: 'info' });
 
   const { data: jobBeforeSend } = await supabase.from('maturation_jobs').select('status').eq('id', job_id).maybeSingle();
@@ -549,20 +873,91 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     // media_url  → URL direta (usada quando o plano é criado via UI com URL externa)
     // assetPath/assetId → legado
     const storagePath = payload_json.media_path || payload_json.assetPath || payload_json.assetId;
-    const directUrl = payload_json.media_url as string | undefined;
+    const directFromPayload =
+      coerceHttpMediaUrl(payload_json.media_url) ??
+      coerceHttpMediaUrl(payload_json.media) ??
+      coerceHttpMediaUrl(payload_json.signedUrl);
     let url: string | null = null;
 
+    console.log(
+      `${LOG_PREFIX} [mídia] step job=${job_id.slice(0, 8)}… idx=${step_index} type=${type} sender=${instance_name} | storagePath=${storagePath ? String(storagePath).slice(0, 120) : '—'} | hasDirectUrl=${!!directFromPayload}`
+    );
+
     if (storagePath) {
-      url = await getSignedUrl(supabase, storagePath, DEFAULT_MEDIA_BUCKET);
-    } else if (directUrl && directUrl.startsWith('http')) {
-      url = directUrl;
+      const signed = await getSignedUrl(supabase, String(storagePath), DEFAULT_MEDIA_BUCKET);
+      url = coerceHttpMediaUrl(signed.url);
+      if (!url) {
+        console.warn(
+          `${LOG_PREFIX} [mídia] signed URL falhou job=${job_id.slice(0, 8)}… step=${step_index} bucket=${signed.bucket} path=${signed.objectPath.slice(0, 200)}${signed.objectPath.length > 200 ? '…' : ''} err=${signed.errorMessage || 'desconhecido'}`
+        );
+      } else {
+        console.log(
+          `${LOG_PREFIX} [mídia] signed OK job=${job_id.slice(0, 8)}… step=${step_index} bucket=${signed.bucket} | ${logMediaUrlPreview('url', url)}`
+        );
+      }
+    } else if (directFromPayload) {
+      url = directFromPayload;
+      console.log(`${LOG_PREFIX} [mídia] usando URL do payload step=${step_index} | ${logMediaUrlPreview('url', url)}`);
     }
 
-    if (!url) result = { success: false, error: 'Erro ao obter URL da mídia (configure media_path ou media_url no step)' };
-    else if (type === 'video') result = await sendMedia({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, mediaUrl: url, mediaType: 'video', mimetype: 'video/mp4', caption: payload_json.caption });
-    else if (type === 'image') result = await sendMedia({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, mediaUrl: url, mediaType: 'image', mimetype: 'image/png', caption: payload_json.caption });
-    else result = await sendAudio({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, audioUrl: url });
+    if (!url) {
+      url = coerceHttpMediaUrl(payload_json);
+    }
+    url = coerceHttpMediaUrl(url);
+    if (!url) {
+      result = { success: false, error: 'Erro ao obter URL da mídia (configure media_path ou media_url no step)' };
+      console.warn(
+        `${LOG_PREFIX} [mídia] sem URL resolvida job=${job_id.slice(0, 8)}… step=${step_index} type=${type} | storagePath=${storagePath || '—'} | payload.media_url=${payload_json.media_url != null ? JSON.stringify(payload_json.media_url).slice(0, 80) : '—'}`
+      );
+    } else {
+      const mimeFromPayload =
+        typeof payload_json.mimetype === 'string' && payload_json.mimetype.trim()
+          ? payload_json.mimetype.trim()
+          : typeof payload_json.mime_type === 'string' && payload_json.mime_type.trim()
+            ? payload_json.mime_type.trim()
+            : null;
+      if (type === 'video') {
+        const evolutionMeta = resolveEvolutionSendMediaMeta({
+          attachment_url: url,
+          attachment_type: 'video',
+          attachment_mime: mimeFromPayload,
+        });
+        result = await sendMedia({
+          baseUrl: base_url,
+          instanceName: instance_name,
+          apiKey: api_key,
+          number: target_chat_id,
+          mediaUrl: url,
+          evolutionMeta,
+          caption: payload_json.caption,
+        });
+      } else if (type === 'image') {
+        const evolutionMeta = resolveEvolutionSendMediaMeta({
+          attachment_url: url,
+          attachment_type: 'image',
+          attachment_mime: mimeFromPayload,
+        });
+        result = await sendMedia({
+          baseUrl: base_url,
+          instanceName: instance_name,
+          apiKey: api_key,
+          number: target_chat_id,
+          mediaUrl: url,
+          evolutionMeta,
+          caption: payload_json.caption,
+        });
+      } else {
+        result = await sendAudio({ baseUrl: base_url, instanceName: instance_name, apiKey: api_key, number: target_chat_id, audioUrl: url });
+      }
+    }
   } else result = { success: false, error: 'Tipo desconhecido' };
+
+  if (!result.success && ['video', 'image', 'audio'].includes(type)) {
+    const errStr = typeof result.error === 'string' ? result.error : JSON.stringify(result.error ?? '');
+    console.warn(
+      `${LOG_PREFIX} [mídia] fim step job=${job_id.slice(0, 8)}… idx=${step_index} type=${type} sender=${instance_name} → FALHA http=${result.httpStatus ?? '—'} latencyMs=${result.latencyMs ?? '—'} err=${errStr.slice(0, 600)}`
+    );
+  }
 
   const typeLabel = type === 'text' ? 'Mensagem' : type === 'video' ? 'Vídeo' : type === 'image' ? 'Imagem' : 'Áudio';
   // maturation_messages.type só aceita: 'text' | 'video' | 'info' | 'error' | 'retry'
@@ -660,6 +1055,31 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
       return;
     }
 
+    if (isEvolutionRecipientNotOnWhatsApp({ error: result.error, httpStatus: result.httpStatus })) {
+      const friendly = formatEvolutionRecipientNotOnWhatsAppError(result.error || '');
+      const finalAttempts = MAX_ATTEMPTS;
+      console.warn(
+        `${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA definitiva (destino sem WhatsApp): ${friendly} | raw=${result.error}`
+      );
+      await supabase
+        .from('maturation_steps')
+        .update({ status: 'failed', attempts: finalAttempts, error: friendly })
+        .eq('id', id);
+      await createMessage(supabase, {
+        jobId: job_id,
+        stepId: id,
+        direction: 'system',
+        type: 'error',
+        title: '❌ Destino sem WhatsApp',
+        content: `${friendly} Detalhe Evolution: ${result.error}`,
+        status: 'failed',
+        httpStatus: result.httpStatus,
+        error: result.error,
+      });
+      noteInvalidWhatsappDestination(opts, scopeKey, destKeyForWa);
+      return;
+    }
+
     const { data: planForRetry } = await supabase
       .from('maturation_plans')
       .select('is_active')
@@ -680,7 +1100,9 @@ async function processStep(supabase: SupabaseClient, step: any): Promise<void> {
     }
 
     const newAttempts = (attempts || 0) + 1;
-    console.warn(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${result.error}`);
+    const errLog =
+      typeof result.error === 'string' ? result.error : JSON.stringify(result.error ?? '');
+    console.warn(`${LOG_MANUAL} Step job=${job_id} step_index=${step_index} FALHA tentativa=${newAttempts}/${MAX_ATTEMPTS} erro=${errLog}`);
     if (newAttempts < MAX_ATTEMPTS) {
       const backoff = calculateBackoff(newAttempts);
       const next = new Date(Date.now() + backoff * 1000);
@@ -714,9 +1136,11 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
   await supabase.from('maturation_jobs').update({ progress_done: sentN }).eq('id', jobId);
   if (!totalN || terminalDone < totalN) return;
 
-  const { data: jobSt } = await supabase.from('maturation_jobs').select('status').eq('id', jobId).maybeSingle();
+  const { data: jobSt } = await supabase.from('maturation_jobs').select('status, campaign_id').eq('id', jobId).maybeSingle();
   /** Não promover para finished se o job já foi failed/aborted/pausado (ex.: rate limit). */
   if (jobSt?.status !== 'running') return;
+  /** Jobs de campanha mesh são perpétuos: acumulam steps a cada ciclo, nunca terminam naturalmente. */
+  if (jobSt?.campaign_id) return;
 
   const endedAt = new Date().toISOString();
   const hasFailures = failedN > 0;
@@ -729,7 +1153,20 @@ async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promi
     .update({ status: nextStatus, ended_at: endedAt })
     .eq('id', jobId);
   const { data: j } = await supabase.from('maturation_jobs').select('master_instance_id').eq('id', jobId).single();
-  if (j) await supabase.from('master_instances').update({ is_locked: false, locked_job_id: null, locked_at: null }).eq('id', j.master_instance_id);
+  if (j?.master_instance_id) {
+    const { count: activeOthers } = await supabase
+      .from('maturation_jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('master_instance_id', j.master_instance_id)
+      .in('status', ['running', 'paused', 'queued']);
+    const n = activeOthers ?? 0;
+    if (n === 0) {
+      await supabase
+        .from('master_instances')
+        .update({ is_locked: false, locked_job_id: null, locked_at: null })
+        .eq('id', j.master_instance_id);
+    }
+  }
   if (hasFailures) {
     await createMessage(supabase, {
       jobId,
@@ -999,17 +1436,18 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     return;
   }
 
-  // Busca mensagens configuradas para o auto-maturador
-  const { data: configRow } = await supabase
-    .from('virgin_maturation_config')
-    .select('value_json')
-    .eq('key', VIRGIN_CONFIG_KEY_MESSAGES)
-    .maybeSingle();
-
-  const rawMessages = configRow?.value_json;
-  const messages: VirginMessage[] = Array.isArray(rawMessages) && rawMessages.length > 0
-    ? rawMessages.filter((m: any) => m && (typeof m === 'string' || (typeof m === 'object' && m.type)))
-    : VIRGIN_MESSAGES_FALLBACK;
+  // Busca planos de mensagens configurados (rotação entre planos por instância — hash estável do id)
+  const plans = await loadVirginMessagePlansFromDb(supabase);
+  let messages: VirginMessage[] = VIRGIN_MESSAGES_FALLBACK;
+  if (plans.length > 0) {
+    let pi = virginWarmupPlanIndex(instanceId, plans.length);
+    let picked = plans[pi];
+    if (!picked || picked.length === 0) {
+      const first = plans.find((p) => p.length > 0);
+      if (first) picked = first;
+    }
+    if (picked && picked.length > 0) messages = picked as VirginMessage[];
+  }
 
   if (messages.length === 0) {
     console.warn(`${LOG_AUTO} ${inst.instance_name}: nenhuma mensagem configurada para warmup`);
@@ -1021,7 +1459,6 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
     .from('master_instances')
     .select(`evolution_instances!inner ( phone_number )`)
     .eq('is_active', true)
-    .eq('is_locked', false)
     .neq('evolution_instance_id', instanceId)
     .limit(1)
     .maybeSingle();
@@ -1120,11 +1557,6 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
   const stepsWithJob = stepsToInsert.map((s) => ({ ...s, job_id: job.id }));
   await supabase.from('maturation_steps').insert(stepsWithJob);
 
-  // Bloqueia a instância mestre para este job
-  await supabase.from('master_instances')
-    .update({ is_locked: true, locked_job_id: job.id, locked_at: now.toISOString() })
-    .eq('id', masterInstanceId);
-
   await supabase.from('virgin_maturation_logs').insert({
     evolution_instance_id: instanceId,
     event_type: 'warmup_job_created',
@@ -1138,7 +1570,9 @@ async function ensureVirginWarmupJob(supabase: SupabaseClient, inst: any, now: D
 export type CatchUpResult = {
   sent: number;
   failed: number;
-  results: Array<{ step_index: number; status: 'sent' | 'failed' | 'pending' }>;
+  /** Destino sem WhatsApp já conhecido — pulado sem chamar Evolution. */
+  skipped: number;
+  results: Array<{ step_index: number; status: 'sent' | 'failed' | 'skipped' | 'pending' }>;
 };
 
 /**
@@ -1146,9 +1580,10 @@ export type CatchUpResult = {
  * Envia direto para a Evolution API. Retorna quantos foram enviados, falharam e o status por step.
  */
 export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Promise<CatchUpResult> {
-  const results: Array<{ step_index: number; status: 'sent' | 'failed' | 'pending' }> = [];
+  const results: Array<{ step_index: number; status: 'sent' | 'failed' | 'skipped' | 'pending' }> = [];
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
 
   const { data: job, error: jobErr } = await supabase
     .from('maturation_jobs')
@@ -1157,14 +1592,15 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
       target_chat_id,
       master_instance_id,
       status,
-      plan_id
+      plan_id,
+      campaign_id
     `)
     .eq('id', jobId)
     .single();
 
   if (jobErr || !job || job.status !== 'running') {
     logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} ignorado (não encontrado ou não running)`);
-    return { sent: 0, failed: 0, results: [] };
+    return { sent: 0, failed: 0, skipped: 0, results: [] };
   }
 
   const pid = (job as { plan_id?: string }).plan_id;
@@ -1188,7 +1624,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
         userContent: 'O plano deste job não está mais ativo. A maturação foi encerrada.',
         errorDetail: 'maturation_plans.is_active = false',
       });
-      return { sent: 0, failed: 0, results: [] };
+      return { sent: 0, failed: 0, skipped: 0, results: [] };
     }
   }
 
@@ -1203,7 +1639,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
     .order('step_index', { ascending: true });
 
   if (stepsErr || !steps?.length) {
-    return { sent: 0, failed: 0, results: [] };
+    return { sent: 0, failed: 0, skipped: 0, results: [] };
   }
 
   const { data: creds } = await supabase
@@ -1227,7 +1663,7 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
   const api_key = api?.api_key_global ?? '';
   if (!instance_name || !base_url || !api_key) {
     console.warn(`${LOG_PREFIX} runJobCatchUp - Credenciais não encontradas para job ${jobId}`);
-    return { sent: 0, failed: 0, results: [] };
+    return { sent: 0, failed: 0, skipped: 0, results: [] };
   }
 
   // Process steps sequentially (Evolution API calls must be serial per instance)
@@ -1246,8 +1682,13 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
     master_instance_id: job.master_instance_id,
   }));
 
+  const campaignId = (job as { campaign_id?: string | null }).campaign_id;
+  const catchUpScopeKey = maturationScopeKey(campaignId, jobId);
+  const catchUpInvalidSet = await loadInvalidWhatsappDestKeysForScope(supabase, campaignId, jobId);
+  const invalidWhatsappDestByScope = new Map<string, Set<string>>([[catchUpScopeKey, catchUpInvalidSet]]);
+
   for (const stepEnriched of enrichedSteps) {
-    await processStep(supabase, stepEnriched);
+    await processStep(supabase, stepEnriched, { invalidWhatsappDestByScope });
   }
 
   // Batch-fetch all step statuses in one query (avoids N+1 individual selects)
@@ -1260,15 +1701,23 @@ export async function runJobCatchUp(supabase: SupabaseClient, jobId: string): Pr
 
   for (const row of steps) {
     const rawStatus = statusById.get(row.id);
-    const st = rawStatus === 'sent' ? 'sent' : rawStatus === 'failed' ? 'failed' : 'pending';
+    const st: 'sent' | 'failed' | 'skipped' | 'pending' =
+      rawStatus === 'sent'
+        ? 'sent'
+        : rawStatus === 'failed'
+          ? 'failed'
+          : rawStatus === 'skipped'
+            ? 'skipped'
+            : 'pending';
     results.push({ step_index: row.step_index, status: st });
     if (st === 'sent') sent++;
     else if (st === 'failed') failed++;
+    else if (st === 'skipped') skipped++;
   }
 
   await updateJobProgress(supabase, jobId);
-  logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} concluído: sent=${sent} failed=${failed}`);
-  return { sent, failed, results };
+  logVerbose(`${LOG_MANUAL} runJobCatchUp job=${jobId} concluído: sent=${sent} failed=${failed} skipped=${skipped}`);
+  return { sent, failed, skipped, results };
 }
 
 /**
@@ -1290,6 +1739,431 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
   const count = data?.length ?? 0;
   if (count > 0) logVerbose(`${LOG_MANUAL} ${count} step(s) travados em 'processing' resetados para 'pending'`);
   return count;
+}
+
+// ─── Mesh cycles ─────────────────────────────────────────────────────────────
+/** Logs do maturador mesh (campanhas contínuas auto-maturadas). */
+const LOG_MESH = '[MATURADOR-MESH]';
+const MESH_DEFAULT_INTERVAL_SEC = 30;
+const MESH_MAX_SENDERS_PER_CYCLE = 5;
+const MESH_MIN_SENDERS_PER_CYCLE = 1;
+
+async function loadMeshMessagePool(
+  supabase: SupabaseClient,
+  meshCycleCount: number | null | undefined
+): Promise<{ pool: Array<{ type: string; payload: Record<string, unknown> }>; planIndex: number; planCount: number }> {
+  const plans = await loadVirginMessagePlansFromDb(supabase);
+  if (plans.length === 0) {
+    const pool = VIRGIN_MESSAGES_FALLBACK.map((m) => ({
+      type: m.type,
+      payload: m.type === 'text' ? { text: (m as { text: string }).text } : {},
+    }));
+    return { pool, planIndex: 0, planCount: 1 };
+  }
+  const planCount = plans.length;
+  let planIndex = meshMessagePlanIndex(meshCycleCount, planCount);
+  let msgs = plans[planIndex];
+  if (!msgs || msgs.length === 0) {
+    const first = plans.find((p) => p.length > 0);
+    if (first) {
+      planIndex = plans.indexOf(first);
+      msgs = first;
+    }
+  }
+  if (!msgs || msgs.length === 0) {
+    const pool = VIRGIN_MESSAGES_FALLBACK.map((m) => ({
+      type: m.type,
+      payload: m.type === 'text' ? { text: (m as { text: string }).text } : {},
+    }));
+    return { pool, planIndex: 0, planCount: Math.max(1, planCount) };
+  }
+  return { pool: virginPlanToMeshPool(msgs), planIndex, planCount };
+}
+
+function shuffleArray<T>(items: T[]): T[] {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function normalizePhoneToJid(phone: string): string {
+  const t = String(phone || '').trim();
+  if (!t) return '';
+  if (t.includes('@')) return t;
+  return `${t.replace(/\D/g, '')}@s.whatsapp.net`;
+}
+
+type MeshController = {
+  id: string;
+  owner_user_id: string;
+  campaign_id: string | null;
+  mesh_cycle_interval_sec: number | null;
+  mesh_cycle_count: number | null;
+  mesh_last_sender_master_ids: string[] | null;
+};
+
+type MeshParticipant = {
+  jobId: string;
+  masterInstanceId: string;
+  instanceName: string;
+  jid: string;
+};
+
+async function processMeshCycles(supabase: SupabaseClient): Promise<number> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const { data: controllers, error } = await supabase
+    .from('maturation_jobs')
+    .select(
+      'id, owner_user_id, campaign_id, mesh_cycle_interval_sec, mesh_cycle_count, mesh_last_sender_master_ids'
+    )
+    .eq('mesh_is_controller', true)
+    .eq('status', 'running')
+    .lte('mesh_next_cycle_at', nowIso)
+    .limit(50);
+
+  if (error) {
+    console.warn(`${LOG_MESH} Erro ao buscar controllers: ${error.message}`);
+    return 0;
+  }
+  if (!controllers || controllers.length === 0) return 0;
+
+  let cycledCount = 0;
+  for (const ctrl of controllers as MeshController[]) {
+    try {
+      // Auto-enrollment ANTES do ciclo: descobre instâncias novas/que voltaram a ficar elegíveis
+      // e adiciona como participantes automaticamente. Garante que a "rede" esteja sempre atualizada.
+      await autoEnrollMeshParticipants(supabase, ctrl);
+      const advanced = await runMeshCycle(supabase, ctrl, now);
+      if (advanced) cycledCount++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`${LOG_MESH} Erro no ciclo campaign=${ctrl.campaign_id}: ${msg}`);
+    }
+  }
+  return cycledCount;
+}
+
+/**
+ * Auto-inscreve no mesh qualquer evolution_instance ativa, com telefone, não bloqueada,
+ * que ainda não esteja participando da campanha. Roda a cada ciclo, então:
+ * - Instância nova criada → entra no próximo ciclo
+ * - Instância que estava offline e voltou → continua participando (já tinha job; não precisa re-add)
+ * - Instância nova de outro usuário → também entra (mesh é singleton global)
+ */
+async function autoEnrollMeshParticipants(
+  supabase: SupabaseClient,
+  controller: MeshController
+): Promise<void> {
+  if (!controller.campaign_id) return;
+
+  // Busca todas as evolution_instances elegíveis no sistema (sem filtro por usuário —
+  // mesh é singleton global; a "rede" é tudo que pode maturar).
+  const { data: eligibleRows, error: eligErr } = await supabase
+    .from('evolution_instances')
+    .select('id, instance_name, phone_number')
+    .eq('is_active', true)
+    .eq('blocked_from_maturation', false)
+    .not('phone_number', 'is', null);
+
+  if (eligErr) {
+    console.warn(`${LOG_MESH} autoEnroll: erro listando elegíveis: ${eligErr.message}`);
+    return;
+  }
+  const eligible = (eligibleRows || []).filter(
+    (r: any) => r.id && r.phone_number && String(r.phone_number).trim()
+  );
+  if (eligible.length === 0) return;
+
+  // Quem já participa
+  const { data: existingJobs } = await supabase
+    .from('maturation_jobs')
+    .select('id, master_instance_id, master_instances!inner(evolution_instance_id)')
+    .eq('campaign_id', controller.campaign_id);
+
+  const enrolledEvoIds = new Set<string>();
+  for (const j of (existingJobs || []) as any[]) {
+    const mi = Array.isArray(j.master_instances) ? j.master_instances[0] : j.master_instances;
+    if (mi?.evolution_instance_id) enrolledEvoIds.add(String(mi.evolution_instance_id));
+  }
+
+  const newRows = eligible.filter((r: any) => !enrolledEvoIds.has(String(r.id)));
+  if (newRows.length === 0) return;
+
+  for (const r of newRows as any[]) {
+    // Garante master_instances row (cria se não existe). Sem scope: o tick roda como service_role.
+    const evoId = r.id as string;
+    const { data: existingMi } = await supabase
+      .from('master_instances')
+      .select('id')
+      .eq('evolution_instance_id', evoId)
+      .maybeSingle();
+
+    let masterInstanceId: string;
+    if (existingMi?.id) {
+      masterInstanceId = existingMi.id;
+    } else {
+      const { data: ins, error: insErr } = await supabase
+        .from('master_instances')
+        .insert({ evolution_instance_id: evoId, is_active: true, is_locked: false })
+        .select('id')
+        .single();
+      if (insErr || !ins) {
+        console.warn(
+          `${LOG_MESH} autoEnroll: erro criando master_instance evo=${evoId}: ${insErr?.message}`
+        );
+        continue;
+      }
+      masterInstanceId = ins.id;
+    }
+
+    const { error: jobErr } = await supabase.from('maturation_jobs').insert({
+      owner_user_id: controller.owner_user_id, // herda do controller (background, sem usuário ativo)
+      plan_id: VIRGIN_AUTO_MATURATION_PLAN_ID,
+      master_instance_id: masterInstanceId,
+      target_chat_id: '',
+      campaign_id: controller.campaign_id,
+      status: 'running',
+      progress_total: 0,
+      progress_done: 0,
+      started_at: new Date().toISOString(),
+      mesh_is_controller: false,
+    });
+    if (jobErr) {
+      console.warn(
+        `${LOG_MESH} autoEnroll: erro criando job participante evo=${evoId}: ${jobErr.message}`
+      );
+      continue;
+    }
+  }
+
+  await createMessage(supabase, {
+    jobId: controller.id,
+    direction: 'system',
+    type: 'info',
+    title: 'Auto-enrollment',
+    content: `${newRows.length} instância(s) entraram automaticamente na rede: ${(newRows as any[])
+      .map((r) => r.instance_name)
+      .join(', ')}.`,
+    status: 'info',
+  });
+  console.log(
+    `${LOG_MESH} autoEnroll campaign=${controller.campaign_id}: +${newRows.length} instância(s)`
+  );
+}
+
+async function runMeshCycle(
+  supabase: SupabaseClient,
+  controller: MeshController,
+  now: Date
+): Promise<boolean> {
+  const intervalSec = controller.mesh_cycle_interval_sec || MESH_DEFAULT_INTERVAL_SEC;
+  const nextCycleAt = new Date(now.getTime() + intervalSec * 1000).toISOString();
+
+  const { data: participantJobs, error: pErr } = await supabase
+    .from('maturation_jobs')
+    .select(
+      `id, master_instance_id,
+       master_instances!inner (
+         id, is_active,
+         evolution_instances!inner ( id, instance_name, phone_number, status )
+       )`
+    )
+    .eq('campaign_id', controller.campaign_id)
+    .eq('status', 'running');
+
+  if (pErr || !participantJobs) {
+    console.warn(`${LOG_MESH} Erro buscar participantes campaign=${controller.campaign_id}`);
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    return false;
+  }
+
+  const eligible: MeshParticipant[] = [];
+  for (const j of participantJobs as any[]) {
+    const mi = Array.isArray(j.master_instances) ? j.master_instances[0] : j.master_instances;
+    if (!mi?.is_active) continue;
+    const ei = Array.isArray(mi.evolution_instances) ? mi.evolution_instances[0] : mi.evolution_instances;
+    if (!ei?.phone_number) continue;
+    if (!evolutionMaturationDbStatusIsConnected(ei.status)) continue;
+    const jid = normalizePhoneToJid(String(ei.phone_number));
+    if (!jid) continue;
+    eligible.push({
+      jobId: j.id,
+      masterInstanceId: j.master_instance_id,
+      instanceName: String(ei.instance_name ?? ''),
+      jid,
+    });
+  }
+
+  if (eligible.length < 2) {
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    console.warn(
+      `${LOG_MESH} ⚠️ campaign=${controller.campaign_id}: apenas ${eligible.length} instância(s) conectada(s) (mínimo 2), ciclo pulado`
+    );
+    return false;
+  }
+
+  const { pool, planIndex, planCount } = await loadMeshMessagePool(supabase, controller.mesh_cycle_count);
+  if (pool.length === 0) {
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    console.warn(`${LOG_MESH} campaign=${controller.campaign_id}: pool de mensagens vazio, ciclo pulado`);
+    return false;
+  }
+
+  console.log(
+    `${LOG_MESH} ciclo usa plano de mensagens #${planIndex + 1}/${planCount} (mesh_cycle_count=${controller.mesh_cycle_count ?? 0})`
+  );
+  const meshInvalidDestKeys = await loadInvalidWhatsappDestKeysForScope(
+    supabase,
+    controller.campaign_id,
+    controller.id
+  );
+
+  // Equidade: prioriza quem NÃO foi sender no ciclo anterior
+  const lastSenders = new Set<string>(controller.mesh_last_sender_master_ids || []);
+  const notLast = eligible.filter((p) => !lastSenders.has(p.masterInstanceId));
+  const wereLast = eligible.filter((p) => lastSenders.has(p.masterInstanceId));
+
+  const desiredCount =
+    MESH_MIN_SENDERS_PER_CYCLE + Math.floor(Math.random() * MESH_MAX_SENDERS_PER_CYCLE);
+  const targetCount = Math.min(MESH_MAX_SENDERS_PER_CYCLE, eligible.length, desiredCount);
+
+  const senders: MeshParticipant[] = [];
+  for (const p of shuffleArray(notLast)) {
+    if (senders.length >= targetCount) break;
+    senders.push(p);
+  }
+  if (senders.length < targetCount) {
+    for (const p of shuffleArray(wereLast)) {
+      if (senders.length >= targetCount) break;
+      senders.push(p);
+    }
+  }
+
+  if (senders.length === 0) {
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    return false;
+  }
+
+  // Próximo step_index por job (UNIQUE(job_id, step_index))
+  const senderJobIds = senders.map((s) => s.jobId);
+  const maxIndices = new Map<string, number>();
+  const { data: maxRows } = await supabase
+    .from('maturation_steps')
+    .select('job_id, step_index')
+    .in('job_id', senderJobIds)
+    .order('step_index', { ascending: false });
+  for (const r of (maxRows || []) as any[]) {
+    const cur = maxIndices.get(r.job_id);
+    if (cur == null || r.step_index > cur) maxIndices.set(r.job_id, r.step_index);
+  }
+
+  const stepsToInsert: Array<{
+    job_id: string;
+    step_index: number;
+    type: string;
+    payload_json: Record<string, unknown>;
+    scheduled_at: string;
+    status: string;
+    target_chat_id: string;
+    sender_master_instance_id: string;
+  }> = [];
+
+  for (const sender of senders) {
+    const recipients = eligible.filter((p) => p.masterInstanceId !== sender.masterInstanceId);
+    let nextIdx = (maxIndices.get(sender.jobId) ?? -1) + 1;
+    for (const r of recipients) {
+      if (meshInvalidDestKeys.has(normalizeMaturationDestKey(r.jid))) continue;
+      const msg = pool[Math.floor(Math.random() * pool.length)];
+      stepsToInsert.push({
+        job_id: sender.jobId,
+        step_index: nextIdx++,
+        type: msg.type,
+        payload_json: msg.payload,
+        scheduled_at: now.toISOString(),
+        status: 'pending',
+        target_chat_id: r.jid,
+        sender_master_instance_id: sender.masterInstanceId,
+      });
+    }
+  }
+
+  if (stepsToInsert.length === 0) {
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    return false;
+  }
+
+  console.log(
+    `${LOG_MESH} ciclo: ${senders.length} remetente(s) [${senders.map((s) => s.instanceName).join(', ')}] → ${eligible.length - 1} destinatário(s) = ${stepsToInsert.length} step(s)`
+  );
+  const { error: insErr } = await supabase.from('maturation_steps').insert(stepsToInsert);
+  if (insErr) {
+    console.warn(`${LOG_MESH} Erro inserindo steps campaign=${controller.campaign_id}: ${insErr.message}`);
+    await supabase
+      .from('maturation_jobs')
+      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
+      .eq('id', controller.id);
+    return false;
+  }
+
+  // Atualiza progress_total dos jobs senders (cada ganhou recipients.length steps)
+  const recipientsCount = eligible.length - 1;
+  for (const sender of senders) {
+    const { data: cur } = await supabase
+      .from('maturation_jobs')
+      .select('progress_total')
+      .eq('id', sender.jobId)
+      .maybeSingle();
+    const total = ((cur as any)?.progress_total ?? 0) + recipientsCount;
+    await supabase.from('maturation_jobs').update({ progress_total: total }).eq('id', sender.jobId);
+  }
+
+  // Atualiza controller
+  const newCycleCount = (controller.mesh_cycle_count || 0) + 1;
+  await supabase
+    .from('maturation_jobs')
+    .update({
+      mesh_cycle_count: newCycleCount,
+      mesh_last_sender_master_ids: senders.map((s) => s.masterInstanceId),
+      mesh_next_cycle_at: nextCycleAt,
+      updated_at: now.toISOString(),
+    })
+    .eq('id', controller.id);
+
+  await createMessage(supabase, {
+    jobId: controller.id,
+    direction: 'system',
+    type: 'info',
+    title: `Ciclo mesh #${newCycleCount}`,
+    content: `${senders.length} remetente(s): ${senders
+      .map((s) => s.instanceName)
+      .join(', ')}. ${stepsToInsert.length} mensagem(s) agendada(s).`,
+    status: 'info',
+  });
+
+  console.log(
+    `${LOG_MESH} ✅ ciclo #${newCycleCount} campaign=${controller.campaign_id}: ${senders.length} sender(s) × ${recipientsCount} destinatário(s) = ${stepsToInsert.length} step(s) | próximo em ${intervalSec}s (${nextCycleAt})`
+  );
+  return true;
 }
 
 export async function runMaturationTick(supabase: SupabaseClient): Promise<any> {
@@ -1320,7 +2194,16 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
 
   await failRunningMaturationJobsWithInactivePlans(supabase);
 
+  // Fase 0.5: Mesh — injeta steps de ciclos vencidos antes do claim da Fase 1
+  logVerbose(`${LOG_MESH} Fase mesh: ciclos contínuos`);
+  const meshCyclesAdvanced = await processMeshCycles(supabase);
+  if (meshCyclesAdvanced > 0) {
+    logVerbose(`${LOG_MESH} ${meshCyclesAdvanced} ciclo(s) mesh avançado(s) neste tick`);
+  }
+
   logVerbose(`${LOG_MANUAL} Fase 1: Maturador (manual) - jobs com steps agendados`);
+
+  const invalidWhatsappDestByScope = await loadInvalidWhatsappDestinationMapForRunningJobs(supabase);
 
   while (true) {
     const elapsed = Date.now() - startTime;
@@ -1394,7 +2277,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
         hasMorePending = true;
         continue;
       }
-      await processStep(supabase, step);
+      await processStep(supabase, step, { invalidWhatsappDestByScope });
       processedJobIds.add(step.job_id);
       totalProcessed++;
     }
@@ -1407,10 +2290,30 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
   logVerbose(`${LOG_AUTO} Fase 2: Auto maturador - instâncias virgem em maturação automática`);
   const virginCount = await processVirginMaturation(supabase);
 
+  // Encadeamento por mesh: se algum controller tem ciclo dentro dos próximos 60s, sinaliza pro caller
+  if (!hasMorePending) {
+    const soonIso = new Date(Date.now() + 60_000).toISOString();
+    const { data: nextMesh } = await supabase
+      .from('maturation_jobs')
+      .select('id')
+      .eq('mesh_is_controller', true)
+      .eq('status', 'running')
+      .lte('mesh_next_cycle_at', soonIso)
+      .limit(1)
+      .maybeSingle();
+    if (nextMesh) hasMorePending = true;
+  }
+
   const elapsed = Date.now() - startTime;
   logVerbose(`${LOG_PREFIX} ========== Fim do tick (${elapsed}ms) hasMorePending=${hasMorePending} ==========`);
   logVerbose(
-    `${LOG_PREFIX} Resumo: Maturador manual=${totalProcessed} steps processados, ${processedJobIds.size} job(s); Auto maturador=${virginCount} instância(s) virgem em maturação`
+    `${LOG_PREFIX} Resumo: Maturador manual=${totalProcessed} steps processados, ${processedJobIds.size} job(s); Auto maturador=${virginCount} instância(s) virgem; Mesh=${meshCyclesAdvanced} ciclo(s)`
   );
-  return { processed: totalProcessed, virginCount, jobs: Array.from(processedJobIds), hasMorePending };
+  return {
+    processed: totalProcessed,
+    virginCount,
+    meshCyclesAdvanced,
+    jobs: Array.from(processedJobIds),
+    hasMorePending,
+  };
 }

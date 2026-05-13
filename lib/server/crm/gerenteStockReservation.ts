@@ -18,6 +18,8 @@ export type StockPackage = {
   pending_leads: number;
   distributed_leads: number;
   canceled_leads: number;
+  /** Reserva encerrada como reversão ao consultor doador (sem usar repasse CRM em leads ainda em_estoque). */
+  reverted_leads: number;
 };
 
 /** Pacote + dono do estoque (admin vendo vários gerentes na mesma banca). */
@@ -31,7 +33,7 @@ export type StockLeadRow = {
   transfer_log_id: string;
   banca_id: string;
   original_source_consultant_email: string | null;
-  stock_status: 'em_estoque' | 'repassado' | 'cancelado';
+  stock_status: 'em_estoque' | 'repassado' | 'cancelado' | 'revertido';
   stock_resolved_at: string | null;
   received_at: string;
   deadline_days: number;
@@ -94,11 +96,11 @@ export async function listStockPackagesForGerente(
     return [];
   }
 
-  const byLog = new Map<string, { pending: number; distributed: number; canceled: number; total: number }>();
+  const byLog = new Map<string, { pending: number; distributed: number; canceled: number; reverted: number; total: number }>();
   for (const e of entries) {
     const lid = String(e.transfer_log_id ?? '');
     if (!lid) continue;
-    const bucket = byLog.get(lid) ?? { pending: 0, distributed: 0, canceled: 0, total: 0 };
+    const bucket = byLog.get(lid) ?? { pending: 0, distributed: 0, canceled: 0, reverted: 0, total: 0 };
     bucket.total++;
     switch (e.stock_status) {
       case 'em_estoque':
@@ -109,6 +111,9 @@ export async function listStockPackagesForGerente(
         break;
       case 'cancelado':
         bucket.canceled++;
+        break;
+      case 'revertido':
+        bucket.reverted++;
         break;
     }
     byLog.set(lid, bucket);
@@ -146,7 +151,7 @@ export async function listStockPackagesForGerente(
 
   return (logs as RawLog[])
     .map<StockPackage>((log) => {
-      const bucket = byLog.get(log.id) ?? { pending: 0, distributed: 0, canceled: 0, total: 0 };
+      const bucket = byLog.get(log.id) ?? { pending: 0, distributed: 0, canceled: 0, reverted: 0, total: 0 };
       return {
         transfer_log_id: log.id,
         banca_id: bancaId,
@@ -159,6 +164,7 @@ export async function listStockPackagesForGerente(
         pending_leads: bucket.pending,
         distributed_leads: bucket.distributed,
         canceled_leads: bucket.canceled,
+        reverted_leads: bucket.reverted,
       };
     })
     .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
@@ -179,7 +185,7 @@ export async function listStockPackagesAllGerentesForBanca(bancaId: string): Pro
     return [];
   }
 
-  type Bucket = { pending: number; distributed: number; canceled: number; total: number; gerenteId: string };
+  type Bucket = { pending: number; distributed: number; canceled: number; reverted: number; total: number; gerenteId: string };
   const byLog = new Map<string, Bucket>();
   for (const e of entries) {
     const lid = String(e.transfer_log_id ?? '');
@@ -187,7 +193,7 @@ export async function listStockPackagesAllGerentesForBanca(bancaId: string): Pro
     if (!lid || !gid) continue;
     let bucket = byLog.get(lid);
     if (!bucket) {
-      bucket = { pending: 0, distributed: 0, canceled: 0, total: 0, gerenteId: gid };
+      bucket = { pending: 0, distributed: 0, canceled: 0, reverted: 0, total: 0, gerenteId: gid };
     }
     if (bucket.gerenteId !== gid) {
       console.warn('[gerenteStockReservation] transfer_log_id com gerentes distintos; usando primeiro:', lid);
@@ -202,6 +208,9 @@ export async function listStockPackagesAllGerentesForBanca(bancaId: string): Pro
         break;
       case 'cancelado':
         bucket.canceled++;
+        break;
+      case 'revertido':
+        bucket.reverted++;
         break;
       default:
         break;
@@ -256,7 +265,7 @@ export async function listStockPackagesAllGerentesForBanca(bancaId: string): Pro
     .map<StockPackageWithGerente>((log) => {
       const bucket = byLog.get(log.id);
       const gId = bucket?.gerenteId ?? '';
-      const baseBucket = bucket ?? { pending: 0, distributed: 0, canceled: 0, total: 0, gerenteId: gId };
+      const baseBucket = bucket ?? { pending: 0, distributed: 0, canceled: 0, reverted: 0, total: 0, gerenteId: gId };
       return {
         transfer_log_id: log.id,
         banca_id: bancaId,
@@ -269,6 +278,7 @@ export async function listStockPackagesAllGerentesForBanca(bancaId: string): Pro
         pending_leads: baseBucket.pending,
         distributed_leads: baseBucket.distributed,
         canceled_leads: baseBucket.canceled,
+        reverted_leads: baseBucket.reverted,
         stock_gerente_user_id: gId,
         gerente_name: gId ? gerenteNameById.get(gId) ?? null : null,
       };
@@ -284,7 +294,7 @@ export async function listStockPackageLeads(
   gerenteUserId: string,
   bancaId: string,
   transferLogId: string,
-  options?: { statusFilter?: 'em_estoque' | 'repassado' | 'cancelado' | 'all' }
+  options?: { statusFilter?: 'em_estoque' | 'repassado' | 'cancelado' | 'revertido' | 'all' }
 ): Promise<{ package: StockPackage | null; leads: StockLeadRow[] }> {
   const { data: log } = await supabaseServiceRole
     .from('admin_lead_transfer_logs')
@@ -352,6 +362,7 @@ export async function listStockPackageLeads(
     pending_leads: leads.filter((l) => l.stock_status === 'em_estoque').length,
     distributed_leads: leads.filter((l) => l.stock_status === 'repassado').length,
     canceled_leads: leads.filter((l) => l.stock_status === 'cancelado').length,
+    reverted_leads: leads.filter((l) => l.stock_status === 'revertido').length,
   };
 
   return { package: packageMeta, leads };
@@ -395,6 +406,59 @@ export async function markStockEntriesDistributed(entryIds: string[]): Promise<b
   return !error;
 }
 
+/**
+ * Encerra reservas ainda em_estoque como revertido ao consultor doador.
+ * Não chama o CRM: neste fluxo os leads continuam com o consultor de origem até o gerente repassar.
+ */
+export async function markStockEntriesRevertedToDonor(params: {
+  transferLogId: string;
+  bancaId: string;
+  gerenteUserId: string;
+  leadIds?: string[] | null;
+}): Promise<{ reverted: number } | { error: string }> {
+  const { transferLogId, bancaId, gerenteUserId } = params;
+  const wanted = params.leadIds?.map((x) => String(x).trim()).filter(Boolean) ?? [];
+  let q = supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .update({ stock_status: 'revertido', stock_resolved_at: new Date().toISOString() })
+    .eq('transfer_log_id', transferLogId)
+    .eq('banca_id', bancaId)
+    .eq('stock_gerente_user_id', gerenteUserId)
+    .eq('stock_status', 'em_estoque');
+  if (wanted.length > 0) q = q.in('lead_id', wanted);
+  const { data, error } = await q.select('id');
+  if (error) return { error: error.message };
+  return { reverted: Array.isArray(data) ? data.length : 0 };
+}
+
+/**
+ * Encerra pacote admin→estoque: marca como revertido linhas ainda em_estoque ou já repassadas para consultor.
+ */
+export async function markAdminStockPackageEntriesReleasedToOrigin(params: {
+  transferLogId: string;
+  bancaId: string;
+  gerenteUserId: string;
+}): Promise<{ released: number } | { error: string }> {
+  const { transferLogId, bancaId, gerenteUserId } = params;
+  const { data, error } = await supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .update({ stock_status: 'revertido', stock_resolved_at: new Date().toISOString() })
+    .eq('transfer_log_id', transferLogId)
+    .eq('banca_id', bancaId)
+    .eq('stock_gerente_user_id', gerenteUserId)
+    .in('stock_status', ['em_estoque', 'repassado'])
+    .select('id');
+  if (error) {
+    let msg = error.message;
+    if (msg.includes('stock_status_check') || msg.includes('violates check constraint')) {
+      msg +=
+        ' Verifique se a migration que permite stock_status=revertido foi aplicada (ex.: 20260507180000_stock_status_revertido.sql).';
+    }
+    return { error: msg };
+  }
+  return { released: Array.isArray(data) ? data.length : 0 };
+}
+
 export async function markStockEntriesCanceled(
   transferLogId: string,
   bancaId: string,
@@ -412,4 +476,29 @@ export async function markStockEntriesCanceled(
   const { data, error } = await q.select('id');
   if (error) return { error: error.message };
   return { canceled: Array.isArray(data) ? data.length : 0 };
+}
+
+/**
+ * Desfaz cancelamento da reserva admin→estoque: volta cancelado → em_estoque no estoque do gerente.
+ * Não chama o CRM.
+ */
+export async function markStockEntriesRestoreCanceledToEmEstoque(params: {
+  transferLogId: string;
+  bancaId: string;
+  gerenteUserId: string;
+  leadIds?: string[] | null;
+}): Promise<{ restored: number } | { error: string }> {
+  const { transferLogId, bancaId, gerenteUserId } = params;
+  const wanted = params.leadIds?.map((x) => String(x).trim()).filter(Boolean) ?? [];
+  let q = supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .update({ stock_status: 'em_estoque', stock_resolved_at: null })
+    .eq('transfer_log_id', transferLogId)
+    .eq('banca_id', bancaId)
+    .eq('stock_gerente_user_id', gerenteUserId)
+    .eq('stock_status', 'cancelado');
+  if (wanted.length > 0) q = q.in('lead_id', wanted);
+  const { data, error } = await q.select('id');
+  if (error) return { error: error.message };
+  return { restored: Array.isArray(data) ? data.length : 0 };
 }

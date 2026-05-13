@@ -37,12 +37,20 @@ export function TenantSwitcher() {
       .finally(() => setLoading(false));
   }, []);
 
-  /** Se já existe cookie de slug WL mas session vazia, alinha o contexto ao tenant (evita painel “central” sem opção WL). */
+  /**
+   * - Se `sessionStorage` já tem um tenant válido mas o estado React ainda está null (hidratação),
+   *   precisamos chamar `setSelectedTenantId` — senão o rótulo cai em `tenants[0]` e as APIs podem
+   *   depender só do cookie WL antigo.
+   * - Se só existe cookie de slug WL, alinha o contexto ao tenant correspondente.
+   */
   useEffect(() => {
     if (!tenants.length || !setSelectedTenantId) return;
     try {
       const stored = sessionStorage.getItem(ADMIN_ZAPLOTO_TENANT_STORAGE_KEY);
-      if (stored && tenants.some((t) => t.id === stored)) return;
+      if (stored && tenants.some((t) => t.id === stored)) {
+        if (selectedTenantId !== stored) setSelectedTenantId(stored);
+        return;
+      }
       const slug = readBrowserCookie(ZAPLOTO_SLUG_COOKIE)?.trim().toLowerCase();
       if (!slug) return;
       const match = tenants.find((t) => t.slug.trim().toLowerCase() === slug);
@@ -50,7 +58,7 @@ export function TenantSwitcher() {
     } catch {
       // silencioso
     }
-  }, [tenants, setSelectedTenantId]);
+  }, [tenants, setSelectedTenantId, selectedTenantId]);
 
   if (loading || tenants.length <= 1) return null;
 

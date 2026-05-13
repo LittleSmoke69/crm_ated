@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import {
@@ -51,6 +51,7 @@ interface GestorOption {
   id: string;
   full_name: string | null;
   email: string;
+  status?: string | null;
 }
 
 interface Submission {
@@ -146,7 +147,17 @@ export default function AdminZaplinkPage() {
     { id: string; gerente_name: string | null; gerente_email: string | null; consultant_name: string | null; consultant_email: string | null; removed_at: string }[]
   >([]);
   const [consultantRemovalsLoading, setConsultantRemovalsLoading] = useState(false);
-  const [gestores, setGestores] = useState<GestorOption[]>([]);
+  /** Cargo Gestor (`profiles.status = gestor`) — separado de admin/super_admin na função. */
+  const [gestoresCargo, setGestoresCargo] = useState<GestorOption[]>([]);
+  /** Admin/Super Admin com ao menos uma banca em `user_bancas` (atuando como gestor de tráfego). */
+  const [gestoresPlataformaNaFuncao, setGestoresPlataformaNaFuncao] = useState<GestorOption[]>([]);
+
+  /** Só para exibir nome na tabela (transferência continua em grupos separados no select). */
+  const gestoresTransferenciaParaNome = useMemo(
+    () => [...gestoresCargo, ...gestoresPlataformaNaFuncao],
+    [gestoresCargo, gestoresPlataformaNaFuncao]
+  );
+
   const [transferFormId, setTransferFormId] = useState<string | null>(null);
   const [transferGestorId, setTransferGestorId] = useState('');
   const [transferring, setTransferring] = useState(false);
@@ -230,7 +241,19 @@ export default function AdminZaplinkPage() {
 
       if (linksJson.success) setLinks(linksJson.data ?? []);
       if (formsJson.success) setForms(formsJson.data ?? []);
-      if (gestoresJson.success) setGestores(gestoresJson.data ?? []);
+      if (gestoresJson.success) {
+        const d = gestoresJson.data;
+        if (Array.isArray(d)) {
+          setGestoresCargo(d);
+          setGestoresPlataformaNaFuncao([]);
+        } else if (d && typeof d === 'object') {
+          setGestoresCargo(Array.isArray(d.gestores_cargo) ? d.gestores_cargo : []);
+          setGestoresPlataformaNaFuncao(Array.isArray(d.plataforma_na_funcao) ? d.plataforma_na_funcao : []);
+        } else {
+          setGestoresCargo([]);
+          setGestoresPlataformaNaFuncao([]);
+        }
+      }
       if (subsJson.success) {
         const payload = subsJson.data;
         const list = payload?.data ?? [];
@@ -833,7 +856,9 @@ export default function AdminZaplinkPage() {
                         <td className="p-3">
                           <span className="text-sm text-gray-700 dark:text-[#ccc]">
                             {f.gestor_trafego_user_id
-                              ? (gestores.find((g) => g.id === f.gestor_trafego_user_id)?.full_name || gestores.find((g) => g.id === f.gestor_trafego_user_id)?.email || '—')
+                              ? (gestoresTransferenciaParaNome.find((g) => g.id === f.gestor_trafego_user_id)?.full_name ||
+                                  gestoresTransferenciaParaNome.find((g) => g.id === f.gestor_trafego_user_id)?.email ||
+                                  '—')
                               : '—'}
                           </span>
                           <button
@@ -1630,20 +1655,38 @@ export default function AdminZaplinkPage() {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-xl max-w-md w-full p-6">
               <h2 className="text-lg font-semibold mb-2">Transferir formulário para gestor de tráfego</h2>
               <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
-                O formulário e todos os leads que se inscreveram nele passarão a ser visíveis apenas para o gestor selecionado no Zaplink.
+                O formulário e todos os leads que se inscreveram nele passarão a ser visíveis apenas para o gestor selecionado no Zaplink. O cargo{' '}
+                <strong className="font-semibold">Gestor</strong> aparece separado de{' '}
+                <strong className="font-semibold">Admin / Super Admin</strong> que já estão vinculados a bancas como gestores de tráfego.
               </p>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Gestor de tráfego</label>
+                  <label className="block text-sm font-medium mb-1">Responsável no Zaplink</label>
                   <select
                     value={transferGestorId}
                     onChange={(e) => setTransferGestorId(e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg dark:bg-[#333] dark:border-[#555]"
                   >
                     <option value="">— Nenhum (admin)</option>
-                    {gestores.map((g) => (
-                      <option key={g.id} value={g.id}>{g.full_name || g.email}</option>
-                    ))}
+                    {gestoresCargo.length > 0 && (
+                      <optgroup label="Cargo Gestor de Tráfego">
+                        {gestoresCargo.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.full_name || g.email}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {gestoresPlataformaNaFuncao.length > 0 && (
+                      <optgroup label="Admin / Super Admin na função (vinculados a bancas)">
+                        {gestoresPlataformaNaFuncao.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.full_name || g.email}
+                            {g.status === 'super_admin' ? ' (super admin)' : ' (admin)'}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               </div>

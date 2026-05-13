@@ -1,6 +1,7 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getSubordinateIds, getUserProfile, type UserProfile } from '@/lib/middleware/permissions';
 import { getHierarchyPath } from '@/lib/utils/hierarchy';
+import { getUserIdsLinkedToCrmBancaViaUserBancas } from '@/lib/utils/user-bancas';
 import { inferMetaCampaignIdsFromRedirectConsultors } from '@/lib/services/meta-redirect-consultor-attribution';
 
 const CRM_BETS_DEPOSITS_ENDPOINT =
@@ -377,11 +378,7 @@ async function fetchBancaIdsFromUserBancas(userIds: string[]): Promise<Set<strin
 }
 
 async function fetchUserIdsInBanca(bancaId: string): Promise<string[]> {
-  const { data } = await supabaseServiceRole
-    .from('user_bancas')
-    .select('user_id')
-    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
-  return (data || []).map((r: { user_id: string }) => r.user_id);
+  return getUserIdsLinkedToCrmBancaViaUserBancas(bancaId);
 }
 
 export type MeuDesempenhoVisibilityBundle = {
@@ -674,18 +671,14 @@ export async function getConsultorProfilesByBancaUrl(bancaUrl: string): Promise<
   });
   if (!banca?.id) return [];
 
-  const { data: userBancasRows } = await supabaseServiceRole
-    .from('user_bancas')
-    .select('user_id')
-    .filter('banca_ids', 'cs', JSON.stringify([banca.id]));
-  const userIdsInBanca = (userBancasRows || []).map((r: { user_id: string }) => r.user_id);
+  const userIdsInBanca = await getUserIdsLinkedToCrmBancaViaUserBancas(String(banca.id));
   if (userIdsInBanca.length === 0) return [];
 
   const { data: profiles } = await supabaseServiceRole
     .from('profiles')
     .select('id, email, full_name, status')
     .in('id', userIdsInBanca)
-    .in('status', ['consultor', 'gerente', 'admin', 'gestor']);
+    .in('status', ['consultor', 'gerente', 'admin', 'gestor', 'super_admin']);
 
   return (profiles || [])
     .filter((p: any) => Boolean(p.id) && Boolean(p.email))
@@ -741,23 +734,75 @@ export async function computeConsultantAdsSummary(params: {
     };
   }
 
+  let explicitAttributionByCampaign = new Map<string, Set<string>>();
+  try {
+    const { data: attrRows, error: attrErr } = await supabaseServiceRole
+      .from('meta_campaigns')
+      .select('campaign_id, ads_attribution_consultor_id, ads_attribution_consultor_ids')
+      .eq('banca_id', banca.id);
+    if (!attrErr && Array.isArray(attrRows)) {
+      for (const r of attrRows) {
+        const cp = String((r as { campaign_id?: string }).campaign_id ?? '').trim();
+        const row = r as {
+          ads_attribution_consultor_ids?: string[] | null;
+          ads_attribution_consultor_id?: string | null;
+        };
+        const fromArr = Array.isArray(row.ads_attribution_consultor_ids)
+          ? row.ads_attribution_consultor_ids
+          : [];
+        const ids = new Set<string>();
+        for (const x of fromArr) {
+          const id = String(x ?? '').trim();
+          if (id) ids.add(id);
+        }
+        if (ids.size === 0) {
+          const leg = String(row.ads_attribution_consultor_id ?? '').trim();
+          if (leg) ids.add(leg);
+        }
+        if (cp && ids.size > 0) explicitAttributionByCampaign.set(cp, ids);
+      }
+    } else if (attrErr && attrErr.code !== '42703') {
+      console.warn('[MeuDesempenho/AdsSummary] meta_campaigns attribution:', attrErr.message);
+    }
+  } catch (e: unknown) {
+    const err = e as { message?: string };
+    console.warn('[MeuDesempenho/AdsSummary] attribution column skip:', err?.message);
+  }
+
   const { data: campaignLinks } = await supabaseServiceRole
     .from('meta_campaign_consultors')
-    .select('campaign_id')
+    .select('campaign_id, consultor_id')
     .eq('banca_id', banca.id)
     .in('consultor_id', consultorIds);
-  let redirectCampaignIds: string[] = [];
-  try {
-    redirectCampaignIds = await inferMetaCampaignIdsFromRedirectConsultors(banca.id, consultorIds);
-  } catch (error: any) {
-    console.warn('[MeuDesempenho/AdsSummary] Falha ao inferir campanhas por redirect:', error?.message);
+
+  const campaignIdSet = new Set<string>();
+  for (const consultorId of consultorIds) {
+    for (const [campId, attSet] of explicitAttributionByCampaign) {
+      if (attSet.has(consultorId)) campaignIdSet.add(campId);
+    }
+    for (const row of campaignLinks ?? []) {
+      if (String((row as { consultor_id: string }).consultor_id) !== consultorId) continue;
+      const c = String((row as { campaign_id: string }).campaign_id ?? '').trim();
+      if (!c) continue;
+      const forced = explicitAttributionByCampaign.get(c);
+      if (forced && !forced.has(consultorId)) continue;
+      if (!forced) campaignIdSet.add(c);
+    }
+    let redirectForOne: string[] = [];
+    try {
+      redirectForOne = await inferMetaCampaignIdsFromRedirectConsultors(banca.id, [consultorId]);
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      console.warn('[MeuDesempenho/AdsSummary] Falha ao inferir campanhas por redirect:', err?.message);
+    }
+    for (const campId of redirectForOne) {
+      const forced = explicitAttributionByCampaign.get(campId);
+      if (forced && !forced.has(consultorId)) continue;
+      if (!forced) campaignIdSet.add(campId);
+    }
   }
-  const campaignIds = Array.from(
-    new Set([
-      ...(campaignLinks || []).map((x: any) => String(x.campaign_id)).filter(Boolean),
-      ...redirectCampaignIds,
-    ])
-  );
+
+  const campaignIds = Array.from(campaignIdSet);
 
   let metaSpend = 0;
   if (campaignIds.length > 0) {

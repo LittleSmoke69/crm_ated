@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useTenantRouter } from '@/lib/utils/tenant-href';
+import { useTenantRouter, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import {
   Play,
@@ -28,6 +28,11 @@ import {
   Info,
 } from 'lucide-react';
 import { clampMaturationStepDelaySec, MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
+import {
+  evolutionMaturationDbStatusIsConnected,
+  evolutionMaturationDbStatusShouldAutoPauseMaturation,
+} from '@/lib/utils/evolution-instance-status';
+import MeshCard from './MeshCard';
 
 type MaturationStepStatus = 'pending' | 'processing' | 'sent' | 'failed';
 
@@ -54,10 +59,12 @@ interface MaturationJob {
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
-  /** ISO string do próximo step pendente (para timer em tempo real) */
+  /** ISO do próximo step pendente entre jobs em execução (controle próprio). */
   next_scheduled_at: string | null;
-  /** Job de outro dono mas instância bloqueada: mostrar campanha sem pausar/remover. */
   readonly_controls?: boolean;
+  evolution_instance_id?: string | null;
+  /** Status bruto em evolution_instances (close connection → pausa). */
+  instance_evolution_status?: string | null;
 }
 
 interface PlanStepJson {
@@ -76,6 +83,7 @@ interface MaturationPlan {
   description?: string | null;
   default_target_chat_id?: string | null;
   created_by?: string | null;
+  created_at?: string;
   steps_json?: PlanStepJson[];
 }
 
@@ -91,13 +99,17 @@ interface MasterInstance {
   evolution_instance_id: string | null;
   instance_name: string;
   phone_number: string | null;
+  /** Dono da instância (visibilidade ampla no Maturador). */
+  user_id?: string | null;
   status: string | null;
   is_master?: boolean;
   is_locked: boolean;
   available: boolean;
   blocked_from_maturation?: boolean;
+  /** false = listagem ampla; não entra no Start. */
+  can_start_maturation?: boolean;
   campaign_id?: string | null;
-  campaign_status_label?: 'em_campanha' | 'sem_campanha';
+  campaign_status_label?: 'em_campanha' | 'em_maturacao' | 'sem_campanha';
 }
 
 type JobsDisplayItem =
@@ -143,35 +155,74 @@ function aggregateMaturationCampaign(campaignJobs: MaturationJob[]) {
 export default function MaturadorPage() {
   const { userId, checking, userStatus } = useRequireAuth();
   const router = useTenantRouter();
-  const canUseAllMaturationPlans = userStatus === 'super_admin' || userStatus === 'admin';
+  /** Preenchido após GET /api/maturation/can-access (fonte de verdade do cargo; evita sessionStorage errado). */
+  const [maturationAccessMeta, setMaturationAccessMeta] = useState<{
+    canManageAllMaturationPlans: boolean;
+    profileStatus: string | null;
+  } | null>(null);
+  const canUseAllMaturationPlans = maturationAccessMeta?.canManageAllMaturationPlans === true;
   const [canAccess, setCanAccess] = useState(false);
   const [jobs, setJobs] = useState<MaturationJob[]>([]);
   const [plans, setPlans] = useState<MaturationPlan[]>([]);
   const [masterInstances, setMasterInstances] = useState<MasterInstance[]>([]);
-  const [virginMessagesCount, setVirginMessagesCount] = useState<number>(0);
+  /** UUID do plano de malha definido pelo admin (GET /api/maturation/tenant-defaults). */
+  const [defaultMutualPlanId, setDefaultMutualPlanId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
-  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
-  const [targetChatIdInput, setTargetChatIdInput] = useState<string>('');
+  const [excludingMaturation, setExcludingMaturation] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  /** Paginação da lista "Mensagens do Auto maturador" */
   const [jobsListPage, setJobsListPage] = useState(1);
+  /** Próximo envio / estado ativo (sem listar jobs na tela principal). */
+  const [showJobsHistory, setShowJobsHistory] = useState(false);
+  /** Evita alertas repetidos ao pausar por desconexão. */
+  const lastDisconnectPauseKeyRef = useRef<string | null>(null);
   
-  /** Valor especial no select para usar mensagens do Auto maturador. */
-  const VIRGIN_MESSAGES_OPTION = '__virgin_messages__';
   /** ID do plano fixo "Mensagens do Auto maturador" (insert_auto_matador_plan.sql). Ocultamos da lista para não duplicar a opção. */
   const PLAN_ID_VIRGIN_MESSAGES = 'a0000000-0000-0000-0000-000000000001';
-  const useVirginMessages = selectedPlanId === VIRGIN_MESSAGES_OPTION;
   const plansFiltered = plans.filter((p) => p.id !== PLAN_ID_VIRGIN_MESSAGES);
+  const plansStableSorted = useMemo(() => {
+    const arr = [...plansFiltered];
+    arr.sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      const na = (a.name || '').toLowerCase();
+      const nb = (b.name || '').toLowerCase();
+      const c = na.localeCompare(nb, 'pt-BR');
+      if (c !== 0) return c;
+      return a.id.localeCompare(b.id);
+    });
+    return arr;
+  }, [plansFiltered]);
   const myPlans = canUseAllMaturationPlans
-    ? plansFiltered
-    : plansFiltered.filter((p) => p.created_by === userId);
+    ? plansStableSorted
+    : plansStableSorted.filter((p) => p.created_by === userId);
+
+  /** Plano padrão configurado em Admin > Maturador (rede mútua / tenant). */
+  const hasTenantDefaultMutualPlan = !!(defaultMutualPlanId && defaultMutualPlanId.trim().length > 0);
+
+  /** Primeiro plano utilizável com passos (admin: qualquer; demais: só os próprios). */
+  const fallbackPlanForAutoStart = useMemo(() => {
+    const withSteps = (p: MaturationPlan) => Array.isArray(p.steps_json) && p.steps_json.length > 0;
+    const candidates = canUseAllMaturationPlans
+      ? plansStableSorted
+      : plansStableSorted.filter((p) => p.created_by === userId);
+    return candidates.find(withSteps) ?? null;
+  }, [plansStableSorted, canUseAllMaturationPlans, userId]);
+
+  const canResolveStartWithoutPicker = hasTenantDefaultMutualPlan || fallbackPlanForAutoStart != null;
+
+  const resolvedPlanDisplayName = useMemo(() => {
+    if (hasTenantDefaultMutualPlan) {
+      const p = plans.find((x) => x.id === defaultMutualPlanId);
+      return (p?.name && p.name.trim()) || 'Plano padrão da rede (admin)';
+    }
+    return (fallbackPlanForAutoStart?.name && fallbackPlanForAutoStart.name.trim()) || '—';
+  }, [hasTenantDefaultMutualPlan, defaultMutualPlanId, plans, fallbackPlanForAutoStart]);
   const suggestedPlans = canUseAllMaturationPlans
     ? []
-    : plansFiltered.filter((p) => p.created_by !== userId);
+    : plansStableSorted.filter((p) => p.created_by !== userId);
   const [checkingConnection, setCheckingConnection] = useState<string | null>(null);
-  /** IDs (evolution_instance_id) das instâncias selecionadas para o Start. Vazio = qualquer disponível. */
-  const [selectedInstanceIds, setSelectedInstanceIds] = useState<Set<string>>(new Set());
   /** Por job: resultado do último processamento em lote (atrasados) */
   const [catchUpResults, setCatchUpResults] = useState<Record<string, { sent: number; failed: number; results: Array<{ step_index: number; status: string }> }>>({});
   const [catchUpLoading, setCatchUpLoading] = useState<string | null>(null);
@@ -190,6 +241,16 @@ export default function MaturadorPage() {
   const [instancesPage, setInstancesPage] = useState(1);
   const instancesPerPage = 8;
   const [mounted, setMounted] = useState(false);
+
+  /** Mesmos headers que a lista de Instâncias (WL / tenant no servidor). */
+  const maturationApiHeaders = useCallback(
+    (withJsonContentType = false): HeadersInit => ({
+      ...(withJsonContentType ? { 'Content-Type': 'application/json' } : {}),
+      ...(userId ? { 'X-User-Id': userId } : {}),
+      ...getWlSlugHeadersForApi(),
+    }),
+    [userId]
+  );
 
   useEffect(() => {
     const tp = Math.max(1, Math.ceil(masterInstances.length / instancesPerPage) || 1);
@@ -220,14 +281,16 @@ export default function MaturadorPage() {
     if (canAccess && userId) {
       loadData({ background: dataReadyRef.current });
     }
-  }, [canAccess, userId, statusFilter]);
+  }, [canAccess, userId]);
 
   useEffect(() => {
     setJobsListPage(1);
   }, [statusFilter]);
 
-  // Polling: atualiza a lista de jobs enquanto houver algum rodando (para refletir steps e conclusão)
-  const hasRunningJobs = jobs.some((j) => j.status === 'running');
+  // Polling: atualiza a lista enquanto houver maturação rodando ou pausada (instância ainda travada)
+  const hasMaturationInProgress = jobs.some(
+    (j) => (j.status === 'running' || j.status === 'paused') && !j.readonly_controls
+  );
   /** Ref que espelha o estado jobs — permite acesso correto dentro do setInterval */
   const jobsRef = useRef<MaturationJob[]>(jobs);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
@@ -237,7 +300,7 @@ export default function MaturadorPage() {
     loadDataRef.current = loadData;
   });
   useEffect(() => {
-    if (!canAccess || !userId || !hasRunningJobs) return;
+    if (!canAccess || !userId || !hasMaturationInProgress) return;
     const interval = setInterval(async () => {
       await loadDataRef.current?.({ background: true });
 
@@ -261,7 +324,7 @@ export default function MaturadorPage() {
         processingNowRef.current = true;
         fetch('/api/maturation/process-now', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(true),
         })
           .catch(() => {})
           .finally(() => {
@@ -270,15 +333,15 @@ export default function MaturadorPage() {
       }
     }, 3500);
     return () => clearInterval(interval);
-  }, [canAccess, userId, hasRunningJobs]);
+  }, [canAccess, userId, hasMaturationInProgress, maturationApiHeaders]);
 
   // Timer em tempo real: atualiza a cada 1s para o countdown do próximo envio
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!hasRunningJobs) return;
+    if (!hasMaturationInProgress) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [hasRunningJobs]);
+  }, [hasMaturationInProgress]);
 
   function getNextSendCountdown(nextScheduledAt: string | null): string | null {
     if (!nextScheduledAt) return null;
@@ -299,7 +362,7 @@ export default function MaturadorPage() {
     try {
       const res = await fetch(`/api/maturation/jobs/${jobId}/process-catch-up`, {
         method: 'POST',
-        headers: { 'X-User-Id': userId || '' },
+        headers: maturationApiHeaders(false),
       });
       const data = await res.json();
       if (res.ok && data.results) {
@@ -425,7 +488,7 @@ export default function MaturadorPage() {
       };
       const res = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+        headers: maturationApiHeaders(true),
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -448,7 +511,7 @@ export default function MaturadorPage() {
     try {
       const res = await fetch(`/api/maturation/plans/${planId}`, {
         method: 'DELETE',
-        headers: { 'X-User-Id': userId || '' },
+        headers: maturationApiHeaders(false),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -470,24 +533,27 @@ export default function MaturadorPage() {
   async function checkAccess() {
     try {
       const response = await fetch('/api/maturation/can-access', {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId || '',
-        },
+        headers: maturationApiHeaders(true),
       });
 
       const result = await response.json();
 
       if (!result.success || !result.data?.canAccess) {
+        setMaturationAccessMeta(null);
         setCanAccess(false);
         setLoading(false);
         setTimeout(() => router.push('/'), 2000);
         return;
       }
 
+      setMaturationAccessMeta({
+        profileStatus: (result.data.profileStatus as string | null) ?? null,
+        canManageAllMaturationPlans: result.data.canManageAllMaturationPlans === true,
+      });
       setCanAccess(true);
     } catch (error) {
       console.error('Erro ao verificar acesso ao Maturador:', error);
+      setMaturationAccessMeta(null);
       setCanAccess(false);
       setLoading(false);
       setTimeout(() => router.push('/'), 2000);
@@ -501,50 +567,47 @@ export default function MaturadorPage() {
         setLoading(true);
       }
 
-      const [jobsRes, plansRes, instancesRes, virginCountRes] = await Promise.all([
-        fetch(`/api/maturation/jobs?status=${statusFilter === 'all' ? '' : statusFilter}`, {
-          headers: { 'X-User-Id': userId || '' },
+      const [jobsRes, plansRes, instancesRes, defaultsRes] = await Promise.all([
+        fetch(`/api/maturation/jobs?limit=120`, {
+          headers: maturationApiHeaders(false),
         }),
         fetch('/api/maturation/plans', {
-          headers: { 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(false),
         }),
         fetch('/api/maturation/master-instances', {
-          headers: { 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(false),
         }),
-        fetch('/api/maturation/virgin-messages-count', {
-          headers: { 'X-User-Id': userId || '' },
+        fetch('/api/maturation/tenant-defaults', {
+          headers: maturationApiHeaders(false),
         }),
       ]);
 
-      const [jobsData, plansData, instancesData, virginCountData] = await Promise.all([
-        jobsRes.json(),
-        plansRes.json(),
-        instancesRes.json(),
-        virginCountRes.json(),
+      const [jobsData, plansData, instancesData, defaultsData] = await Promise.all([
+        jobsRes.json().catch(() => ({})),
+        plansRes.json().catch(() => ({})),
+        instancesRes.json().catch(() => ({})),
+        defaultsRes.json().catch(() => ({})),
       ]);
 
-      setJobs(jobsData.jobs || []);
-      setPlans(plansData.plans || []);
-      const list: MasterInstance[] = instancesData.instances || [];
-      setMasterInstances(list);
-      setSelectedInstanceIds((prev) => {
-        const next = new Set<string>();
-        for (const id of prev) {
-          const inst = list.find((i) => i.evolution_instance_id === id);
-          const hasPhone = !!(inst?.phone_number && String(inst.phone_number).trim());
-          if (
-            inst &&
-            hasPhone &&
-            !inst.is_locked &&
-            !inst.blocked_from_maturation &&
-            isInstanceOk(inst.status)
-          ) {
-            next.add(id);
-          }
-        }
-        return next;
-      });
-      setVirginMessagesCount(typeof virginCountData?.count === 'number' ? virginCountData.count : 0);
+      if (jobsRes.ok && Array.isArray(jobsData.jobs)) {
+        setJobs(jobsData.jobs);
+      } else if (!jobsRes.ok) {
+        console.warn('[Maturador] GET /api/maturation/jobs falhou', jobsRes.status, jobsData);
+      }
+      if (plansRes.ok && Array.isArray(plansData.plans)) {
+        setPlans(plansData.plans);
+      }
+      if (instancesRes.ok && Array.isArray(instancesData.instances)) {
+        setMasterInstances(instancesData.instances);
+      }
+      if (defaultsRes.ok && defaultsData && typeof defaultsData === 'object') {
+        const dmp =
+          typeof (defaultsData as { defaultMutualPlanId?: string }).defaultMutualPlanId === 'string' &&
+          (defaultsData as { defaultMutualPlanId: string }).defaultMutualPlanId.trim()
+            ? (defaultsData as { defaultMutualPlanId: string }).defaultMutualPlanId.trim()
+            : null;
+        setDefaultMutualPlanId(dmp);
+      }
       dataReadyRef.current = true;
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -560,7 +623,7 @@ export default function MaturadorPage() {
       setCheckingConnection(instanceName);
       
       const res = await fetch(`/api/instances/${encodeURIComponent(instanceName)}/status`, {
-        headers: { 'X-User-Id': userId || '' },
+        headers: maturationApiHeaders(false),
       });
       
       const data = await res.json();
@@ -588,46 +651,111 @@ export default function MaturadorPage() {
     }
   }
 
+  /** Instâncias elegíveis para Start: conectadas (status), com telefone, não bloqueadas no maturador. */
+  const phoneReadyEvolutionInstanceIds = useMemo(() => {
+    return masterInstances
+      .filter(
+        (i) =>
+          (i.can_start_maturation !== false) &&
+          !!(i.phone_number && String(i.phone_number).trim()) &&
+          !i.blocked_from_maturation &&
+          evolutionMaturationDbStatusIsConnected(i.status) &&
+          !!i.evolution_instance_id
+      )
+      .map((i) => i.evolution_instance_id as string);
+  }, [masterInstances]);
+
+  const maturationInstancesConnectedCount = useMemo(
+    () => masterInstances.filter((i) => evolutionMaturationDbStatusIsConnected(i.status)).length,
+    [masterInstances]
+  );
+
+  /**
+   * Até 5 instâncias elegíveis para o Start (ordem: suas primeiro, depois conectadas com telefone).
+   * O backend usa 1 instância + destino padrão do plano ou 2–5 em campanha malha (cada uma envia às demais).
+   */
+  const preferredEvolutionInstanceIdsForAutoStart = useMemo(() => {
+    const eligible = (i: MasterInstance) =>
+      i.can_start_maturation !== false &&
+      !!(i.phone_number && String(i.phone_number).trim()) &&
+      !i.blocked_from_maturation &&
+      evolutionMaturationDbStatusIsConnected(i.status) &&
+      !!i.evolution_instance_id;
+    const ownerRank = (i: MasterInstance) =>
+      i.user_id != null && userId != null && String(i.user_id) === String(userId) ? 0 : 1;
+    const instanceRank = (i: MasterInstance) => {
+      if (i.can_start_maturation === false) return 4;
+      if (!(i.phone_number && String(i.phone_number).trim())) return 3;
+      if (i.blocked_from_maturation) return 2;
+      return evolutionMaturationDbStatusIsConnected(i.status) ? 0 : 1;
+    };
+    const sorted = [...masterInstances].sort((a, b) => {
+      const oa = ownerRank(a);
+      const ob = ownerRank(b);
+      if (oa !== ob) return oa - ob;
+      const d = instanceRank(a) - instanceRank(b);
+      if (d !== 0) return d;
+      return a.instance_name.localeCompare(b.instance_name, 'pt-BR');
+    });
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const inst of sorted) {
+      if (!eligible(inst) || !inst.evolution_instance_id) continue;
+      if (seen.has(inst.evolution_instance_id)) continue;
+      seen.add(inst.evolution_instance_id);
+      ids.push(inst.evolution_instance_id);
+      if (ids.length >= 5) break;
+    }
+    return ids;
+  }, [masterInstances, userId]);
+
   async function handleStartJob() {
-    if (!selectedPlanId) {
-      alert('Selecione um plano ou "Mensagens do Auto maturador"');
+    if (!canResolveStartWithoutPicker) {
+      alert(
+        'Não há plano para iniciar automaticamente. Peça ao administrador para definir o plano de rede mútua (Admin > Maturador) ou crie um plano com pelo menos um passo.'
+      );
       return;
     }
 
-    const useVirgin = selectedPlanId === VIRGIN_MESSAGES_OPTION;
-    if (useVirgin && virginMessagesCount === 0) {
-      alert('Nenhuma mensagem configurada no Auto maturador. Configure em Admin > Maturador (fluxo Auto maturador).');
+    if (preferredEvolutionInstanceIdsForAutoStart.length === 0) {
+      alert(
+        'Nenhuma instância elegível com telefone para o Start. Configure telefone e conexão em Instâncias.'
+      );
       return;
     }
-    const plan = useVirgin ? null : plans.find((p) => p.id === selectedPlanId);
-    if (!useVirgin && (!plan || (!canUseAllMaturationPlans && plan.created_by !== userId))) {
-      alert('Para iniciar, crie e selecione um plano seu. Os planos do admin aparecem apenas como sugestão.');
-      return;
-    }
-    const targetChatId = useVirgin ? (targetChatIdInput || '').trim() : (plan?.default_target_chat_id || '');
-    // Target Chat ID é opcional: o job pode ter destino padrão; steps podem ter "Enviar para grupo" no fluxo
 
-    const availableInstance = masterInstances.find((i) => i.available);
-    if (!availableInstance) {
-      alert('Nenhuma instância disponível para maturação. Configure o phone_number das instâncias em Admin.');
+    let targetChatId = '';
+    if (!hasTenantDefaultMutualPlan) {
+      const plan = fallbackPlanForAutoStart;
+      if (!plan) return;
+      if (!canUseAllMaturationPlans && plan.created_by !== userId) {
+        alert('Crie um plano seu com passos em Configurar plano para poder iniciar.');
+        return;
+      }
+      targetChatId = (plan.default_target_chat_id || '').trim();
+    } else {
+      const p = plans.find((x) => x.id === defaultMutualPlanId);
+      targetChatId = (p?.default_target_chat_id || '').trim();
+    }
+
+    const nInstances = preferredEvolutionInstanceIdsForAutoStart.length;
+    if (nInstances === 1 && !targetChatId.trim()) {
+      alert(
+        'Com apenas uma instância no Start é obrigatório um destino padrão no plano (Admin > Maturador ou Configurar plano). Inclua duas ou mais elegíveis para maturação mútua entre elas.'
+      );
       return;
     }
 
     try {
       setStarting(true);
-      const preferredIds = selectedInstanceIds.size > 0
-        ? Array.from(selectedInstanceIds)
-        : undefined;
-      const body: Record<string, unknown> = useVirgin
-        ? { use_virgin_messages: true, target_chat_id: targetChatId }
-        : { plan_id: selectedPlanId, target_chat_id: targetChatId };
-      if (preferredIds?.length) body.preferred_evolution_instance_ids = preferredIds;
+      const preferredIds = preferredEvolutionInstanceIdsForAutoStart;
+      const body: Record<string, unknown> = hasTenantDefaultMutualPlan
+        ? { use_tenant_default_mutual_plan: true, target_chat_id: targetChatId || undefined }
+        : { plan_id: fallbackPlanForAutoStart!.id, target_chat_id: targetChatId || undefined };
+      body.preferred_evolution_instance_ids = preferredIds;
       const res = await fetch('/api/maturation/jobs', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId || '',
-        },
+        headers: maturationApiHeaders(true),
         body: JSON.stringify(body),
       });
 
@@ -635,7 +763,6 @@ export default function MaturadorPage() {
 
       if (res.ok && data.job_id) {
         await loadData({ background: true });
-        setSelectedPlanId('');
         const count = data.job_ids?.length ?? 1;
         if (data.campaign_id && count > 1) {
           alert(
@@ -648,7 +775,7 @@ export default function MaturadorPage() {
         }
         fetch('/api/maturation/process-now', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(true),
         }).catch(() => {
           // process-now em segundo plano; falhas não bloqueiam a UI
         });
@@ -665,14 +792,15 @@ export default function MaturadorPage() {
 
   async function handlePauseJob(jobId: string) {
     try {
-      await fetch(`/api/maturation/jobs/${jobId}`, {
+      const res = await fetch(`/api/maturation/jobs/${jobId}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId || '',
-        },
+        headers: maturationApiHeaders(true),
         body: JSON.stringify({ status: 'paused' }),
       });
+      // 404 = job já removido ou não pertence a este usuário (lista desatualizada / malha apagada)
+      if (!res.ok && res.status !== 404) {
+        console.warn('[Maturador] PATCH pausar job', jobId, 'HTTP', res.status);
+      }
       await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao pausar job:', error);
@@ -681,14 +809,14 @@ export default function MaturadorPage() {
 
   async function handleResumeJob(jobId: string) {
     try {
-      await fetch(`/api/maturation/jobs/${jobId}`, {
+      const res = await fetch(`/api/maturation/jobs/${jobId}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId || '',
-        },
+        headers: maturationApiHeaders(true),
         body: JSON.stringify({ status: 'running' }),
       });
+      if (!res.ok && res.status !== 404) {
+        console.warn('[Maturador] PATCH retomar job', jobId, 'HTTP', res.status);
+      }
       await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao retomar job:', error);
@@ -701,14 +829,14 @@ export default function MaturadorPage() {
     }
 
     try {
-      await fetch(`/api/maturation/jobs/${jobId}`, {
+      const res = await fetch(`/api/maturation/jobs/${jobId}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': userId || '',
-        },
+        headers: maturationApiHeaders(true),
         body: JSON.stringify({ status: 'aborted' }),
       });
+      if (!res.ok && res.status !== 404) {
+        console.warn('[Maturador] PATCH abortar job', jobId, 'HTTP', res.status);
+      }
       await loadData({ background: true });
     } catch (error) {
       console.error('Erro ao abortar job:', error);
@@ -720,7 +848,7 @@ export default function MaturadorPage() {
     try {
       const res = await fetch(`/api/maturation/jobs/${jobId}`, {
         method: 'DELETE',
-        headers: { 'X-User-Id': userId || '' },
+        headers: maturationApiHeaders(false),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -746,7 +874,7 @@ export default function MaturadorPage() {
       for (const j of campaignJobs) {
         const res = await fetch(`/api/maturation/jobs/${j.id}`, {
           method: 'DELETE',
-          headers: { 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(false),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -765,11 +893,6 @@ export default function MaturadorPage() {
       console.error(e);
       alert('Erro ao remover campanha');
     }
-  }
-
-  // Verifica se a instância está OK (conectada)
-  function isInstanceOk(status: string | null): boolean {
-    return status === 'ok' || status === 'open' || status === 'connected';
   }
 
   function getStatusIcon(status: string) {
@@ -898,8 +1021,59 @@ export default function MaturadorPage() {
     return jobsDisplayItems.slice(start, start + MATURATION_JOBS_LIST_PAGE_SIZE);
   }, [jobsDisplayItems, jobsListPage]);
 
+  const inProgressMaturationJobs = useMemo(
+    () =>
+      jobs.filter(
+        (j) => (j.status === 'running' || j.status === 'paused') && !j.readonly_controls
+      ),
+    [jobs]
+  );
+
+  const activeMaturationSession = useMemo(() => {
+    if (inProgressMaturationJobs.length === 0) return null;
+    const ats = inProgressMaturationJobs.map((j) => j.next_scheduled_at).filter(Boolean) as string[];
+    const nextAt =
+      ats.length > 0
+        ? ats.reduce((a, b) => (new Date(a).getTime() <= new Date(b).getTime() ? a : b))
+        : null;
+    const planNames = [...new Set(inProgressMaturationJobs.map((j) => j.plan?.name).filter(Boolean))];
+    const instNames = [
+      ...new Set(inProgressMaturationJobs.map((j) => j.instance_name).filter(Boolean) as string[]),
+    ];
+    const jobInstanceLabel = (j: (typeof inProgressMaturationJobs)[number]) =>
+      (j.instance_name && String(j.instance_name).trim()) || j.id.slice(0, 8);
+    const offlineInstanceNames = [
+      ...new Set(
+        inProgressMaturationJobs
+          .filter((j) => evolutionMaturationDbStatusShouldAutoPauseMaturation(j.instance_evolution_status))
+          .map((j) => jobInstanceLabel(j))
+      ),
+    ];
+    const onlineInstanceNames = [
+      ...new Set(
+        inProgressMaturationJobs
+          .filter((j) => !evolutionMaturationDbStatusShouldAutoPauseMaturation(j.instance_evolution_status))
+          .map((j) => jobInstanceLabel(j))
+      ),
+    ];
+    const anyDisconnected = offlineInstanceNames.length > 0;
+    const hasRunning = inProgressMaturationJobs.some((j) => j.status === 'running');
+    const hasPaused = inProgressMaturationJobs.some((j) => j.status === 'paused');
+    return {
+      nextAt,
+      planLabel: planNames.join(' · ') || 'Maturação',
+      instanceLabel: instNames.join(' · ') || '—',
+      jobCount: inProgressMaturationJobs.length,
+      anyDisconnected,
+      offlineInstanceNames,
+      onlineInstanceNames,
+      hasRunning,
+      hasPaused,
+    };
+  }, [inProgressMaturationJobs]);
+
   useEffect(() => {
-    setJobsListPage((p) => (p > jobsListTotalPages ? jobsListTotalPages : p < 1 ? 1 : p));
+    setJobsListPage((p: number) => (p > jobsListTotalPages ? jobsListTotalPages : p < 1 ? 1 : p));
   }, [jobsListTotalPages]);
 
   async function handlePauseCampaign(cj: MaturationJob[]) {
@@ -908,7 +1082,7 @@ export default function MaturadorPage() {
       try {
         await fetch(`/api/maturation/jobs/${j.id}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(true),
           body: JSON.stringify({ status: 'paused' }),
         });
       } catch (e) {
@@ -924,7 +1098,7 @@ export default function MaturadorPage() {
       try {
         await fetch(`/api/maturation/jobs/${j.id}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(true),
           body: JSON.stringify({ status: 'running' }),
         });
       } catch (e) {
@@ -941,7 +1115,7 @@ export default function MaturadorPage() {
       try {
         await fetch(`/api/maturation/jobs/${j.id}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId || '' },
+          headers: maturationApiHeaders(true),
           body: JSON.stringify({ status: 'aborted' }),
         });
       } catch (e) {
@@ -950,6 +1124,106 @@ export default function MaturadorPage() {
     }
     await loadData({ background: true });
   }
+
+  async function pauseAllRunningMaturation() {
+    const running = jobs.filter((j) => j.status === 'running' && !j.readonly_controls);
+    const campaigns = [...new Set(running.map((j) => j.campaign_id).filter(Boolean))] as string[];
+    for (const cid of campaigns) {
+      const cj = jobs.filter((j) => j.campaign_id === cid && j.status === 'running');
+      if (cj.length) await handlePauseCampaign(cj);
+    }
+    for (const j of running.filter((x) => !x.campaign_id)) {
+      await handlePauseJob(j.id);
+    }
+    await loadData({ background: true });
+  }
+
+  async function resumeAllPausedMaturation() {
+    const paused = jobs.filter((j) => j.status === 'paused' && !j.readonly_controls);
+    const campaigns = [...new Set(paused.map((j) => j.campaign_id).filter(Boolean))] as string[];
+    for (const cid of campaigns) {
+      const cj = jobs.filter((j) => j.campaign_id === cid && j.status === 'paused');
+      if (cj.length) await handleResumeCampaign(cj);
+    }
+    for (const j of paused.filter((x) => !x.campaign_id)) {
+      await handleResumeJob(j.id);
+    }
+    await loadData({ background: true });
+  }
+
+  /** Encerra envios (abort) e remove os jobs da maturação (DELETE), inclusive campanha malha. */
+  async function excluirMaturationAtiva() {
+    const inProg = jobs.filter(
+      (j) => (j.status === 'running' || j.status === 'paused') && !j.readonly_controls
+    );
+    if (inProg.length === 0) return;
+    if (
+      !confirm(
+        'Encerrar e excluir toda a maturação ativa ou pausada? Os envios param, as instâncias são liberadas e estes jobs somem do histórico.'
+      )
+    ) {
+      return;
+    }
+    try {
+      setExcludingMaturation(true);
+      const ids = [...new Set(inProg.map((j) => j.id))];
+      for (const id of ids) {
+        await fetch(`/api/maturation/jobs/${id}`, {
+          method: 'PATCH',
+          headers: maturationApiHeaders(true),
+          body: JSON.stringify({ status: 'aborted' }),
+        });
+      }
+      await loadData({ background: true });
+      for (const id of ids) {
+        await fetch(`/api/maturation/jobs/${id}`, {
+          method: 'DELETE',
+          headers: maturationApiHeaders(false),
+        });
+      }
+      await loadData({ background: true });
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao excluir maturação. Abra o histórico técnico e tente pausar/abortar jobs individualmente.');
+    } finally {
+      setExcludingMaturation(false);
+    }
+  }
+
+  /** Não pausar automaticamente jobs recém-criados (evita corrida com GET / jobs ainda persistindo / status instável). */
+  const AUTO_PAUSE_MIN_JOB_AGE_MS = 30_000;
+
+  useEffect(() => {
+    if (!canAccess || !userId) return;
+    const running = jobs.filter((j) => j.status === 'running' && !j.readonly_controls);
+    const disconnected = running.filter((j) => {
+      if (!evolutionMaturationDbStatusShouldAutoPauseMaturation(j.instance_evolution_status)) return false;
+      const started = j.started_at ? new Date(j.started_at).getTime() : 0;
+      if (started > 0 && Date.now() - started < AUTO_PAUSE_MIN_JOB_AGE_MS) return false;
+      return true;
+    });
+    if (disconnected.length === 0) {
+      lastDisconnectPauseKeyRef.current = null;
+      return;
+    }
+    const key = disconnected
+      .map((j) => j.id)
+      .sort()
+      .join(',');
+    if (lastDisconnectPauseKeyRef.current === key) return;
+    lastDisconnectPauseKeyRef.current = key;
+
+    void (async () => {
+      try {
+        for (const j of disconnected) {
+          await handlePauseJob(j.id);
+        }
+        await loadData({ background: true });
+      } catch (e) {
+        console.error('[maturation] pause on disconnect', e);
+      }
+    })();
+  }, [jobs, canAccess, userId]);
 
   /** Índice 0-based do step em `processing`, ou -1. */
   function findMaturationProcessingStepIndex(stepStatuses: MaturationStepStatus[] | undefined): number {
@@ -973,57 +1247,29 @@ export default function MaturadorPage() {
     );
   }
 
-  // Contagem de instâncias disponíveis para job de maturação (todas as conectadas com phone_number, não precisa ser mestre)
-  const availableMasters = masterInstances.filter(
-    (i) => i.available && !!(i as any).phone_number
-  );
-  const availableInstancesCount = availableMasters.length;
-
   function instanceHasPhone(inst: MasterInstance): boolean {
     return !!(inst.phone_number && String(inst.phone_number).trim());
   }
 
   function maturationSortRank(inst: MasterInstance): number {
+    if (inst.can_start_maturation === false) return 4;
     if (!instanceHasPhone(inst)) return 3;
     if (inst.blocked_from_maturation) return 2;
-    if (isInstanceOk(inst.status) && !inst.is_locked) return 0;
-    return 1;
+    return evolutionMaturationDbStatusIsConnected(inst.status) ? 0 : 1;
   }
 
+  const isInstanceOwnedByUser = (inst: MasterInstance) =>
+    inst.user_id != null && userId != null && String(inst.user_id) === String(userId);
+
   const sortedMasterInstances = [...masterInstances].sort((a, b) => {
+    const oa = isInstanceOwnedByUser(a) ? 0 : 1;
+    const ob = isInstanceOwnedByUser(b) ? 0 : 1;
+    if (oa !== ob) return oa - ob;
     const d = maturationSortRank(a) - maturationSortRank(b);
     if (d !== 0) return d;
     return a.instance_name.localeCompare(b.instance_name, 'pt-BR');
   });
 
-  function toggleInstanceSelection(evolutionInstanceId: string) {
-    if (!evolutionInstanceId) return;
-    const inst = masterInstances.find((i) => i.evolution_instance_id === evolutionInstanceId);
-    if (
-      !inst ||
-      !instanceHasPhone(inst) ||
-      inst.is_locked ||
-      inst.blocked_from_maturation ||
-      !isInstanceOk(inst.status)
-    )
-      return;
-    setSelectedInstanceIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(evolutionInstanceId)) next.delete(evolutionInstanceId);
-      else next.add(evolutionInstanceId);
-      return next;
-    });
-  }
-
-  function selectAllAvailable() {
-    setSelectedInstanceIds(new Set(availableMasters.map((i) => i.evolution_instance_id).filter(Boolean) as string[]));
-  }
-
-  function deselectAllInstances() {
-    setSelectedInstanceIds(new Set());
-  }
-
-  // Paginação (lista ordenada: com telefone e disponíveis para maturar primeiro)
   const totalPages = Math.ceil(sortedMasterInstances.length / instancesPerPage) || 1;
   const paginatedInstances = sortedMasterInstances.slice(
     (instancesPage - 1) * instancesPerPage,
@@ -1038,10 +1284,19 @@ export default function MaturadorPage() {
           <h1 className="text-2xl md:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">
             Maturador
           </h1>
-          <p className="text-slate-500 dark:text-[#aaa] text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium text-slate-700 dark:text-[#ccc]">{masterInstances.length} instância(s) conectada(s)</span>
+            <p className="text-slate-500 dark:text-[#aaa] text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-slate-700 dark:text-[#ccc]">
+              {masterInstances.length} instância(s) na lista · {maturationInstancesConnectedCount} conectada(s)
+            </span>
             <span className="text-slate-400 dark:text-[#666]">·</span>
-            <span className="font-semibold text-[#8CD955] dark:text-[#8CD955]">{availableInstancesCount} disponível(is) para maturação</span>
+            <span className="font-semibold text-[#8CD955] dark:text-[#8CD955]">
+              {preferredEvolutionInstanceIdsForAutoStart.length > 0
+                ? `Start: até ${preferredEvolutionInstanceIdsForAutoStart.length} instância(ns) (suas primeiro)`
+                : 'Nenhuma instância elegível para o Start'}
+              {phoneReadyEvolutionInstanceIds.length > 0
+                ? ` · ${phoneReadyEvolutionInstanceIds.length} com telefone na rede`
+                : ''}
+            </span>
           </p>
         </div>
 
@@ -1051,26 +1306,6 @@ export default function MaturadorPage() {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
               <div className="p-4 border-b border-slate-100 dark:border-[#404040] bg-white dark:bg-[#2a2a2a]">
                 <h2 className="text-base font-semibold text-slate-800 dark:text-white">Instâncias conectadas</h2>
-                <p className="text-xs text-slate-500 dark:text-[#aaa] mt-0.5">Selecione quais vão rodar no Start (ou deixe vazio = qualquer)</p>
-                {availableMasters.length > 0 && (
-                  <div className="flex gap-2 mt-3">
-                    <button
-                      type="button"
-                      onClick={selectAllAvailable}
-                      className="text-xs font-medium text-[#8CD955] hover:text-[#7BC84A] dark:hover:text-[#9ae066] hover:underline"
-                    >
-                      Selecionar todas
-                    </button>
-                    <span className="text-slate-300 dark:text-[#555]">|</span>
-                    <button
-                      type="button"
-                      onClick={deselectAllInstances}
-                      className="text-xs font-medium text-slate-500 dark:text-[#aaa] hover:text-slate-700 dark:hover:text-white hover:underline"
-                    >
-                      Desmarcar
-                    </button>
-                  </div>
-                )}
               </div>
               <div className="p-3 max-h-[420px] overflow-y-auto">
                 {loading ? (
@@ -1080,53 +1315,56 @@ export default function MaturadorPage() {
                 ) : masterInstances.length === 0 ? (
                   <div className="py-10 text-center text-slate-400 dark:text-[#888]">
                     <WifiOff className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">Nenhuma instância conectada</p>
+                    <p className="text-sm">Nenhuma instância ativa para exibir neste perfil</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {paginatedInstances.map((instance) => {
-                      const isOk = isInstanceOk(instance.status);
+                      const evId = instance.evolution_instance_id ?? '';
+                      const isOk = evolutionMaturationDbStatusIsConnected(instance.status);
                       const isMaster = instance.is_master === true;
                       const hasPhone = instanceHasPhone(instance);
                       const blockedMat = instance.blocked_from_maturation === true;
-                      const canSelect = isOk && !instance.is_locked && hasPhone && !blockedMat;
-                      const evId = instance.evolution_instance_id ?? '';
-                      const isSelected = evId && selectedInstanceIds.has(evId);
-                      const cardClass = !hasPhone
-                        ? 'bg-red-50/90 dark:bg-red-950/30 border-red-300 dark:border-red-800/80'
-                        : blockedMat && hasPhone
-                          ? 'bg-violet-50/80 dark:bg-violet-950/25 border-violet-200 dark:border-violet-800/60'
-                          : isOk
-                            ? instance.is_locked
-                              ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60'
-                              : 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
-                            : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]';
+                      const viewOnly = instance.can_start_maturation === false;
+                      const cardClass = viewOnly
+                        ? 'bg-slate-100/90 dark:bg-slate-900/40 border-slate-300 dark:border-slate-600'
+                        : !hasPhone
+                          ? 'bg-red-50/90 dark:bg-red-950/30 border-red-300 dark:border-red-800/80'
+                          : blockedMat && hasPhone
+                            ? 'bg-violet-50/80 dark:bg-violet-950/25 border-violet-200 dark:border-violet-800/60'
+                            : isOk
+                              ? instance.is_locked
+                                ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60'
+                                : 'bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+                              : 'bg-slate-50 dark:bg-[#333] border-slate-200 dark:border-[#404040]';
                       return (
                         <div
                           key={instance.instance_name + evId}
                           className={`p-3 rounded-lg border transition-all ${cardClass}`}
                         >
                           <div className="flex items-start gap-3">
-                            <div className="mt-1 w-4 h-4 shrink-0 flex items-center justify-center">
-                              {canSelect ? (
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(isSelected)}
-                                  onChange={() => toggleInstanceSelection(evId)}
-                                  className="h-4 w-4 rounded border-slate-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955] dark:focus:ring-[#8CD955]"
-                                />
-                              ) : null}
-                            </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span
                                   className={`w-2 h-2 rounded-full shrink-0 ${
-                                    !hasPhone ? 'bg-red-500' : isOk ? 'bg-emerald-500' : 'bg-slate-400 dark:bg-[#666]'
+                                    viewOnly
+                                      ? 'bg-slate-400 dark:bg-slate-500'
+                                      : !hasPhone
+                                        ? 'bg-red-500'
+                                        : isOk
+                                          ? 'bg-emerald-500'
+                                          : 'bg-slate-400 dark:bg-[#666]'
                                   }`}
                                 />
                                 <p
                                   className={`font-medium text-sm ${
-                                    !hasPhone ? 'text-red-900 dark:text-red-200' : isOk ? 'text-slate-800 dark:text-white' : 'text-slate-600 dark:text-[#aaa]'
+                                    viewOnly
+                                      ? 'text-slate-700 dark:text-slate-300'
+                                      : !hasPhone
+                                        ? 'text-red-900 dark:text-red-200'
+                                        : isOk
+                                          ? 'text-slate-800 dark:text-white'
+                                          : 'text-slate-600 dark:text-[#aaa]'
                                   }`}
                                 >
                                   {instance.instance_name}
@@ -1134,25 +1372,41 @@ export default function MaturadorPage() {
                                 <span className={`text-xs px-1.5 py-0.5 rounded ${isMaster ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300' : 'bg-slate-100 dark:bg-[#404040] text-slate-600 dark:text-[#aaa]'}`}>
                                   {isMaster ? 'Mestre' : 'Normal'}
                                 </span>
+                                {viewOnly && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-slate-200/95 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">
+                                    Só visualização
+                                  </span>
+                                )}
                                 {hasPhone && (
                                   <span className="text-xs text-slate-600 dark:text-[#aaa] font-mono">{instance.phone_number}</span>
                                 )}
                               </div>
-                              {!hasPhone && (
+                              {!viewOnly && !hasPhone && (
                                 <p className="text-xs font-medium text-red-600 dark:text-red-400 mt-1.5">
-                                  Sem telefone configurado — não pode ser usada no maturador. Configure o número da instância em Admin.
+                                  Sem telefone configurado — necessário para o Maturador. Toque no ícone de telefone na lista ou em Instâncias.
                                 </p>
                               )}
-                              {hasPhone && blockedMat && (
+                              {!viewOnly && hasPhone && blockedMat && (
                                 <p className="text-xs font-medium text-violet-700 dark:text-violet-300 mt-1.5">
-                                  Bloqueada para o maturador em Instâncias — não entra na seleção até você desbloquear.
+                                  Bloqueada para o maturador em Instâncias — não entra no Start automático até você desbloquear.
                                 </p>
                               )}
                               <p className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
-                                {isOk ? 'OK - Conectada' : instance.status || 'Desconectada'}
-                                {instance.is_locked && hasPhone && ' · Em uso (bloqueada por outro job)'}
-                                {hasPhone && ` · ${instance.campaign_status_label === 'em_campanha' ? 'Em campanha' : 'Sem campanha'}`}
+                                {isOk
+                                  ? 'OK — Conectada'
+                                  : evolutionMaturationDbStatusShouldAutoPauseMaturation(instance.status)
+                                    ? 'Desconectada — sessão encerrada (ex.: connection closed). Reconecte na Evolution ou use Verificar conexão.'
+                                    : `Estado: ${instance.status || '—'} (aguardando conexão/QR se aplicável)`}
                               </p>
+                              {!viewOnly && hasPhone && (
+                                <p className="text-xs text-slate-500 dark:text-[#888] mt-1 leading-snug">
+                                  {instance.is_locked
+                                    ? instance.campaign_status_label === 'em_campanha'
+                                      ? 'Malha: envios ativos de campanha. Esta instância pode ter outros jobs de maturação ao mesmo tempo — não há trava de uso exclusivo para uma única campanha.'
+                                      : 'Maturação: há job(s) ativo(s) nesta instância. Novos Starts podem usar a mesma instância em paralelo (várias maturações simultâneas são permitidas).'
+                                    : 'Sem job de maturação ativo agora — pode entrar no próximo Start. A mesma instância pode integrar várias campanhas em paralelo ou em sequência.'}
+                                </p>
+                              )}
                             </div>
                             <button
                               onClick={() => handleCheckConnection(instance.instance_name)}
@@ -1197,10 +1451,35 @@ export default function MaturadorPage() {
 
           {/* Coluna Direita - Iniciar e Jobs */}
           <div className="lg:col-span-2 space-y-4 md:space-y-6">
-            {/* Card Iniciar Maturação */}
+            {/* Card Maturador Mesh (auto-conversa contínua, unifica manual + virgem) */}
+            <MeshCard
+              eligibleInstances={masterInstances
+                .filter(
+                  (i) =>
+                    !!i.evolution_instance_id &&
+                    !!(i.phone_number && String(i.phone_number).trim()) &&
+                    !i.blocked_from_maturation &&
+                    i.can_start_maturation !== false &&
+                    evolutionMaturationDbStatusIsConnected(i.status)
+                )
+                .map((i) => ({
+                  evolution_instance_id: i.evolution_instance_id as string,
+                  instance_name: i.instance_name,
+                  phone_number: i.phone_number,
+                  status: i.status,
+                  is_owner:
+                    i.user_id != null && userId != null && String(i.user_id) === String(userId),
+                }))}
+              apiHeaders={maturationApiHeaders()}
+              viewerProfileStatus={maturationAccessMeta?.profileStatus ?? userStatus ?? null}
+            />
+
+            {/* Card Iniciar Maturação — ocultado: substituído pelo Maturador Mesh acima */}
+            {false && (
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] p-4 md:p-6">
-              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center justify-between gap-2 mb-4">
                 <h2 className="text-base font-semibold text-slate-800 dark:text-white">Iniciar Maturação</h2>
+                {canUseAllMaturationPlans && (
                 <button
                   type="button"
                   onClick={openCreatePlanModal}
@@ -1209,55 +1488,57 @@ export default function MaturadorPage() {
                 >
                   Configurar plano
                 </button>
+                )}
               </div>
+              {hasTenantDefaultMutualPlan && (
+                <div className="mb-4 rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/80 dark:bg-emerald-950/25 px-3 py-2 text-sm text-slate-700 dark:text-slate-200">
+                  <strong>Plano automático:</strong> o sistema considera até <strong>5 instâncias</strong> elegíveis (suas primeiro na lista à esquerda). Uma instância + destino padrão no plano = um job; duas ou mais = campanha malha entre elas em paralelo.
+                </div>
+              )}
+              {!hasTenantDefaultMutualPlan && fallbackPlanForAutoStart && (
+                <div className="mb-4 rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/80 dark:bg-[#333]/60 px-3 py-2 text-sm text-slate-700 dark:text-slate-200">
+                  <strong>Plano em uso:</strong>{' '}
+                  <span className="font-medium text-slate-800 dark:text-white">{resolvedPlanDisplayName}</span>
+                  {' '}(primeiro plano disponível com passos; administradores podem criar outros em Configurar plano).
+                </div>
+              )}
+              {!canResolveStartWithoutPicker && (
+                <div className="mb-4 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50/90 dark:bg-amber-950/25 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+                  Não há plano padrão da rede nem plano com passos disponível para o seu perfil. Peça ao admin o plano de rede mútua ou crie um plano com ao menos um passo.
+                </div>
+              )}
               <div className="space-y-4">
                 <div className="space-y-2">
                   <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-                    <div className="flex-1 min-w-0">
-                      <label className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">Plano</label>
-                      <select
-                        value={selectedPlanId}
-                        onChange={(e) => setSelectedPlanId(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-                      >
-                        <option value="">Selecione um plano</option>
-                        <option value={VIRGIN_MESSAGES_OPTION}>
-                          Mensagens do Auto maturador{virginMessagesCount >= 0 ? ` (${virginMessagesCount} msg)` : ''}
-                        </option>
-                        {myPlans.length > 0 && (
-                          <optgroup label={canUseAllMaturationPlans ? 'Planos' : 'Meus planos'}>
-                            {myPlans.map((plan) => (
-                              <option key={plan.id} value={plan.id}>{plan.name}</option>
-                            ))}
-                          </optgroup>
-                        )}
-                        {suggestedPlans.length > 0 && (
-                          <optgroup label="Sugestões do admin">
-                            {suggestedPlans.map((plan) => (
-                              <option key={plan.id} value={plan.id} disabled>
-                                {plan.name} (sugestão)
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                      </select>
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <p className="text-xs font-medium text-slate-500 dark:text-[#aaa]">Plano (automático)</p>
+                      <p className="text-sm text-slate-800 dark:text-white font-medium truncate" title={resolvedPlanDisplayName}>
+                        {resolvedPlanDisplayName}
+                      </p>
+                      {preferredEvolutionInstanceIdsForAutoStart.length > 0 && (
+                        <p className="text-xs text-slate-500 dark:text-[#888] pt-1">
+                          Instâncias no próximo Start: <strong className="text-slate-700 dark:text-slate-200">{preferredEvolutionInstanceIdsForAutoStart.length}</strong>
+                          {preferredEvolutionInstanceIdsForAutoStart.length >= 2
+                            ? ' (malha mútua em paralelo).'
+                            : ' (exige destino padrão no plano).'}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
                       onClick={handleStartJob}
                       disabled={
                         starting ||
-                        !selectedPlanId ||
-                        availableInstancesCount === 0 ||
-                        (useVirginMessages && virginMessagesCount === 0)
+                        !canResolveStartWithoutPicker ||
+                        preferredEvolutionInstanceIdsForAutoStart.length === 0
                       }
                       className="w-full sm:w-auto px-5 py-2.5 rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2 bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed shrink-0 sm:min-h-[42px]"
                       title={
                         mounted
-                          ? availableInstancesCount === 0
-                            ? 'Configure o phone_number das instâncias em Admin'
-                            : useVirginMessages && virginMessagesCount === 0
-                              ? 'Configure as mensagens do Auto maturador em Admin'
+                          ? !canResolveStartWithoutPicker
+                            ? 'Defina plano padrão no admin ou crie um plano com passos'
+                            : preferredEvolutionInstanceIdsForAutoStart.length === 0
+                              ? 'Nenhuma instância elegível — telefone e conexão em Instâncias'
                               : ''
                           : undefined
                       }
@@ -1269,49 +1550,23 @@ export default function MaturadorPage() {
                       )}
                     </button>
                   </div>
+                  {canUseAllMaturationPlans && (
                   <p className="text-[11px] text-slate-500 dark:text-[#888]">
-                    O tempo entre cada mensagem é o definido em cada passo do plano (Configurar plano). No Auto maturador, usa-se o intervalo padrão das mensagens configuradas no admin.
+                    Intervalos vêm dos passos do plano. Duas ou mais instâncias elegíveis disparam campanha malha; uma só usa o destino padrão configurado no plano.
                   </p>
+                  )}
                 </div>
-                {useVirginMessages && (
-                  <div>
-                    <label htmlFor="target-chat-id" className="block text-xs font-medium text-slate-500 dark:text-[#aaa] mb-1">
-                      Target Chat ID (opcional)
-                    </label>
-                    <input
-                      id="target-chat-id"
-                      type="text"
-                      value={targetChatIdInput}
-                      onChange={(e) => setTargetChatIdInput(e.target.value)}
-                      placeholder="Número ou grupo, ex: 5511999999999 ou 120363...@g.us"
-                      className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
-                    />
-                    <p className="text-xs text-slate-500 dark:text-[#888] mt-1">
-                      Se vazio: use destino padrão do plano, &quot;Enviar para grupo&quot; em algum passo, ou selecione 2+ instâncias para malha entre elas.
-                      Caso contrário, os envios sem destino resolvido falham no processamento com aviso no job.
-                    </p>
-                  </div>
-                )}
-                {!useVirginMessages && selectedPlanId && !myPlans.some((p) => p.id === selectedPlanId) && (
-                  <p className="text-xs text-amber-600">
-                    Planos do admin aparecem como sugestão. Para iniciar, crie seu plano com base em uma sugestão.
-                  </p>
-                )}
-                {selectedInstanceIds.size > 0 && (
-                  <p className="text-xs text-slate-500 dark:text-[#aaa]">
-                    {selectedInstanceIds.size} instância(s) selecionada(s) para este job. Sem seleção = qualquer disponível.
-                  </p>
-                )}
               </div>
-              {availableInstancesCount === 0 && (
-                <p className="text-sm text-red-600 mt-2">Nenhuma instância disponível para maturação. Configure o phone_number das instâncias em Admin.</p>
-              )}
-              {useVirginMessages && virginMessagesCount === 0 && (
-                <p className="text-sm text-amber-600 mt-2">Configure mensagens em Admin &gt; Maturador (Auto maturador).</p>
+              {preferredEvolutionInstanceIdsForAutoStart.length === 0 && (
+                <p className="text-sm text-red-600 dark:text-red-400/95 mt-2">
+                  Nenhuma instância elegível (conectada, com telefone e liberada no Maturador). Ajuste em Instâncias ou peça acesso a instâncias compartilhadas.
+                </p>
               )}
             </div>
+            )}
 
-            {/* Configurar plano de conversas (no maturador, sem admin) */}
+            {/* Card Configurar plano de conversas — ocultado: pool de mensagens vai pelo Auto maturador (admin) */}
+            {false && canUseAllMaturationPlans && (
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
               <div className="p-4 border-b border-slate-100 dark:border-[#404040] flex items-center justify-between flex-wrap gap-2">
                 <h3 className="text-base font-semibold text-slate-800 dark:text-white">Configurar plano de conversas</h3>
@@ -1446,8 +1701,131 @@ export default function MaturadorPage() {
                 )}
               </div>
             </div>
+            )}
 
-            {/* Filtros e Lista de Jobs */}
+            {/* Controle da maturação: timer + estado (envios seguem via processador; lista detalhada opcional) */}
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] p-4 md:p-5 space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-800 dark:text-white">Maturação em execução</h3>
+                  {activeMaturationSession ? (
+                    <>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {activeMaturationSession.hasRunning ? (
+                          <>
+                            <span className="relative flex h-2.5 w-2.5">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#8CD955] opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#8CD955]" />
+                            </span>
+                            <span className="text-sm font-medium text-[#8CD955]">
+                              Ativo
+                              {activeMaturationSession.hasPaused ? ' (com jobs pausados)' : ''}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="relative flex h-2.5 w-2.5">
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400" />
+                            </span>
+                            <span className="text-sm font-medium text-amber-600 dark:text-amber-300">Pausada</span>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-[#888] truncate" title={activeMaturationSession.planLabel}>
+                        Plano: {activeMaturationSession.planLabel}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-[#888] truncate" title={activeMaturationSession.instanceLabel}>
+                        Instâncias: {activeMaturationSession.instanceLabel}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-[#888]">
+                        {activeMaturationSession.jobCount} job(s) —{' '}
+                        {activeMaturationSession.hasRunning ? 'envios em andamento ou agendados' : 'retome para continuar os envios'}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-slate-500 dark:text-[#888]">
+                      Nenhuma maturação ativa (rodando ou pausada). Ao dar Start, o envio começa pela API com os timers do plano — acompanhe aqui.
+                    </p>
+                  )}
+                </div>
+                {activeMaturationSession && (
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    {activeMaturationSession.hasRunning && (
+                      <button
+                        type="button"
+                        onClick={() => void pauseAllRunningMaturation()}
+                        className="px-3 py-2 rounded-lg text-xs font-medium border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                      >
+                        Pausar maturação
+                      </button>
+                    )}
+                    {activeMaturationSession.hasPaused && (
+                      <button
+                        type="button"
+                        onClick={() => void resumeAllPausedMaturation()}
+                        className="px-3 py-2 rounded-lg text-xs font-medium border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                      >
+                        Retomar maturação
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void excluirMaturationAtiva()}
+                      disabled={excludingMaturation}
+                      className="px-3 py-2 rounded-lg text-xs font-medium border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 hover:bg-red-50 dark:hover:bg-red-950/35 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                      title="Aborta envios, libera instâncias e remove estes jobs"
+                    >
+                      {excludingMaturation ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      Excluir maturação
+                    </button>
+                  </div>
+                )}
+              </div>
+              {activeMaturationSession?.nextAt && (
+                <div className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/80 dark:bg-[#333]/60 px-3 py-2 flex items-center gap-2 flex-wrap">
+                  <Clock className="w-4 h-4 text-[#8CD955] shrink-0" />
+                  <span className="text-sm text-slate-700 dark:text-slate-200">
+                    Próxima mensagem em:{' '}
+                    <strong className="font-mono text-[#8CD955] tabular-nums">
+                      {getNextSendCountdown(activeMaturationSession.nextAt) ?? '—'}
+                    </strong>
+                  </span>
+                </div>
+              )}
+              {activeMaturationSession?.anyDisconnected && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50/90 dark:bg-amber-950/25 px-3 py-2 space-y-1.5">
+                  <p className="text-xs font-medium text-amber-900 dark:text-amber-200">
+                    Sem conexão (Evolution):{' '}
+                    <span className="font-semibold">
+                      {activeMaturationSession.offlineInstanceNames.join(', ')}
+                    </span>
+                  </p>
+                  <p className="text-xs text-amber-800/95 dark:text-amber-300/90">
+                    Envio pausado só nesses jobs. As demais instâncias seguem em maturação normalmente.
+                  </p>
+                  {activeMaturationSession.onlineInstanceNames.length > 0 && (
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Continuando com: {activeMaturationSession.onlineInstanceNames.join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowJobsHistory((v) => !v)}
+              className="text-xs font-medium text-slate-500 dark:text-[#888] hover:text-[#8CD955] hover:underline w-full text-left"
+            >
+              {showJobsHistory ? 'Ocultar histórico técnico (planos / jobs)' : 'Mostrar histórico técnico (planos / jobs) — opcional'}
+            </button>
+
+            {showJobsHistory && (
+            <>
             <div className="flex gap-2 flex-wrap">
               {[
                 { value: 'all', label: 'Todos' },
@@ -1471,7 +1849,7 @@ export default function MaturadorPage() {
 
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 dark:border-[#404040]">
-                <h3 className="text-sm font-semibold text-slate-800 dark:text-white">Mensagens do Auto maturador</h3>
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-white">Histórico técnico — jobs</h3>
               </div>
               {loading ? (
                 <div className="p-8 text-center">
@@ -1880,7 +2258,7 @@ export default function MaturadorPage() {
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => setJobsListPage((p) => Math.max(1, p - 1))}
+                          onClick={() => setJobsListPage((p: number) => Math.max(1, p - 1))}
                           disabled={jobsListPage <= 1}
                           className="p-1.5 rounded-lg border border-slate-200 dark:border-[#404040] text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:pointer-events-none"
                           aria-label="Página anterior"
@@ -1892,7 +2270,7 @@ export default function MaturadorPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => setJobsListPage((p) => Math.min(jobsListTotalPages, p + 1))}
+                          onClick={() => setJobsListPage((p: number) => Math.min(jobsListTotalPages, p + 1))}
                           disabled={jobsListPage >= jobsListTotalPages}
                           className="p-1.5 rounded-lg border border-slate-200 dark:border-[#404040] text-slate-600 dark:text-[#aaa] hover:bg-slate-100 dark:hover:bg-[#333] disabled:opacity-40 disabled:pointer-events-none"
                           aria-label="Próxima página"
@@ -1906,6 +2284,8 @@ export default function MaturadorPage() {
                 </>
               )}
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>

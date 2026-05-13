@@ -148,6 +148,9 @@ export default function MaturadorSection({ userId }: Props) {
   const [virginPreviewFiles, setVirginPreviewFiles] = useState<Record<number, File>>({});
   const virginBlobUrlsRef = React.useRef<Set<string>>(new Set());
   const [instancesPage, setInstancesPage] = useState(1);
+  /** Plano de malha para usuários do Maturador (não-admin) — salvo em virgin_maturation_config */
+  const [defaultMutualPlanId, setDefaultMutualPlanId] = useState<string>('');
+  const [defaultMutualPlanSaving, setDefaultMutualPlanSaving] = useState(false);
 
   const [adminActiveJobs, setAdminActiveJobs] = useState<AdminActiveMaturationJob[]>([]);
   const [loadingAdminJobs, setLoadingAdminJobs] = useState(false);
@@ -277,6 +280,11 @@ export default function MaturadorSection({ userId }: Props) {
         setVirginPreviewFiles({});
         setVirginPreviewUrls({});
       }
+      if (virginRes.ok && typeof virginData.data?.defaultMutualPlanId === 'string' && virginData.data.defaultMutualPlanId.trim()) {
+        setDefaultMutualPlanId(virginData.data.defaultMutualPlanId.trim());
+      } else if (virginRes.ok) {
+        setDefaultMutualPlanId('');
+      }
     } catch (e) {
       console.error('Erro ao carregar dados admin:', e);
     } finally {
@@ -287,6 +295,28 @@ export default function MaturadorSection({ userId }: Props) {
   function isValidVirginMessage(m: VirginMessageItem): boolean {
     if (m.type === 'text') return !!m.text?.trim();
     return !!m.media_path?.trim();
+  }
+
+  async function saveDefaultMutualPlan() {
+    setDefaultMutualPlanSaving(true);
+    try {
+      const res = await fetch('/api/admin/maturation/virgin-messages', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ default_mutual_maturation_plan_id: defaultMutualPlanId.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Erro ao salvar plano da rede mútua');
+        return;
+      }
+      alert('Plano da rede mútua salvo. Usuários do Maturador (não admin) verão só Start com malha entre as instâncias deles.');
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar');
+    } finally {
+      setDefaultMutualPlanSaving(false);
+    }
   }
 
   async function saveVirginMessages() {
@@ -1001,7 +1031,7 @@ export default function MaturadorSection({ userId }: Props) {
                   Maturador (manual)
                 </div>
                 <p className="text-xs text-gray-600 mt-1">
-                  Você monta um <strong>plano de mensagens</strong> (texto, vídeo, imagem, áudio com delays). Ao clicar em <strong>Start</strong> na tela Maturador, <strong>todas as instâncias mestre</strong> enviam as mensagens do plano para os números/conversas entre si.
+                  Você monta um <strong>plano de mensagens</strong> (texto, vídeo, imagem, áudio com delays). Na tela Maturador, o usuário dá <strong>Start</strong> para a <strong>rede mútua</strong>: todas as instâncias dele com telefone trocam o plano entre si. O admin pode fixar um plano global abaixo (&quot;Plano da rede mútua&quot;).
                 </p>
                 <Link
                   href="/maturador"
@@ -1017,11 +1047,44 @@ export default function MaturadorSection({ userId }: Props) {
                   Auto maturador
                 </div>
                 <p className="text-xs text-gray-600 mt-1">
-                  O mesmo conceito de fluxo de mensagens, mas <strong>automático</strong>: instâncias marcadas como <strong>virgem</strong> entram em maturação sozinhas (5 dias). Configure a lista de mensagens usadas no warmup 1:1 na seção abaixo.
+                  Mensagens usadas no fluxo <strong>Auto maturador</strong> (plano fixo de mensagens). Instâncias <strong>virgem</strong> deixam de usar trava de dias ao conectar; a maturação social é pelo Maturador / rede mútua.
                 </p>
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <h3 className="text-lg font-semibold text-gray-800 mb-1">Plano da rede mútua (Maturador usuário)</h3>
+        <p className="text-sm text-gray-600 mb-3">
+          Quando definido, consultores e demais usuários com acesso ao Maturador <strong>não escolhem plano</strong>: aparece apenas <strong>Start</strong> e todas as instâncias conectadas deles (com telefone) entram na <strong>malha</strong> com este plano. Deixe vazio para o fluxo manual (escolha de plano na tela Maturador).
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-end max-w-2xl">
+          <div className="flex-1 min-w-0">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Plano ativo</label>
+            <select
+              value={defaultMutualPlanId}
+              onChange={(e) => setDefaultMutualPlanId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 bg-white"
+            >
+              <option value="">Nenhum — usuário escolhe o plano no Maturador</option>
+              {plans.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() => void saveDefaultMutualPlan()}
+            disabled={defaultMutualPlanSaving}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#0A5C5C] text-white text-sm font-medium hover:bg-[#084747] disabled:opacity-50"
+          >
+            {defaultMutualPlanSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            Salvar plano da rede mútua
+          </button>
         </div>
       </div>
 

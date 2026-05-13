@@ -12,11 +12,152 @@ const LOGS_PAGE_SIZE = 1000;
 const LOGS_MAX_PAGES = 100;
 const IN_BATCH_SIZE = 150;
 const ENTRIES_PAGE_SIZE = 10000;
+/** Limite de linhas de log escaneadas no fallback JSON (evita timeout em bases enormes). */
+const LEAD_EMAIL_JSON_FALLBACK_MAX_ROWS = 12_000;
+const LEAD_EMAIL_JSON_FALLBACK_PAGE = 400;
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
   return chunks;
+}
+
+/** Termo de busca: só trim + minúsculas (sem remover `@` ou pontos — é o e-mail digitado). */
+function normalizeLeadEmailSearchTerm(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+/**
+ * Fallback: o e-mail pode aparecer em crm_response / filters_snapshot (transferências antigas).
+ * Escaneia logs recentes primeiro (created_at desc), até LEAD_EMAIL_JSON_FALLBACK_MAX_ROWS.
+ */
+async function collectTransferLogIdsFromLogsJsonEmailFallback(
+  norm: string,
+  bancaId: string | null,
+  gerenteBancaIds: string[] | null
+): Promise<string[]> {
+  if (norm.length < 5 || !norm.includes('@')) return [];
+  const found = new Set<string>();
+  let offset = 0;
+  let scanned = 0;
+  while (scanned < LEAD_EMAIL_JSON_FALLBACK_MAX_ROWS) {
+    let q = supabaseServiceRole
+      .from('admin_lead_transfer_logs')
+      .select('id, crm_response, filters_snapshot')
+      .order('created_at', { ascending: false });
+    if (bancaId) q = q.eq('banca_id', bancaId);
+    else if (gerenteBancaIds && gerenteBancaIds.length > 0) q = q.in('banca_id', gerenteBancaIds);
+    q = q.range(offset, offset + LEAD_EMAIL_JSON_FALLBACK_PAGE - 1);
+    const { data, error } = await q;
+    if (error) {
+      console.warn(`${LOG_PREFIX} lead_email fallback JSON scan:`, error.message ?? error);
+      break;
+    }
+    const rows = Array.isArray(data) ? data : [];
+    for (const row of rows) {
+      const id = (row as { id?: string }).id;
+      if (!id) continue;
+      const cr = (row as { crm_response?: unknown }).crm_response;
+      const fs = (row as { filters_snapshot?: unknown }).filters_snapshot;
+      const hay = `${JSON.stringify(cr ?? '')}${JSON.stringify(fs ?? '')}`.toLowerCase();
+      if (hay.includes(norm)) found.add(id);
+    }
+    scanned += rows.length;
+    if (rows.length < LEAD_EMAIL_JSON_FALLBACK_PAGE) break;
+    offset += LEAD_EMAIL_JSON_FALLBACK_PAGE;
+  }
+  return [...found];
+}
+
+/**
+ * Localiza transferências por e-mail do lead:
+ * (A) crm_leads.email → external_id → entries.lead_id (+ eq exato quando for e-mail completo)
+ * (B) admin_lead_transfer_entries.lead_email (+ eq exato)
+ * (C) texto do e-mail em crm_response / filters_snapshot dos logs (legado)
+ */
+async function resolveTransferLogIdsByLeadEmail(
+  rawEmailQuery: string,
+  bancaId: string | null,
+  gerenteBancaIds: string[] | null
+): Promise<'skip' | string[]> {
+  const norm = normalizeLeadEmailSearchTerm(rawEmailQuery);
+
+  if (norm.length < 3) {
+    return 'skip';
+  }
+
+  const logIds = new Set<string>();
+
+  /** --- Path A: crm_leads → entries.lead_id --- */
+  const externalIds = new Set<string>();
+
+  const { data: leadsRows, error: leadsErr } = await supabaseServiceRole
+    .from('crm_leads')
+    .select('external_id')
+    .ilike('email', `%${norm}%`)
+    .limit(8000);
+
+  if (!leadsErr && Array.isArray(leadsRows)) {
+    for (const r of leadsRows as { external_id?: number | string | null }[]) {
+      const id = String(r.external_id ?? '').trim();
+      if (id) externalIds.add(id);
+    }
+  }
+
+  const leadIdStrings = [...externalIds];
+  for (const chunk of chunkArray(leadIdStrings, IN_BATCH_SIZE)) {
+    let q = supabaseServiceRole.from('admin_lead_transfer_entries').select('transfer_log_id').in('lead_id', chunk);
+    if (bancaId) q = q.eq('banca_id', bancaId);
+    else if (gerenteBancaIds && gerenteBancaIds.length > 0) q = q.in('banca_id', gerenteBancaIds);
+    const { data, error } = await q;
+    if (error) {
+      console.error(`${LOG_PREFIX} lead_email path A entries by lead_id:`, error);
+      continue;
+    }
+    for (const row of Array.isArray(data) ? data : []) {
+      const id = (row as { transfer_log_id?: string }).transfer_log_id;
+      if (id) logIds.add(id);
+    }
+  }
+
+  /** --- Path B: admin_lead_transfer_entries.lead_email (substring; preserva `@` e pontos do termo) --- */
+  const EB_PAGE = 1000;
+  let ebOffset = 0;
+  let pathBPending = true;
+  while (pathBPending) {
+    let qb = supabaseServiceRole.from('admin_lead_transfer_entries').select('transfer_log_id').ilike('lead_email', `%${norm}%`);
+    if (bancaId) qb = qb.eq('banca_id', bancaId);
+    else if (gerenteBancaIds && gerenteBancaIds.length > 0) qb = qb.in('banca_id', gerenteBancaIds);
+    const { data: ebRows, error: ebErr } = await qb.range(ebOffset, ebOffset + EB_PAGE - 1);
+    if (ebErr) {
+      if (ebErr.code === 'PGRST204' || (ebErr.message ?? '').includes('lead_email')) {
+        console.warn(`${LOG_PREFIX} lead_email: coluna lead_email ausente — rode migration lead_email nas entries`);
+      } else {
+        console.error(`${LOG_PREFIX} lead_email path B:`, ebErr);
+      }
+      pathBPending = false;
+      break;
+    }
+    const rows = Array.isArray(ebRows) ? ebRows : [];
+    for (const row of rows) {
+      const id = (row as { transfer_log_id?: string }).transfer_log_id;
+      if (id) logIds.add(id);
+    }
+    if (rows.length < EB_PAGE) pathBPending = false;
+    else ebOffset += EB_PAGE;
+  }
+
+  /** --- Path C: JSON nos logs (legado / e-mail só no payload da transferência) --- */
+  if (logIds.size === 0) {
+    const fromJson = await collectTransferLogIdsFromLogsJsonEmailFallback(norm, bancaId, gerenteBancaIds);
+    for (const id of fromJson) logIds.add(id);
+  }
+
+  if (logIds.size === 0) {
+    return [];
+  }
+
+  return [...logIds];
 }
 
 /** Tipo da linha retornada pelo select em admin_lead_transfer_logs (evita GenericStringError do Supabase). */
@@ -50,6 +191,7 @@ export async function GET(req: NextRequest) {
     const targetConsultant = searchParams.get('target_consultant_email')?.trim() || null;
     const sourceConsultant = searchParams.get('source_consultant_email')?.trim() || null;
     const transferKind = searchParams.get('transfer_kind')?.trim() || null;
+    const leadEmailQuery = searchParams.get('lead_email')?.trim() ?? '';
     // Período (from/to) não é aplicado aqui: a API retorna sempre todas as transferências do escopo.
     // O frontend filtra por data em memória (managementFrom/managementTo).
 
@@ -64,14 +206,32 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    /** Quando definido, limita aos logs que contêm um lead com e-mail encontrado em crm_leads. */
+    let restrictLogIds: string[] | null = null;
+    if (leadEmailQuery.length > 0) {
+      console.info(`${LOG_PREFIX} GET filtro lead_email ativo`, {
+        userId,
+        profileStatus: profile.status,
+        lead_email_len: leadEmailQuery.length,
+        banca_id: bancaId,
+      });
+      const resolved = await resolveTransferLogIdsByLeadEmail(leadEmailQuery, bancaId, gerenteBancaIds);
+      if (resolved === 'skip') {
+        restrictLogIds = null;
+        console.info(`${LOG_PREFIX} GET lead_email não restringe lista (skip)`);
+      } else if (resolved.length === 0) {
+        console.info(`${LOG_PREFIX} GET lead_email → 0 transferências (sem match crm_leads/entries)`);
+        return successResponse([]);
+      } else {
+        restrictLogIds = resolved;
+        console.info(`${LOG_PREFIX} GET lead_email → ${resolved.length} transfer_log_id(s) candidatos antes dos filtros TF/consultor`);
+      }
+    }
+
     const allLogs: TransferLogRow[] = [];
-    let offset = 0;
-    for (let i = 0; i < LOGS_MAX_PAGES; i++) {
-      let q = supabaseServiceRole
-        .from('admin_lead_transfer_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .range(offset, offset + LOGS_PAGE_SIZE - 1);
+
+    const appendLogsQuery = (base: any): any => {
+      let q = base;
       if (bancaId) q = q.eq('banca_id', bancaId);
       else if (gerenteBancaIds) q = q.in('banca_id', gerenteBancaIds);
       if (transferType && ['TF', 'TF1', 'TF2', 'TF3'].includes(transferType)) q = q.eq('transfer_type', transferType);
@@ -86,19 +246,61 @@ export async function GET(req: NextRequest) {
       if (gerenteLeadTransferOwnActionsOnly(profile)) {
         q = q.eq('performed_by_user_id', userId);
       }
-      const { data: logs, error } = await q;
-      if (error) {
-        console.error(`${LOG_PREFIX} GET error:`, error);
-        return errorResponse('Erro ao buscar logs de transferência.');
+      return q;
+    };
+
+    if (restrictLogIds && restrictLogIds.length > 0) {
+      const uniqueIds = [...new Set(restrictLogIds)];
+      /** PostgREST limita praticamente o operador IN (~100 linhas por request é seguro). */
+      const ID_CHUNK = 100;
+      for (const idChunk of chunkArray(uniqueIds, ID_CHUNK)) {
+        let q = appendLogsQuery(
+          supabaseServiceRole.from('admin_lead_transfer_logs').select('*').in('id', idChunk).order('created_at', {
+            ascending: false,
+          })
+        );
+        const { data: logs, error } = await q;
+        if (error) {
+          console.error(`${LOG_PREFIX} GET error (by lead email):`, error);
+          return errorResponse('Erro ao buscar logs de transferência.');
+        }
+        const rows = (Array.isArray(logs) ? logs : []) as TransferLogRow[];
+        allLogs.push(...rows);
       }
-      const rows = (Array.isArray(logs) ? logs : []) as TransferLogRow[];
-      allLogs.push(...rows);
-      if (rows.length === 0) break;
-      // Próximo offset = onde paramos (Supabase pode devolver < 1000 por request)
-      offset += rows.length;
+      allLogs.sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
+    } else {
+      let offset = 0;
+      for (let i = 0; i < LOGS_MAX_PAGES; i++) {
+        let q = appendLogsQuery(
+          supabaseServiceRole
+            .from('admin_lead_transfer_logs')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .range(offset, offset + LOGS_PAGE_SIZE - 1)
+        );
+        const { data: logs, error } = await q;
+        if (error) {
+          console.error(`${LOG_PREFIX} GET error:`, error);
+          return errorResponse('Erro ao buscar logs de transferência.');
+        }
+        const rows = (Array.isArray(logs) ? logs : []) as TransferLogRow[];
+        allLogs.push(...rows);
+        if (rows.length === 0) break;
+        offset += rows.length;
+      }
     }
 
     const list = allLogs;
+    if (leadEmailQuery.length > 0) {
+      console.info(`${LOG_PREFIX} GET resultado final com lead_email`, {
+        logsRetornados: list.length,
+        apos_filtros_consultor_tf: !!(transferType || targetConsultant || sourceConsultant || transferKind),
+      });
+    }
     if (list.length === 0) {
       return successResponse([]);
     }
@@ -128,7 +330,7 @@ export async function GET(req: NextRequest) {
 
     const totalBalanceByLogId = new Map<string, number>();
     const resolutionByLogId = new Map<string, { hasPending: boolean; total: number; vinculado: number; disponivel: number }>();
-    const stockByLogId = new Map<string, { total: number; em_estoque: number; repassado: number; cancelado: number }>();
+    const stockByLogId = new Map<string, { total: number; em_estoque: number; repassado: number; cancelado: number; revertido: number }>();
     allEntries.forEach((e: EntryRow) => {
       const current = totalBalanceByLogId.get(e.transfer_log_id) ?? 0;
       const saldo = e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
@@ -140,11 +342,12 @@ export async function GET(req: NextRequest) {
       else if (e.resolution_status === 'disponivel_retransferencia') res.disponivel += 1;
       resolutionByLogId.set(e.transfer_log_id, res);
 
-      const stock = stockByLogId.get(e.transfer_log_id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0 };
+      const stock = stockByLogId.get(e.transfer_log_id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0, revertido: 0 };
       stock.total += 1;
       if (e.stock_status === 'em_estoque') stock.em_estoque += 1;
       else if (e.stock_status === 'repassado') stock.repassado += 1;
       else if (e.stock_status === 'cancelado') stock.cancelado += 1;
+      else if (e.stock_status === 'revertido') stock.revertido += 1;
       stockByLogId.set(e.transfer_log_id, stock);
     });
 
@@ -213,21 +416,32 @@ export async function GET(req: NextRequest) {
       const deadlineDays = log.deadline_days != null ? log.deadline_days : DEFAULT_DEADLINE;
       const expired = isTransferExpired(log.created_at, deadlineDays);
       const resInfo = resolutionByLogId.get(log.id);
-      const stockInfo = stockByLogId.get(log.id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0 };
+      const stockInfo = stockByLogId.get(log.id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0, revertido: 0 };
       let resolution_status_log: 'no_prazo' | 'expirada' | 'resolvida' = 'no_prazo';
       if (expired) {
         resolution_status_log = resInfo?.hasPending ? 'expirada' : 'resolvida';
       }
-      let stock_status_log: 'none' | 'em_estoque' | 'repassado' | 'cancelado_parcial' | 'cancelado_total' = 'none';
+      let stock_status_log:
+        | 'none'
+        | 'em_estoque'
+        | 'repassado'
+        | 'cancelado_parcial'
+        | 'cancelado_total'
+        | 'revertido_total'
+        | 'revertido_parcial' = 'none';
       if ((log.transfer_kind ?? 'standard') === 'admin_to_gerente_stock') {
-        if (stockInfo.cancelado > 0 && stockInfo.em_estoque === 0 && stockInfo.repassado === 0) {
-          stock_status_log = 'cancelado_total';
-        } else if (stockInfo.cancelado > 0) {
-          stock_status_log = 'cancelado_parcial';
-        } else if (stockInfo.em_estoque > 0) {
+        if (stockInfo.em_estoque > 0) {
           stock_status_log = 'em_estoque';
         } else if (stockInfo.repassado > 0) {
           stock_status_log = 'repassado';
+        } else if (stockInfo.revertido > 0 && stockInfo.cancelado === 0 && stockInfo.repassado === 0 && stockInfo.em_estoque === 0) {
+          stock_status_log = 'revertido_total';
+        } else if (stockInfo.revertido > 0) {
+          stock_status_log = 'revertido_parcial';
+        } else if (stockInfo.cancelado > 0 && stockInfo.em_estoque === 0 && stockInfo.repassado === 0) {
+          stock_status_log = 'cancelado_total';
+        } else if (stockInfo.cancelado > 0) {
+          stock_status_log = 'cancelado_parcial';
         }
       }
       const resInfoFull = resolutionByLogId.get(log.id);
@@ -244,6 +458,7 @@ export async function GET(req: NextRequest) {
         stock_pending_count: stockInfo.em_estoque,
         stock_repassado_count: stockInfo.repassado,
         stock_cancelado_count: stockInfo.cancelado,
+        stock_revertido_count: stockInfo.revertido,
         vinculado_count: resInfoFull?.vinculado ?? 0,
         disponivel_count: resInfoFull?.disponivel ?? 0,
       };

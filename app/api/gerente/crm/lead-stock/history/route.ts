@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { isLeadStockAdminViewer, requireLeadStockViewer } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { assertGerenteHasBanca, listGerenteUserIdsOnBanca } from '@/lib/server/crm/gerenteLeadStock';
+import { assertGerenteHasBanca } from '@/lib/server/crm/gerenteLeadStock';
 import { getAdminBancaId } from '@/lib/server/crm/adminLeadTransferContext';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -52,7 +52,15 @@ type HistoryItem = {
   stock_pending: number;
   stock_distributed: number;
   stock_canceled: number;
-  status_label: 'em_estoque' | 'repassado' | 'cancelado_total' | 'cancelado_parcial' | 'distribuido';
+  stock_reverted: number;
+  status_label:
+    | 'em_estoque'
+    | 'repassado'
+    | 'cancelado_total'
+    | 'cancelado_parcial'
+    | 'revertido_total'
+    | 'revertido_parcial'
+    | 'distribuido';
   stock_gerente_user_id?: string | null;
   stock_gerente_name?: string | null;
 };
@@ -130,34 +138,41 @@ export async function GET(req: NextRequest) {
         .eq('performed_by_user_id', stockScopeUserId);
       distributedLogsList = (Array.isArray(distributedLogs) ? distributedLogs : []) as LogRow[];
     } else {
-      const gerenteIds = await listGerenteUserIdsOnBanca(bancaId);
-      if (gerenteIds.length > 0) {
-        const { data: distributedLogs } = await supabaseServiceRole
-          .from('admin_lead_transfer_logs')
-          .select(
-            'id, banca_id, created_at, transfer_type, deadline_days, transfer_kind, performed_by_user_id, source_consultant_email, target_consultant_email, count, total_balance_snapshot'
-          )
-          .eq('banca_id', bancaId)
-          .eq('transfer_kind', 'gerente_stock_to_consultant')
-          .in('performed_by_user_id', gerenteIds);
-        distributedLogsList = (Array.isArray(distributedLogs) ? distributedLogs : []) as LogRow[];
-      }
+      /** Admin visão mesclada: todos os repasses estoque→consultor na banca (não filtrar só por lista de gerentes em user_bancas). */
+      const { data: distributedLogs } = await supabaseServiceRole
+        .from('admin_lead_transfer_logs')
+        .select(
+          'id, banca_id, created_at, transfer_type, deadline_days, transfer_kind, performed_by_user_id, source_consultant_email, target_consultant_email, count, total_balance_snapshot'
+        )
+        .eq('banca_id', bancaId)
+        .eq('transfer_kind', 'gerente_stock_to_consultant');
+      distributedLogsList = (Array.isArray(distributedLogs) ? distributedLogs : []) as LogRow[];
     }
 
     const stockByLogId = new Map<
       string,
-      { total: number; em_estoque: number; repassado: number; cancelado: number; balance: number; gerenteId: string | null }
+      {
+        total: number;
+        em_estoque: number;
+        repassado: number;
+        cancelado: number;
+        revertido: number;
+        balance: number;
+        gerenteId: string | null;
+      }
     >();
     for (const e of reservedEntriesList) {
       const lid = e.transfer_log_id;
       const gid = (e.stock_gerente_user_id ?? '').trim() || null;
       const cur =
-        stockByLogId.get(lid) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0, balance: 0, gerenteId: gid };
+        stockByLogId.get(lid) ??
+        { total: 0, em_estoque: 0, repassado: 0, cancelado: 0, revertido: 0, balance: 0, gerenteId: gid };
       if (!cur.gerenteId && gid) cur.gerenteId = gid;
       cur.total += 1;
       if (e.stock_status === 'em_estoque') cur.em_estoque += 1;
       else if (e.stock_status === 'repassado') cur.repassado += 1;
       else if (e.stock_status === 'cancelado') cur.cancelado += 1;
+      else if (e.stock_status === 'revertido') cur.revertido += 1;
       cur.balance += e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0;
       stockByLogId.set(lid, cur);
     }
@@ -220,13 +235,23 @@ export async function GET(req: NextRequest) {
         em_estoque: 0,
         repassado: 0,
         cancelado: 0,
+        revertido: 0,
         balance: 0,
         gerenteId: null,
       };
       let status_label: HistoryItem['status_label'] = 'em_estoque';
-      if (agg.em_estoque === 0 && agg.repassado > 0 && agg.cancelado === 0) status_label = 'repassado';
-      else if (agg.cancelado > 0 && agg.em_estoque === 0 && agg.repassado === 0) status_label = 'cancelado_total';
-      else if (agg.cancelado > 0) status_label = 'cancelado_parcial';
+      const { total: aggTotal, em_estoque, repassado, cancelado, revertido } = agg;
+      if (aggTotal > 0 && revertido === aggTotal) {
+        status_label = 'revertido_total';
+      } else if (revertido > 0) {
+        status_label = 'revertido_parcial';
+      } else if (em_estoque === 0 && repassado > 0 && cancelado === 0) {
+        status_label = 'repassado';
+      } else if (cancelado > 0 && em_estoque === 0 && repassado === 0) {
+        status_label = 'cancelado_total';
+      } else if (cancelado > 0) {
+        status_label = 'cancelado_parcial';
+      }
 
       const sourceEmailKey = (log.source_consultant_email ?? '').trim().toLowerCase();
       const targetEmailKey = (log.target_consultant_email ?? '').trim().toLowerCase();
@@ -250,8 +275,9 @@ export async function GET(req: NextRequest) {
         stock_pending: agg.em_estoque,
         stock_distributed: agg.repassado,
         stock_canceled: agg.cancelado,
+        stock_reverted: agg.revertido,
         status_label,
-        ...(mergedAdminAllGerentes && gid
+        ...(admin && gid
           ? {
               stock_gerente_user_id: gid,
               stock_gerente_name: gerenteNameById.get(gid) ?? null,
@@ -283,8 +309,9 @@ export async function GET(req: NextRequest) {
         stock_pending: 0,
         stock_distributed: 0,
         stock_canceled: 0,
+        stock_reverted: 0,
         status_label: 'distribuido',
-        ...(mergedAdminAllGerentes && perfId
+        ...(admin && perfId
           ? {
               stock_gerente_user_id: perfId,
               stock_gerente_name: performerNameById.get(perfId) ?? null,

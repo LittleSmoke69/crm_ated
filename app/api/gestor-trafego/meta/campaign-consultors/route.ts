@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { errorResponse, serverErrorResponse, successResponse } from '@/lib/utils/response';
-import { listConsultorsByBancaId, setCampaignConsultors } from '@/lib/services/meta-campaign-consultors';
+import { listConsultoresForAdsAttributionDropdown, setCampaignConsultors } from '@/lib/services/meta-campaign-consultors';
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     if (!bancaId) {
       return errorResponse('banca_id é obrigatório.', 400);
     }
-    const consultors = await listConsultorsByBancaId(bancaId);
+    const consultors = await listConsultoresForAdsAttributionDropdown(bancaId);
     return successResponse({ consultors });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado')) {

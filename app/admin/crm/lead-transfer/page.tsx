@@ -31,6 +31,7 @@ import {
   CheckCircle2,
   ChevronUp,
   CalendarPlus,
+  Mail,
   RotateCcw,
   Unlink,
   Pencil,
@@ -50,6 +51,192 @@ const BANCAS_DROPDOWN_VISIBLE = 4;
 const LOGS_PAGE_SIZE = 10;
 /** Limite único na requisição de logs: trazer tudo que a API retornar (sem limitador na aba Histórico). */
 const LOGS_REQUEST_LIMIT = 10_000_000;
+/** Histórico local de buscas por e-mail do lead (Histórico & Conversão) — persiste neste navegador. */
+const LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_KEY = 'zaploto_v1_lead_transfer_email_search_history';
+const LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_MAX = 40;
+
+type LeadTransferEmailSearchHistoryItem = {
+  /** E-mail normalizado (lowercase, trim) — chave única */
+  email: string;
+  /** Texto como digitado na última vez */
+  label: string;
+  at: string;
+  useCount: number;
+  /** Pacotes retornados pela API na última busca bem-sucedida (antes dos filtros locais da tabela). */
+  lastHits: number | null;
+  lastHitAt: string | null;
+  lastBancaId: string | null;
+};
+
+function formatRelativeTimePtBR(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const diffMs = Date.now() - d.getTime();
+    const sec = Math.floor(diffMs / 1000);
+    if (sec < 45) return 'agora há pouco';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `há ${min} min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `há ${h} h`;
+    const days = Math.floor(h / 24);
+    if (days < 14) return `há ${days} dia${days !== 1 ? 's' : ''}`;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+function parseEmailSearchHistoryFromStorage(raw: string | null): LeadTransferEmailSearchHistoryItem[] {
+  if (!raw) return [];
+  try {
+    const data = JSON.parse(raw) as unknown;
+    const items = (data as { items?: unknown })?.items ?? (data as unknown[]);
+    if (!Array.isArray(items)) return [];
+    const out: LeadTransferEmailSearchHistoryItem[] = [];
+    for (const row of items) {
+      if (!row || typeof row !== 'object') continue;
+      const o = row as Record<string, unknown>;
+      const email = typeof o.email === 'string' ? o.email.trim().toLowerCase() : '';
+      if (!email || email.length < 3) continue;
+      const label = typeof o.label === 'string' && o.label.trim() ? o.label.trim() : email;
+      const at = typeof o.at === 'string' ? o.at : new Date().toISOString();
+      const useCount = typeof o.useCount === 'number' && o.useCount >= 1 ? Math.floor(o.useCount) : 1;
+      const lastHits =
+        o.lastHits === null
+          ? null
+          : typeof o.lastHits === 'number' && Number.isFinite(o.lastHits)
+            ? Math.max(0, Math.floor(o.lastHits))
+            : null;
+      const lastHitAt = typeof o.lastHitAt === 'string' ? o.lastHitAt : null;
+      const lastBancaId = typeof o.lastBancaId === 'string' && o.lastBancaId.trim() ? o.lastBancaId.trim() : null;
+      out.push({ email, label, at, useCount, lastHits, lastHitAt, lastBancaId });
+    }
+    return out.slice(0, LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_MAX);
+  } catch {
+    return [];
+  }
+}
+
+/** Painel: buscas anteriores por e-mail de lead (transferências) com reaplicar e limpar. */
+function LeadTransferEmailSearchHistoryPanel({
+  items,
+  bancas,
+  onApply,
+  onRemove,
+  onClearAll,
+  loading,
+}: {
+  items: LeadTransferEmailSearchHistoryItem[];
+  bancas: { id: string; name?: string | null; url?: string | null }[];
+  onApply: (email: string) => void;
+  onRemove: (email: string) => void;
+  onClearAll: () => void;
+  loading: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+
+  const bancaLabel = (id: string | null) => {
+    if (!id) return 'Todas as bancas';
+    const b = bancas.find((x) => x.id === id);
+    return (b?.name || b?.url || id).trim();
+  };
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#1f1f1f]/80 mb-6 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-100/80 dark:hover:bg-[#2a2a2a]/80 transition-colors"
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <History className="w-5 h-5 text-[#8CD955] shrink-0" />
+          <span className="font-bold text-gray-900 dark:text-white text-sm">Histórico de buscas (e-mail do cliente)</span>
+          {items.length > 0 ? (
+            <span className="text-[11px] font-semibold tabular-nums px-2 py-0.5 rounded-full bg-[#8CD955]/20 text-[#5a7a35] dark:text-[#b8e86e] shrink-0">
+              {items.length}
+            </span>
+          ) : null}
+        </span>
+        <span className="flex items-center gap-2 shrink-0 text-xs text-gray-500 dark:text-gray-400">
+          {open ? 'Recolher' : 'Expandir'}
+          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-0 border-t border-gray-200 dark:border-[#404040]">
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 mb-2 leading-relaxed">
+            Salvo só neste navegador. Lista os e-mails de lead que você já pesquisou no histórico de transferências; mostra quantas transferências a API trouxe na última vez e em qual escopo de banca.
+          </p>
+          {items.length > 0 && (
+            <div className="flex justify-end mb-2">
+              <button
+                type="button"
+                onClick={onClearAll}
+                className="text-xs font-semibold text-red-600 dark:text-red-400 hover:underline"
+              >
+                Limpar todo o histórico
+              </button>
+            </div>
+          )}
+          {items.length === 0 ? (
+            <p className="text-sm text-gray-600 dark:text-gray-400 py-3 text-center rounded-lg border border-dashed border-gray-300 dark:border-[#555]">
+              Nenhuma busca salva ainda. Use «Buscar» acima com o e-mail do cliente; as pesquisas aparecerão aqui automaticamente.
+            </p>
+          ) : (
+            <ul className="max-h-64 overflow-y-auto space-y-1 pr-1">
+              {items.map((it) => (
+                <li
+                  key={it.email}
+                  className="rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-3 flex flex-wrap items-start justify-between gap-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-gray-900 dark:text-white text-sm truncate" title={it.label}>
+                      {it.label}
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0">
+                      <span>{[formatRelativeTimePtBR(it.at), it.useCount > 1 ? `${it.useCount} buscas` : null].filter(Boolean).join(' · ')}</span>
+                      {it.lastHits != null ? (
+                        <span className="text-gray-600 dark:text-gray-300">
+                          Último resultado: <strong className="font-semibold tabular-nums">{it.lastHits}</strong> pacote(s)
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 truncate" title={bancaLabel(it.lastBancaId)}>
+                      Banca no último uso: {bancaLabel(it.lastBancaId)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => onApply(it.email)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955]/20 text-[#5a7a35] dark:text-[#b8e86e] hover:bg-[#8CD955]/30 border border-[#8CD955]/40 disabled:opacity-50"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Buscar de novo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemove(it.email)}
+                      className="p-2 rounded-lg text-gray-500 hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-600 dark:hover:text-red-400"
+                      title="Remover desta lista"
+                      aria-label={`Remover ${it.label} do histórico`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Leads por página no modal "Leads da transferência" */
 const MODAL_LEADS_PAGE_SIZE = 10;
 /** Solicitações de leads: itens por página na aba Solicitações */
@@ -122,6 +309,62 @@ function getTransferDeadlineInfo(createdAt: string | null | undefined, deadlineD
   const expired = diffDays >= days;
   return { daysLeft, expired };
 }
+
+/** Snapshot para POST redistribute: prioriza CRM (name/last_name/email); senão usa lead_* gravados na entry. */
+function buildLeadSnapshotForRedistribute(e: Record<string, unknown>, leadId: string | number) {
+  const crmFull = [`${e.name ?? ''}`.trim(), `${e.last_name ?? ''}`.trim()].filter(Boolean).join(' ').trim();
+  const dbName = typeof e.lead_name === 'string' ? e.lead_name.trim() : '';
+  const nameOut = crmFull || dbName || null;
+  const emailRaw = e.email ?? e.lead_email;
+  const em = emailRaw != null && String(emailRaw).trim() !== '' ? String(emailRaw).trim().toLowerCase() : null;
+  const phoneRaw = e.phone ?? e.lead_phone;
+  const phone = phoneRaw != null && String(phoneRaw).trim() !== '' ? String(phoneRaw).trim() : null;
+  const lastInt =
+    (typeof e.last_interaction === 'string' && e.last_interaction.trim()) ||
+    (typeof e.last_interaction_snapshot === 'string' && e.last_interaction_snapshot.trim()) ||
+    (typeof e.created_at === 'string' ? e.created_at : null);
+  return {
+    lead_id: leadId,
+    email: em,
+    name: nameOut,
+    phone,
+    balance: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : e.balance != null ? Number(e.balance) : null,
+    last_interaction: lastInt,
+    total_depositado:
+      e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : e.total_depositado != null ? Number(e.total_depositado) : null,
+    total_apostado:
+      e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : e.total_apostado != null ? Number(e.total_apostado) : null,
+    total_ganho: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : e.total_ganho != null ? Number(e.total_ganho) : null,
+    available_withdraw: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
+    total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
+  };
+}
+
+/** Legível na pesquisa por e-mail: normal / expirada / resolvida / estoque / devolução. */
+function getPacoteEstadoHistoricoLabel(log: Record<string, unknown>): string {
+  if (log.devolvido_at) return 'Devolvido ao consultor de origem';
+
+  const fs = log.filters_snapshot;
+  if (fs != null && typeof fs === 'object' && (fs as { reverse_devolucao?: boolean }).reverse_devolucao) {
+    return 'Reverse (re-envio após devolução)';
+  }
+
+  const kind = String(log.transfer_kind ?? 'standard');
+  const stock = log.stock_status_log as string | undefined;
+  if (kind === 'admin_to_gerente_stock' && stock && stock !== 'none') {
+    if (stock === 'em_estoque') return 'No estoque do gerente (reserva ativa)';
+    if (stock === 'repassado') return 'Saiu do estoque — repassado ao consultor';
+    if (stock === 'cancelado_total') return 'Reserva de estoque cancelada';
+    if (stock === 'cancelado_parcial') return 'Reserva parcialmente cancelada';
+    return `Estoque: ${stock}`;
+  }
+
+  const rs = log.resolution_status_log as string | undefined;
+  if (rs === 'resolvida') return 'Expirada e resolvida (vinculados ou disponíveis para repasse)';
+  if (rs === 'expirada') return 'Expirada — pendente resolver leads';
+  return 'No prazo para conversão';
+}
+
 const STEPS = [
   { id: 1, label: 'Banca', short: 'Banca' },
   { id: 2, label: 'Consultor origem', short: 'Origem' },
@@ -441,6 +684,99 @@ function LeadTransferClientSearchField({
   );
 }
 
+/** Busca no servidor por e-mail do lead no histórico — mesmo destaque visual que «Buscar cliente» na aba de transferência. */
+function LeadTransferHistoryEmailSearchField({
+  draftValue,
+  onDraftChange,
+  appliedEmail,
+  onSearch,
+  onClearApplied,
+  loading,
+}: {
+  draftValue: string;
+  onDraftChange: (v: string) => void;
+  appliedEmail: string;
+  onSearch: () => void;
+  onClearApplied: () => void;
+  loading: boolean;
+}) {
+  const hasApplied = appliedEmail.trim().length > 0;
+  return (
+    <div className="rounded-xl border border-[#8CD955]/35 bg-gradient-to-r from-[#8CD955]/10 to-transparent dark:from-[#8CD955]/14 p-4 sm:p-5 mb-6 ring-1 ring-[#8CD955]/15 shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
+        <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white">
+          <Mail className="w-5 h-5 text-[#8CD955] shrink-0" />
+          Buscar no histórico por e-mail do lead
+        </label>
+        {hasApplied ? (
+          <span className="inline-flex items-center gap-1.5 self-start rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/15 px-2.5 py-1 text-xs font-semibold text-[#5a7a35] dark:text-[#b8e86e]">
+            <span className="opacity-80">Filtro ativo</span>
+            <span className="truncate max-w-[min(100vw-8rem,280px)]" title={appliedEmail}>
+              {appliedEmail}
+            </span>
+          </span>
+        ) : null}
+      </div>
+      <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
+        <div className="relative flex-1 min-w-0 max-w-4xl">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 dark:text-gray-400 pointer-events-none" />
+          <input
+            type="search"
+            enterKeyHint="search"
+            autoComplete="off"
+            value={draftValue}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onSearch();
+              }
+            }}
+            placeholder="E-mail do lead (ex.: cliente@gmail.com) — mín. 3 caracteres"
+            aria-label="E-mail do lead para buscar no histórico"
+            className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+          />
+          {draftValue.trim() !== '' && (
+            <button
+              type="button"
+              onClick={() => onDraftChange('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-[#404040]"
+              aria-label="Limpar texto digitado"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onSearch}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold bg-[#8CD955] text-white hover:bg-[#7BC84A] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[120px]"
+          >
+            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+            Buscar
+          </button>
+          {hasApplied ? (
+            <button
+              type="button"
+              onClick={onClearApplied}
+              disabled={loading}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold border-2 border-gray-300 dark:border-[#555] text-gray-800 dark:text-gray-100 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] disabled:opacity-50"
+            >
+              <X className="w-4 h-4" />
+              Limpar filtro
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="text-xs text-gray-600 dark:text-gray-400 mt-3 leading-relaxed">
+        A busca usa o <strong className="font-semibold text-gray-700 dark:text-gray-200">e-mail do lead</strong> digitado (ex.: mello.desp@gmail.com): primeiro nos registros gravados na própria transferência e também na tabela de leads sincronizados do CRM. Use <strong className="font-semibold text-gray-700 dark:text-gray-200">Buscar</strong> para recarregar no servidor; os filtros abaixo refinam o que já foi carregado.
+      </p>
+    </div>
+  );
+}
+
 export default function AdminLeadTransferPage() {
   const router = useTenantRouter();
   const { checking, userId, userStatus } = useRequireAuth();
@@ -464,6 +800,14 @@ export default function AdminLeadTransferPage() {
   const [balanceFilter, setBalanceFilter] = useState<string>('all');
   const [quantity, setQuantity] = useState<string>('10');
   const [leads, setLeads] = useState<Lead[]>([]);
+  /** Conferência opcional no Step 3: IDs atualmente em estoque da banca (stock_status='em_estoque'). */
+  const [stockGerenteFilterIds, setStockGerenteFilterIds] = useState<string[]>([]);
+  const [stockLeadIdsSet, setStockLeadIdsSet] = useState<Set<string>>(new Set());
+  const [stockLeadIdsList, setStockLeadIdsList] = useState<string[]>([]);
+  const [stockTransferredToGerenteIdsSet, setStockTransferredToGerenteIdsSet] = useState<Set<string>>(new Set());
+  const [stockTransferredToGerenteIdsList, setStockTransferredToGerenteIdsList] = useState<string[]>([]);
+  const [loadingStockLeadIds, setLoadingStockLeadIds] = useState(false);
+  const [stockLeadIdsLoaded, setStockLeadIdsLoaded] = useState(false);
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string | number>>(new Set());
 
   const [bancaSearchQuery, setBancaSearchQuery] = useState('');
@@ -533,6 +877,12 @@ export default function AdminLeadTransferPage() {
   const [conversionConsultant, setConversionConsultant] = useState('');
   /** Filtro por consultor doador na aba Histórico & Conversão: '' = não filtrar, ou email do consultor. */
   const [historyDonorConsultantFilter, setHistoryDonorConsultantFilter] = useState('');
+  /** Busca por e-mail do lead (valor digitado + último termo aplicado na API transfer-logs). */
+  const [historyLeadEmailDraft, setHistoryLeadEmailDraft] = useState('');
+  const [historyLeadEmailApplied, setHistoryLeadEmailApplied] = useState('');
+  const [leadTransferEmailSearchHistory, setLeadTransferEmailSearchHistory] = useState<LeadTransferEmailSearchHistoryItem[]>([]);
+  const [leadTransferEmailSearchHistoryHydrated, setLeadTransferEmailSearchHistoryHydrated] = useState(false);
+  const loadingLogsWasActiveRef = useRef(false);
   const [managementLoaded, setManagementLoaded] = useState(false);
   const [statsByBanca, setStatsByBanca] = useState<{ banca_id: string; banca_name: string; total_leads: number }[]>([]);
   const [loadingStatsByBanca, setLoadingStatsByBanca] = useState(false);
@@ -563,7 +913,7 @@ export default function AdminLeadTransferPage() {
     total_apostado_snapshot?: number | null;
     total_ganho_snapshot?: number | null;
     available_withdraw_snapshot?: number | null;
-    resolution_status?: 'pending' | 'vinculado' | 'disponivel_retransferencia';
+    resolution_status?: 'pending' | 'vinculado' | 'disponivel_retransferencia' | 'repassado';
     resolved_at?: string | null;
     current_total_depositado_at_resolution?: number | null;
     current_total_apostado_at_resolution?: number | null;
@@ -870,6 +1220,8 @@ export default function AdminLeadTransferPage() {
   const [showApagarModal, setShowApagarModal] = useState(false);
   const [logSelectedForApagar, setLogSelectedForApagar] = useState<typeof transferLogs[0] | null>(null);
   const [apagarLoading, setApagarLoading] = useState(false);
+  /** Histórico admin→estoque: restaurar leads cancelados no estoque (POST restore-canceled-stock) */
+  const [adminRestoreCanceledLoadingLogId, setAdminRestoreCanceledLoadingLogId] = useState<string | null>(null);
   /** Modal Reverse: re-transferir leads de uma devolução de volta para o consultor destino (quando CRM não mostrou corretamente) */
   const [showReverseModal, setShowReverseModal] = useState(false);
   const [logSelectedForReverse, setLogSelectedForReverse] = useState<typeof transferLogs[0] | null>(null);
@@ -2183,6 +2535,45 @@ export default function AdminLeadTransferPage() {
     }
   };
 
+  /** Step 3: carrega IDs ativos no estoque da banca (opcionalmente por gerente) para comparar com a coluna ID. */
+  const loadStockLeadIds = useCallback(async () => {
+    if (!bancaId || !userId) {
+      showToast('Selecione a banca para consultar o estoque.', 'error');
+      return;
+    }
+    setLoadingStockLeadIds(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('banca_id', bancaId);
+      if (stockGerenteFilterIds.length > 0) params.set('gerente_user_ids', stockGerenteFilterIds.join(','));
+      const res = await fetch(`/api/admin/crm/stock-leads-ids?${params.toString()}`, { headers: headers() });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        showToast(json?.error ?? 'Erro ao carregar IDs do estoque.', 'error');
+        return;
+      }
+      const ids = Array.isArray(json?.data?.ids)
+        ? json.data.ids.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
+        : [];
+      const transferidosGerenteIds = Array.isArray(json?.data?.transferidos_gerente_ids)
+        ? json.data.transferidos_gerente_ids.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
+        : [];
+      setStockLeadIdsList(ids);
+      setStockLeadIdsSet(new Set(ids));
+      setStockTransferredToGerenteIdsList(transferidosGerenteIds);
+      setStockTransferredToGerenteIdsSet(new Set(transferidosGerenteIds));
+      setStockLeadIdsLoaded(true);
+      showToast(
+        `${ids.length} ID(s) em estoque ativo e ${transferidosGerenteIds.length} ID(s) já transferido(s) ao gerente carregados.`,
+        'success'
+      );
+    } catch {
+      showToast('Erro ao carregar IDs do estoque.', 'error');
+    } finally {
+      setLoadingStockLeadIds(false);
+    }
+  }, [bancaId, stockGerenteFilterIds, userId, showToast]);
+
   /** Busca leads por período (e tag). Filtros (saldo, aposta, etc.) são aplicados no cliente. overrideSourceEmail: quando vindo da solicitação, evita depender do estado sourceEmail ainda não commitado. */
   const loadLeads = async (overrideDays?: string, overrideSourceEmail?: string) => {
     const effectiveSourceEmail = (overrideSourceEmail ?? sourceEmail)?.trim();
@@ -2474,6 +2865,36 @@ export default function AdminLeadTransferPage() {
     () => filteredLeads.reduce((acc, l) => acc + (parseFloat(String(l.balance ?? 0)) || 0), 0),
     [filteredLeads]
   );
+  const stockIdsInFilteredCount = React.useMemo(
+    () => filteredLeads.reduce((acc, l) => (stockLeadIdsSet.has(String(l.id)) ? acc + 1 : acc), 0),
+    [filteredLeads, stockLeadIdsSet]
+  );
+  const stockTransferredToGerenteInFilteredCount = React.useMemo(
+    () => filteredLeads.reduce((acc, l) => (stockTransferredToGerenteIdsSet.has(String(l.id)) ? acc + 1 : acc), 0),
+    [filteredLeads, stockTransferredToGerenteIdsSet]
+  );
+  /** Step 4: valida rapidamente se os IDs de estoque aparecem entre os clientes da tabela atual do consultor. */
+  const verifyStockIdsInConsultorTable = useCallback(() => {
+    if (!stockLeadIdsLoaded) {
+      showToast('Carregue os IDs do estoque antes de verificar.', 'error');
+      return;
+    }
+    const tableIds = filteredLeads.map((l) => String(l.id));
+    const inStockNowIds = tableIds.filter((id) => stockLeadIdsSet.has(id));
+    const transferredToGerenteIds = tableIds.filter((id) => stockTransferredToGerenteIdsSet.has(id));
+    const sample = inStockNowIds.slice(0, 12).join(', ');
+    if (transferredToGerenteIds.length > 0) {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        transferredToGerenteIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+    showToast(
+      `Verificação concluída: ${inStockNowIds.length}/${tableIds.length} IDs da tabela estão no estoque ativo; ${transferredToGerenteIds.length}/${tableIds.length} já foram transferidos ao gerente.${transferredToGerenteIds.length > 0 ? ` ${transferredToGerenteIds.length} lead(s) "Transf. gerente" foram pré-selecionado(s).` : ''}${sample ? ` Ex.: ${sample}` : ''}`,
+      'info'
+    );
+  }, [filteredLeads, stockLeadIdsLoaded, stockLeadIdsSet, stockTransferredToGerenteIdsSet, showToast]);
   const leadsToShow = showSelectedOnly && selectedLeadIds.size > 0
     ? filteredLeads.filter((l) => selectedLeadIds.has(String(l.id)))
     : filteredLeads;
@@ -2545,6 +2966,16 @@ export default function AdminLeadTransferPage() {
   useEffect(() => {
     setEstoqueGerenteId('');
   }, [bancaId]);
+
+  /** Limpa a conferência de estoque quando muda banca/origem. */
+  useEffect(() => {
+    setStockGerenteFilterIds([]);
+    setStockLeadIdsSet(new Set());
+    setStockLeadIdsList([]);
+    setStockTransferredToGerenteIdsSet(new Set());
+    setStockTransferredToGerenteIdsList([]);
+    setStockLeadIdsLoaded(false);
+  }, [bancaId, sourceEmail]);
 
   /** Aba dedicada: consultor vs estoque do gerente. */
   useEffect(() => {
@@ -2626,8 +3057,12 @@ export default function AdminLeadTransferPage() {
         const availableWithdraw = (lead as Record<string, unknown>)?.available_withdraw != null ? Number((lead as Record<string, unknown>).available_withdraw) : null;
         const leadName = [lead?.name, lead?.last_name].filter(Boolean).join(' ').trim() || null;
         const leadPhone = (lead?.phone ?? null) as string | null;
+        const rawEmail = (lead as { email?: string | null })?.email;
+        const leadEmail =
+          rawEmail != null && String(rawEmail).trim() !== '' ? String(rawEmail).trim().toLowerCase() : null;
         return {
           lead_id: id,
+          email: leadEmail,
           name: leadName,
           phone: leadPhone,
           balance: Number.isFinite(balance) ? balance : null,
@@ -2786,7 +3221,7 @@ export default function AdminLeadTransferPage() {
    */
   const loadTransferLogs = async (
     bancaIdForHistory?: string,
-    opts?: { fetchAllTransferKinds?: boolean }
+    opts?: { fetchAllTransferKinds?: boolean; leadEmail?: string | null }
   ): Promise<number> => {
     const effectiveBancaId = bancaIdForHistory !== undefined ? bancaIdForHistory : bancaId;
     const isAllBancas = effectiveBancaId === '' && bancaIdForHistory === '';
@@ -2814,6 +3249,11 @@ export default function AdminLeadTransferPage() {
       ) {
         params.set('transfer_kind', managementTransferKind.trim());
       }
+      const leadEmailParam =
+        opts && Object.prototype.hasOwnProperty.call(opts, 'leadEmail')
+          ? (opts.leadEmail ?? '').trim()
+          : historyLeadEmailApplied.trim();
+      if (leadEmailParam.length > 0) params.set('lead_email', leadEmailParam);
       params.set('offset', String(offset));
       params.set('limit', String(limit));
       return params;
@@ -2843,6 +3283,110 @@ export default function AdminLeadTransferPage() {
     } finally {
       if (runId === loadLogsRunIdRef.current) setLoadingLogs(false);
     }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_KEY);
+      setLeadTransferEmailSearchHistory(parseEmailSearchHistoryFromStorage(raw));
+    } catch {
+      setLeadTransferEmailSearchHistory([]);
+    }
+    setLeadTransferEmailSearchHistoryHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!leadTransferEmailSearchHistoryHydrated || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_KEY,
+        JSON.stringify({ v: 1, items: leadTransferEmailSearchHistory })
+      );
+    } catch {
+      /* quota ou modo privado */
+    }
+  }, [leadTransferEmailSearchHistory, leadTransferEmailSearchHistoryHydrated]);
+
+  const recordLeadEmailSearchInHistory = useCallback((rawQuery: string) => {
+    const trimmed = rawQuery.trim();
+    if (trimmed.length < 3) return;
+    const key = trimmed.toLowerCase();
+    setLeadTransferEmailSearchHistory((prev) => {
+      const existing = prev.find((x) => x.email === key);
+      const rest = prev.filter((x) => x.email !== key);
+      const item: LeadTransferEmailSearchHistoryItem = {
+        email: key,
+        label: trimmed,
+        at: new Date().toISOString(),
+        useCount: (existing?.useCount ?? 0) + 1,
+        lastHits: existing?.lastHits ?? null,
+        lastHitAt: existing?.lastHitAt ?? null,
+        lastBancaId: historyBancaFilter.trim() ? historyBancaFilter : null,
+      };
+      return [item, ...rest].slice(0, LEAD_TRANSFER_EMAIL_SEARCH_HISTORY_MAX);
+    });
+  }, [historyBancaFilter]);
+
+  useEffect(() => {
+    const wasLoading = loadingLogsWasActiveRef.current;
+    loadingLogsWasActiveRef.current = loadingLogs;
+    if (!wasLoading || loadingLogs || historyLeadEmailApplied.trim().length < 3) return;
+    const key = historyLeadEmailApplied.trim().toLowerCase();
+    const now = new Date().toISOString();
+    setLeadTransferEmailSearchHistory((prev) =>
+      prev.map((x) =>
+        x.email === key
+          ? {
+              ...x,
+              lastHits: transferLogs.length,
+              lastHitAt: now,
+              lastBancaId: historyBancaFilter.trim() ? historyBancaFilter : null,
+            }
+          : x
+      )
+    );
+  }, [loadingLogs, historyLeadEmailApplied, transferLogs.length, historyBancaFilter]);
+
+  const applyHistoryLeadEmailSearch = useCallback(
+    (email: string) => {
+      const e = email.trim();
+      if (e.length < 3) return;
+      setHistoryLeadEmailDraft(e);
+      setHistoryLeadEmailApplied(e);
+      recordLeadEmailSearchInHistory(e);
+      void loadTransferLogs(historyBancaFilter !== undefined ? historyBancaFilter : undefined, { leadEmail: e });
+    },
+    [historyBancaFilter, recordLeadEmailSearchInHistory, loadTransferLogs]
+  );
+
+  const removeLeadTransferEmailSearchHistoryItem = useCallback((email: string) => {
+    const key = email.trim().toLowerCase();
+    setLeadTransferEmailSearchHistory((prev) => prev.filter((x) => x.email !== key));
+  }, []);
+
+  const clearLeadTransferEmailSearchHistory = useCallback(() => {
+    setLeadTransferEmailSearchHistory([]);
+  }, []);
+
+  /** Histórico & Conversão: localizar pacotes que incluem um lead pelo e-mail (via API + crm_leads). */
+  const handleHistoryLeadEmailSearch = () => {
+    const q = historyLeadEmailDraft.trim();
+    if (q.length > 0 && q.length < 3) {
+      showToast('Use pelo menos 3 caracteres para filtrar pelo e-mail do lead (ou limpe o campo).', 'info');
+      return;
+    }
+    if (q.length >= 3) {
+      recordLeadEmailSearchInHistory(q);
+    }
+    setHistoryLeadEmailApplied(q);
+    void loadTransferLogs(historyBancaFilter !== undefined ? historyBancaFilter : undefined, { leadEmail: q });
+  };
+
+  const handleHistoryLeadEmailClear = () => {
+    setHistoryLeadEmailDraft('');
+    setHistoryLeadEmailApplied('');
+    void loadTransferLogs(historyBancaFilter !== undefined ? historyBancaFilter : undefined, { leadEmail: '' });
   };
 
   /** Devolve os leads do consultor destino de volta para o consultor origem (reverte a transferência). Registra no histórico. */
@@ -3414,22 +3958,9 @@ export default function AdminLeadTransferPage() {
     setMovingLeads(true);
     try {
       const modalEntriesById = new Map(disponivelEntries.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
-      const modalLeadSnapshots = leadIds.map((id) => {
-        const e = modalEntriesById.get(String(id)) ?? {} as Record<string, unknown>;
-        const leadName = [e.name, e.last_name].filter(Boolean).join(' ').trim() || null;
-        return {
-          lead_id: id,
-          name: leadName,
-          phone: (e.phone ?? null) as string | null,
-          balance: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : (e.balance != null ? Number(e.balance) : null),
-          last_interaction: (e.last_interaction ?? e.created_at ?? null) as string | null,
-          total_depositado: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : (e.total_depositado != null ? Number(e.total_depositado) : null),
-          total_apostado: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : (e.total_apostado != null ? Number(e.total_apostado) : null),
-          total_ganho: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : (e.total_ganho != null ? Number(e.total_ganho) : null),
-          available_withdraw: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
-          total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
-        };
-      });
+      const modalLeadSnapshots = leadIds.map((id) =>
+        buildLeadSnapshotForRedistribute(modalEntriesById.get(String(id)) ?? {}, id)
+      );
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers() },
@@ -4459,22 +4990,9 @@ export default function AdminLeadTransferPage() {
     setMoveLeadsMoving(true);
     try {
       const entriesById = new Map(moveLeadsEntries.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
-      const leadSnapshots = leadIds.map((id) => {
-        const e = entriesById.get(String(id)) ?? {} as Record<string, unknown>;
-        const leadName = [e.name, e.last_name].filter(Boolean).join(' ').trim() || null;
-        return {
-          lead_id: id,
-          name: leadName,
-          phone: (e.phone ?? null) as string | null,
-          balance: e.saldo_snapshot != null ? Number(e.saldo_snapshot) : (e.balance != null ? Number(e.balance) : null),
-          last_interaction: (e.last_interaction ?? e.created_at ?? null) as string | null,
-          total_depositado: e.total_depositado_snapshot != null ? Number(e.total_depositado_snapshot) : (e.total_depositado != null ? Number(e.total_depositado) : null),
-          total_apostado: e.total_apostado_snapshot != null ? Number(e.total_apostado_snapshot) : (e.total_apostado != null ? Number(e.total_apostado) : null),
-          total_ganho: e.total_ganho_snapshot != null ? Number(e.total_ganho_snapshot) : (e.total_ganho != null ? Number(e.total_ganho) : null),
-          available_withdraw: e.available_withdraw_snapshot != null ? Number(e.available_withdraw_snapshot) : null,
-          total_saque: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
-        };
-      });
+      const leadSnapshots = leadIds.map((id) =>
+        buildLeadSnapshotForRedistribute(entriesById.get(String(id)) ?? {}, id as string | number)
+      );
       const redistributePayload: Record<string, unknown> = {
         banca_id: moveLeadsSelectedLog.banca_id,
         source_consultant_email: moveLeadsSelectedLog.target_consultant_email,
@@ -5002,6 +5520,21 @@ export default function AdminLeadTransferPage() {
     return list;
   }, [transferLogsFiltered, logsSortField, logsSortOrder, leadTransferCountMap]);
 
+  /**
+   * Última transferência em que o e-mail buscado participou — entre as linhas já filtradas
+   * (e-mail na API + período, status, banca, etc.). Usa sempre `created_at` mais recente, independente da ordenação da tabela.
+   */
+  const lastTransferForSearchedLeadEmail = React.useMemo(() => {
+    const q = historyLeadEmailApplied.trim();
+    if (q.length < 3 || transferLogsFiltered.length === 0) return null;
+    const [first, ...rest] = transferLogsFiltered;
+    return rest.reduce((latest, log) => {
+      const latestTs = latest.created_at ? new Date(latest.created_at).getTime() : 0;
+      const logTs = log.created_at ? new Date(log.created_at).getTime() : 0;
+      return logTs >= latestTs ? log : latest;
+    }, first);
+  }, [historyLeadEmailApplied, transferLogsFiltered]);
+
   const totalLogsPages = Math.max(1, Math.ceil(transferLogsSorted.length / LOGS_PAGE_SIZE));
   const transferLogsPaginated = React.useMemo(
     () => transferLogsSorted.slice((logsPage - 1) * LOGS_PAGE_SIZE, logsPage * LOGS_PAGE_SIZE),
@@ -5022,12 +5555,29 @@ export default function AdminLeadTransferPage() {
   const modalEntriesFiltered = React.useMemo(() => {
     let list = [...modalEntries];
 
-    // Filtro de pesquisa
+    // Filtro de pesquisa (+ palavras-chave expirado / resolvido para localizar por estado do pacote ou da entry)
     if (modalSearch.trim()) {
-      const q = modalSearch.toLowerCase();
+      let qRaw = modalSearch.toLowerCase();
+      const wantExpired = /\bexpirad\w*\b/.test(qRaw);
+      const wantResolved = /\bresolv\w*\b/.test(qRaw);
+      qRaw = qRaw.replace(/\bexpirad\w*\b/g, ' ').replace(/\bresolv\w*\b/g, ' ').replace(/\s+/g, ' ').trim();
+      const q = qRaw;
+      const logDl = selectedLogForModal
+        ? getTransferDeadlineInfo(
+            selectedLogForModal.created_at,
+            (selectedLogForModal as { deadline_days?: number }).deadline_days
+          )
+        : { expired: false };
+
       list = list.filter((e) => {
+        if (wantExpired && !logDl.expired) return false;
+        if (wantResolved) {
+          const st = String(e.resolution_status ?? 'pending');
+          if (!['vinculado', 'disponivel_retransferencia', 'repassado'].includes(st)) return false;
+        }
+        if (!q) return true;
         const name = `${e.name || ''} ${e.last_name || ''}`.toLowerCase();
-        const email = (e.email || '').toLowerCase();
+        const email = `${e.email || ''}`.toLowerCase();
         const phone = (e.phone || '').toLowerCase();
         const whatsapp = (e.whatsapp || '').toLowerCase();
         const id = String(e.lead_id).toLowerCase();
@@ -5064,7 +5614,7 @@ export default function AdminLeadTransferPage() {
     }
 
     return list;
-  }, [modalEntries, modalSearch, modalSortField, modalSortOrder]);
+  }, [modalEntries, modalSearch, modalSortField, modalSortOrder, selectedLogForModal]);
 
   const totalModalLeadsPages = Math.max(1, Math.ceil(modalEntriesFiltered.length / MODAL_LEADS_PAGE_SIZE));
   const modalEntriesPaginated = React.useMemo(
@@ -5664,6 +6214,126 @@ export default function AdminLeadTransferPage() {
                     : 'Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.'}
                 </p>
               </div>
+
+              <LeadTransferHistoryEmailSearchField
+                draftValue={historyLeadEmailDraft}
+                onDraftChange={setHistoryLeadEmailDraft}
+                appliedEmail={historyLeadEmailApplied}
+                onSearch={handleHistoryLeadEmailSearch}
+                onClearApplied={handleHistoryLeadEmailClear}
+                loading={loadingLogs}
+              />
+
+              <LeadTransferEmailSearchHistoryPanel
+                items={leadTransferEmailSearchHistory}
+                bancas={bancas}
+                onApply={applyHistoryLeadEmailSearch}
+                onRemove={removeLeadTransferEmailSearchHistoryItem}
+                onClearAll={clearLeadTransferEmailSearchHistory}
+                loading={loadingLogs}
+              />
+
+              {historyLeadEmailApplied.trim().length >= 3 && (
+                <div className="mb-6 rounded-xl border border-[#8CD955]/35 bg-[#8CD955]/10 dark:bg-[#8CD955]/12 px-4 py-3.5 ring-1 ring-[#8CD955]/15">
+                  {loadingLogs ? (
+                    <p className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" />
+                      Carregando transferências para indicar em qual pacote este e-mail apareceu por último…
+                    </p>
+                  ) : lastTransferForSearchedLeadEmail ? (
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <History className="w-4 h-4 text-[#8CD955] shrink-0" />
+                        <span className="text-sm font-bold text-gray-900 dark:text-white">
+                          Última transferência com este e-mail
+                        </span>
+                        <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+                          (entre os resultados do recorte: filtros de período, banca, status etc.)
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-800 dark:text-gray-200 pl-6">
+                        {(() => {
+                          const log = lastTransferForSearchedLeadEmail as {
+                            id?: string;
+                            banca_id?: string;
+                            created_at?: string | null;
+                            transfer_type?: string | null;
+                            transfer_kind?: string | null;
+                            source_consultant_email?: string | null;
+                            target_consultant_email?: string | null;
+                            source_consultant_name?: string | null;
+                            target_consultant_name?: string | null;
+                            resolution_status_log?: string | null;
+                            stock_status_log?: string | null;
+                            devolvido_at?: string | null;
+                            filters_snapshot?: Record<string, unknown> | null;
+                          };
+                          const estadoPacote = getPacoteEstadoHistoricoLabel(log as Record<string, unknown>);
+                          const kind = (log.transfer_kind ?? 'standard').trim();
+                          const fluxo =
+                            kind === 'admin_to_gerente_stock'
+                              ? 'Envio ao estoque do gerente'
+                              : kind === 'gerente_stock_to_consultant'
+                                ? 'Saída do estoque → consultor'
+                                : 'Transferência direta (consultor → consultor)';
+                          const bancaNome =
+                            log.banca_id != null
+                              ? (bancas.find((b) => b.id === log.banca_id)?.name ||
+                                  bancas.find((b) => b.id === log.banca_id)?.url ||
+                                  log.banca_id)
+                              : '—';
+                          const quando = log.created_at ? formatDatePtBR(log.created_at) : '—';
+                          const origem = (log.source_consultant_name ?? log.source_consultant_email ?? '—').toString();
+                          const destino = (log.target_consultant_name ?? log.target_consultant_email ?? '—').toString();
+                          const tf = (log.transfer_type ?? 'TF').trim() || 'TF';
+                          const idCurto = log.id ? `${log.id.slice(0, 8)}…` : '—';
+                          return (
+                            <>
+                              <strong className="font-semibold text-[#6B8E3F] dark:text-[#b8e86e]">{quando}</strong>
+                              {' · '}
+                              <span className="text-gray-600 dark:text-gray-400">{fluxo}</span>
+                              {' · '}
+                              <span className="font-medium">{tf}</span>
+                              <br />
+                              <span className="text-gray-600 dark:text-gray-400 text-xs mt-1 inline-block">
+                                Banca: {bancaNome}
+                                {' · '}
+                                Pacote: <span className="font-mono">{idCurto}</span>
+                              </span>
+                              <br />
+                              <span className="block text-xs text-gray-700 dark:text-gray-300 mt-2 space-y-1">
+                                <span className="block">
+                                  <span className="text-gray-500 dark:text-gray-400 font-medium">Doador (origem):</span>{' '}
+                                  <span className="font-medium text-gray-900 dark:text-white">{origem}</span>
+                                </span>
+                                <span className="block">
+                                  <span className="text-gray-500 dark:text-gray-400 font-medium">Destino (quem recebeu):</span>{' '}
+                                  <span className="font-medium text-gray-900 dark:text-white">{destino}</span>
+                                </span>
+                                <span className="block pt-0.5 border-t border-[#8CD955]/25 mt-1.5">
+                                  <span className="text-gray-500 dark:text-gray-400 font-medium">Estado do pacote:</span>{' '}
+                                  <span className="text-[#6B8E3F] dark:text-[#c8f090] font-semibold">{estadoPacote}</span>
+                                </span>
+                              </span>
+                            </>
+                          );
+                        })()}
+                      </p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 pl-6 pt-1 border-t border-[#8CD955]/20 mt-2">
+                        Ordenar a tabela por outra coluna não muda este resumo: ele sempre usa a data mais recente entre as linhas que passaram nos filtros atuais.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>
+                        Nenhuma transferência no recorte atual inclui este e-mail. Amplie o período, limpe outros filtros ou verifique se há dados de e-mail nas transferências registradas.
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Filtros: mesmo layout para todos (label + controle + legenda) */}
               <div className="p-4 rounded-xl border border-gray-200 dark:border-[#404040] mb-6 bg-gray-50/50 dark:bg-[#1f1f1f]/50">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
@@ -6525,6 +7195,24 @@ export default function AdminLeadTransferPage() {
                   O KPI &quot;Transferências expiradas&quot; mostra <strong>{expiredTotals.total_expired_logs}</strong> no total. A tabela abaixo exibe apenas as <strong>{transferLogsFiltered.length}</strong> que já estão no lote carregado do histórico. Para ver todas, selecione uma banca no filtro ou aguarde o carregamento em segundo plano.
                 </p>
               )}
+              {historyLeadEmailApplied.trim().length >= 3 && (
+                <div className="mb-4 rounded-xl border border-sky-200 dark:border-sky-800/80 bg-sky-50/90 dark:bg-sky-950/35 px-4 py-3 text-sm text-gray-800 dark:text-gray-200 ring-1 ring-sky-100 dark:ring-sky-900/40">
+                  <p className="font-semibold text-sky-900 dark:text-sky-100 flex flex-wrap items-center gap-2">
+                    <span>Pesquisa por e-mail do lead</span>
+                    <span className="text-xs font-normal px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/30 border border-sky-200 dark:border-sky-700 tabular-nums">
+                      {transferLogsFiltered.length} pacote(s) no recorte atual
+                    </span>
+                  </p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-2 leading-relaxed">
+                    Cada linha é uma transferência em que esse e-mail aparece (CRM, snapshot gravado ou histórico JSON). Use a coluna{' '}
+                    <strong className="text-gray-800 dark:text-gray-200">Doador</strong> para ver de qual consultor o lead saiu;{' '}
+                    <strong className="text-gray-800 dark:text-gray-200">Destino</strong> para quem foi enviado;{' '}
+                    <strong className="text-gray-800 dark:text-gray-200">Fluxo</strong> para direta, estoque do gerente ou saída do estoque;{' '}
+                    <strong className="text-gray-800 dark:text-gray-200">Prazo</strong> para saber se o pacote está{' '}
+                    <em>no prazo</em>, <em>expirado</em> ou já <em>resolvido</em> (após o prazo). Combine com os filtros de período e status acima para refinar.
+                  </p>
+                </div>
+              )}
               <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm bg-white dark:bg-[#2a2a2a]">
                 <table className="w-full text-sm min-w-[1000px]">
                   <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
@@ -6533,15 +7221,34 @@ export default function AdminLeadTransferPage() {
                       <ThSort field="created_at" label="Data/Hora" className="w-[140px]" />
                       <ThSort field="transfer_type" label="Tipo" className="w-[52px]" />
                       <ThSort field="transfer_kind" label="Fluxo" className="w-[140px]" title="Se a transferência foi direta (consultor→consultor) ou via estoque do gerente" />
-                      <ThSort field="source" label="Origem" className="min-w-[120px]" />
-                      <ThSort field="target" label="Destino" className="min-w-[120px]" />
+                      <ThSort
+                        field="source"
+                        label={historyLeadEmailApplied.trim().length >= 3 ? 'Doador (origem)' : 'Origem'}
+                        className="min-w-[120px]"
+                        title={historyLeadEmailApplied.trim().length >= 3 ? 'Consultor que cedeu o lead (doador)' : undefined}
+                      />
+                      <ThSort
+                        field="target"
+                        label={historyLeadEmailApplied.trim().length >= 3 ? 'Quem recebeu' : 'Destino'}
+                        className="min-w-[120px]"
+                        title={historyLeadEmailApplied.trim().length >= 3 ? 'Consultor ou estoque que recebeu o pacote' : undefined}
+                      />
                       <ThSort field="performed_by" label="Quem fez" className="w-[90px]" />
                       <ThSort field="count" label="Qtd" className="w-[56px]" />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]" title="Período de inatividade (dias) usado na busca desse pacote">Inatividade</th>
                       <ThSort field="total_balance" label="Total saldo (antes)" className="w-[120px]" title="Soma dos saldos no momento da transferência" />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white min-w-[140px]">Leads (IDs)</th>
                       <ThSort field="re_transfer" label="Re-transfer." className="w-[90px]" />
-                      <ThSort field="prazo" label="Prazo" className="w-[130px]" title="Dias restantes para conversão (prazo definido na transferência)" />
+                      <ThSort
+                        field="prazo"
+                        label={historyLeadEmailApplied.trim().length >= 3 ? 'Prazo / estado' : 'Prazo'}
+                        className="w-[130px]"
+                        title={
+                          historyLeadEmailApplied.trim().length >= 3
+                            ? 'No prazo, expirada ou resolvida; ou estado da reserva no estoque do gerente'
+                            : 'Dias restantes para conversão (prazo definido na transferência)'
+                        }
+                      />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]" title="Leads vinculados a um consultor (que realmente converteram) vs disponíveis para repasse">Conversão</th>
                       <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
@@ -6623,8 +7330,26 @@ export default function AdminLeadTransferPage() {
                                 );
                               })()}
                             </td>
-                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={origemEmail ?? undefined}>{origemNome}</td>
-                            <td className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]" title={destinoEmail ?? undefined}>{destinoNome}</td>
+                            <td
+                              className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]"
+                              title={
+                                historyLeadEmailApplied.trim().length >= 3
+                                  ? `Doador (consultor origem): ${origemEmail ?? ''}`.trim()
+                                  : origemEmail ?? undefined
+                              }
+                            >
+                              {origemNome}
+                            </td>
+                            <td
+                              className="py-3 px-4 text-gray-600 dark:text-white truncate max-w-[140px]"
+                              title={
+                                historyLeadEmailApplied.trim().length >= 3
+                                  ? `Quem recebeu (destino): ${destinoEmail ?? ''}`.trim()
+                                  : destinoEmail ?? undefined
+                              }
+                            >
+                              {destinoNome}
+                            </td>
                             <td className="py-3 px-4 text-gray-700 dark:text-white truncate max-w-[80px]" title={quemFez}>{(quemFez as string) !== '-' ? quemFez : '-'}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums">{(log.count != null && Number(log.count) > 0) ? Number(log.count) : ids.length}</td>
                             <td className="py-3 px-4 text-gray-600 dark:text-white tabular-nums" title="Período de inatividade usado na busca">{inactiveDisplay}</td>
@@ -6635,6 +7360,7 @@ export default function AdminLeadTransferPage() {
                               const stockStatus = (log as { stock_status_log?: string }).stock_status_log;
                               if (stockStatus === 'cancelado_total') return 'Pacote de estoque cancelado pelo admin: nenhum lead permanece ativo neste estoque.';
                               if (stockStatus === 'cancelado_parcial') return 'Pacote de estoque parcialmente cancelado: parte dos leads foi cancelada.';
+                              if (stockStatus === 'revertido_total' || stockStatus === 'revertido_parcial') return 'Reserva de estoque encerrada: leads devolvidos ao consultor de origem (Zaploto/CRM conforme aplicável).';
                               if ((log as { devolvido_at?: string }).devolvido_at) return 'Leads desta transferência foram devolvidos ao consultor de origem.';
                               if (isReverse) return 'Transferência reverse (re-envio após devolução).';
                               if ((log as { resolution_status_log?: string }).resolution_status_log === 'resolvida') return 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).';
@@ -6664,6 +7390,17 @@ export default function AdminLeadTransferPage() {
                                     <span className="inline-flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400 font-medium">
                                       <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
                                       Repassado
+                                    </span>
+                                  );
+                                }
+                                if (stockStatus === 'revertido_total' || stockStatus === 'revertido_parcial') {
+                                  const revN = Number((log as { stock_revertido_count?: number }).stock_revertido_count ?? 0);
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400 font-medium">
+                                      <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
+                                      {stockStatus === 'revertido_parcial'
+                                        ? `Devolvido parcial${revN > 0 ? ` (${revN})` : ''}`
+                                        : 'Devolvido'}
                                     </span>
                                   );
                                 }
@@ -6732,7 +7469,16 @@ export default function AdminLeadTransferPage() {
                               <div className="flex flex-wrap items-center justify-center gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => { setSelectedLogForModal(log); setShowExtendDeadlineModal(false); }}
+                                  onClick={() => {
+                                    setSelectedLogForModal(log);
+                                    setShowExtendDeadlineModal(false);
+                                    const applied = historyLeadEmailApplied.trim();
+                                    if (applied.length >= 3) {
+                                      setModalSearch(applied);
+                                    } else {
+                                      setModalSearch('');
+                                    }
+                                  }}
                                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
                                   title="Ver detalhes dos leads transferidos"
                                 >
@@ -6761,34 +7507,174 @@ export default function AdminLeadTransferPage() {
                                     type="button"
                                     onClick={async () => {
                                       if (!userId) return;
-                                      if (!window.confirm('Cancelar todas as reservas ainda em estoque deste pacote? Leads já repassados não são afetados.')) return;
+                                      if (
+                                        !window.confirm(
+                                          'Devolver ao consultor de origem todos os leads deste pacote: os que ainda estão só na reserva de estoque e os que já foram repassados para um consultor (CRM + Zaploto). Requer CRM configurado na banca para leads já repassados.'
+                                        )
+                                      )
+                                        return;
                                       try {
-                                        const res = await fetch('/api/admin/crm/cancel-stock-reservation', {
+                                        const res = await fetch('/api/admin/crm/release-stock-reservation-to-origin', {
                                           method: 'POST',
                                           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
                                           body: JSON.stringify({ transfer_log_id: log.id }),
                                         });
                                         const json = await res.json();
                                         if (res.ok && json.success) {
-                                          showToast(json.message ?? 'Reserva cancelada.', 'success');
+                                          showToast(json.message ?? 'Reserva encerrada e leads devolvidos à origem.', 'success');
                                           await loadTransferLogs(historyBancaFilter || undefined);
+                                          await loadTransferStats();
                                         } else {
-                                          showToast(json?.error ?? 'Erro ao cancelar reserva.', 'error');
+                                          showToast(json?.error ?? 'Erro ao devolver reserva ao consultor de origem.', 'error');
                                         }
                                       } catch {
-                                        showToast('Erro ao cancelar reserva.', 'error');
+                                        showToast('Erro ao devolver reserva ao consultor de origem.', 'error');
                                       }
                                     }}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20 border border-red-500/40 transition-colors"
-                                    title="Cancela as reservas ainda em estoque (não afeta leads já repassados) — não move nada no CRM"
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-500/20 border border-emerald-500/40 transition-colors"
+                                    title="Devolve todos os leads ao consultor de origem: repasses Estoque→Consultor revertidos no CRM; reserva em estoque sincronizada quando aplicável; pacote marcado como revertido no Zaploto"
                                   >
-                                    <X className="w-3.5 h-3.5" />
-                                    Cancelar reserva
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                    Devolver à origem
                                   </button>
                                 )}
+                                {((log as { transfer_kind?: string }).transfer_kind === 'admin_to_gerente_stock') &&
+                                  (() => {
+                                    const stockStatusRow = (log as { stock_status_log?: string }).stock_status_log;
+                                    const stockCanceladosRow = Number(
+                                      (log as { stock_cancelado_count?: number }).stock_cancelado_count ?? 0
+                                    );
+                                    const hasCanceledStock =
+                                      stockCanceladosRow > 0 ||
+                                      stockStatusRow === 'cancelado_total' ||
+                                      stockStatusRow === 'cancelado_parcial';
+                                    if (!hasCanceledStock) return null;
+                                    const gerenteStockId =
+                                      filtersSnapshot != null && typeof filtersSnapshot === 'object'
+                                        ? String(
+                                            (filtersSnapshot as { gerente_stock_gerente_id?: string }).gerente_stock_gerente_id ??
+                                              ''
+                                          ).trim()
+                                        : '';
+                                    return (
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          !userId ||
+                                          !logBancaId ||
+                                          !gerenteStockId ||
+                                          adminRestoreCanceledLoadingLogId === log.id
+                                        }
+                                        title={
+                                          !gerenteStockId
+                                            ? 'Pacote sem gerente de estoque no registro; não é possível restaurar.'
+                                            : 'Cancelados no estoque voltam a em estoque para redistribuir (CRM não alterado automaticamente).'
+                                        }
+                                        onClick={async () => {
+                                          if (!userId || !logBancaId || !gerenteStockId) return;
+                                          const nLabel =
+                                            stockCanceladosRow > 0
+                                              ? `${stockCanceladosRow} lead(s) cancelado(s)`
+                                              : 'lead(s) cancelado(s)';
+                                          if (
+                                            !window.confirm(
+                                              `Restaurar ${nLabel} no estoque ativo deste gerente? Eles voltam a \"em estoque\" para distribuir de novo.`
+                                            )
+                                          )
+                                            return;
+                                          setAdminRestoreCanceledLoadingLogId(log.id);
+                                          try {
+                                            const res = await fetch('/api/gerente/crm/restore-canceled-stock', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+                                              body: JSON.stringify({
+                                                banca_id: logBancaId,
+                                                transfer_log_id: log.id,
+                                                gerente_user_id: gerenteStockId,
+                                              }),
+                                            });
+                                            const json = await res.json();
+                                            if (res.ok && json.success) {
+                                              showToast(json.message ?? 'Cancelados restaurados no estoque.', 'success');
+                                              await loadTransferLogs(historyBancaFilter || undefined);
+                                            } else {
+                                              showToast(json?.error ?? 'Erro ao restaurar cancelados.', 'error');
+                                            }
+                                          } catch {
+                                            showToast('Erro ao restaurar cancelados.', 'error');
+                                          } finally {
+                                            setAdminRestoreCanceledLoadingLogId(null);
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-900 dark:text-amber-100 hover:bg-amber-500/25 border border-amber-500/45 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {adminRestoreCanceledLoadingLogId === log.id ? (
+                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <RotateCcw className="w-3.5 h-3.5" />
+                                        )}
+                                        Reverter cancel.
+                                      </button>
+                                    );
+                                  })()}
                                 {(() => {
                                   const transferKind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
                                   const isStockReservation = transferKind === 'admin_to_gerente_stock';
+                                  if (transferKind === 'gerente_stock_to_consultant') {
+                                    const reversed =
+                                      filtersSnapshot != null &&
+                                      typeof filtersSnapshot === 'object' &&
+                                      (filtersSnapshot as { reversed_at?: string }).reversed_at;
+                                    if (reversed) {
+                                      return (
+                                        <span
+                                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-orange-500/15 text-orange-700 dark:text-orange-300 border border-orange-500/35"
+                                          title="Repasse estoque→consultor revertido: leads no CRM voltaram ao doador; estoque do gerente restaurado."
+                                        >
+                                          <RotateCcw className="w-3 h-3 flex-shrink-0" />
+                                          Repasse revertido
+                                        </span>
+                                      );
+                                    }
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          if (!userId || !logBancaId) return;
+                                          if (
+                                            !window.confirm(
+                                              'Reverter este repasse do estoque? Os leads voltam ao consultor doador no CRM e as reservas voltam ao estoque do gerente (em estoque).'
+                                            )
+                                          )
+                                            return;
+                                          try {
+                                            const res = await fetch('/api/admin/crm/reverse-gerente-stock-repass', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+                                              body: JSON.stringify({
+                                                transfer_log_id: log.id,
+                                                banca_id: logBancaId,
+                                              }),
+                                            });
+                                            const json = await res.json();
+                                            if (res.ok && json.success) {
+                                              showToast(json.message ?? 'Repasse revertido.', 'success');
+                                              await loadTransferLogs(historyBancaFilter || undefined);
+                                            } else {
+                                              showToast(json?.error ?? 'Erro ao reverter repasse.', 'error');
+                                            }
+                                          } catch {
+                                            showToast('Erro ao reverter repasse.', 'error');
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-orange-500/15 text-orange-800 dark:text-orange-200 hover:bg-orange-500/25 border border-orange-500/45 transition-colors"
+                                        title="Devolve no CRM do consultor destino ao consultor doador e restaura o estoque do gerente"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                        Reverter repasse
+                                      </button>
+                                    );
+                                  }
                                   if (isStockReservation) {
                                     return (
                                       <button
@@ -7022,11 +7908,15 @@ export default function AdminLeadTransferPage() {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                         <input
                           type="text"
-                          placeholder="Pesquisar leads..."
+                          placeholder="Nome, e-mail, telefone, ID… Use também expirado ou resolvido para filtrar."
                           value={modalSearch}
                           onChange={(e) => setModalSearch(e.target.value)}
                           className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] transition-all"
+                          aria-describedby="modal-leads-search-hint"
                         />
+                        <p id="modal-leads-search-hint" className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-snug">
+                          O e-mail aparece abaixo do nome na coluna <strong className="font-semibold text-gray-600 dark:text-gray-300">NOME</strong>. Digite <strong className="font-semibold text-gray-600 dark:text-gray-300">expirado</strong> para só leads do pacote já fora do prazo (pendentes) ou <strong className="font-semibold text-gray-600 dark:text-gray-300">resolvido</strong> para quem já está vinculado / disponível para repasse / repassado.
+                        </p>
                       </div>
                     </div>
                     {backfillingBalances && (
@@ -7300,6 +8190,12 @@ export default function AdminLeadTransferPage() {
                               </thead>
                               <tbody>
                                 {modalEntriesPaginated.map((entry, idx) => {
+                                  const modalLogDl = selectedLogForModal
+                                    ? getTransferDeadlineInfo(
+                                        selectedLogForModal.created_at,
+                                        (selectedLogForModal as { deadline_days?: number }).deadline_days
+                                      )
+                                    : { expired: false };
                                   const hasCrmData = Boolean([entry.name, entry.last_name].filter(Boolean).join(' ').trim() || (entry.email ?? '').trim() || entry.phone || entry.whatsapp);
                                   const fullName = [entry.name, entry.last_name].filter(Boolean).join(' ').trim() || (hasCrmData ? '-' : 'Sem atualização');
                                   const phone = entry.phone || entry.whatsapp || '-';
@@ -7350,6 +8246,16 @@ export default function AdminLeadTransferPage() {
                                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                                             <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                                             Repasse Disp.
+                                          </span>
+                                        ) : entry.resolution_status === 'repassado' ? (
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+                                            Repassado
+                                          </span>
+                                        ) : String(entry.resolution_status ?? 'pending') === 'pending' && modalLogDl.expired ? (
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                                            Expirado (pacote)
                                           </span>
                                         ) : (
                                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-gray-500/10 text-gray-600 dark:text-gray-400 border border-gray-500/20">
@@ -7810,6 +8716,89 @@ export default function AdminLeadTransferPage() {
                   {hasSearchedLeads && !loadingLeads && sortedLeads.length > 0 && (
                     <LeadTransferClientSearchField value={leadSearchQuery} onChange={setLeadSearchQuery} />
                   )}
+                  <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f] p-3">
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Estoque da banca (gerente)</label>
+                        <select
+                          multiple
+                          value={stockGerenteFilterIds}
+                          onChange={(e) =>
+                            setStockGerenteFilterIds(Array.from(e.currentTarget.selectedOptions).map((opt) => opt.value))
+                          }
+                          disabled={!bancaId || loadingStockLeadIds}
+                          className="min-w-[260px] max-w-[340px] h-[96px] border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800"
+                          title="Escolha um ou mais gerentes (Ctrl/Cmd+clique para seleção múltipla)"
+                        >
+                          {gerentesForStockOptions.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {(g.full_name || g.email || g.id).trim()}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                          {stockGerenteFilterIds.length === 0 ? 'Sem filtro: todos os gerentes' : `${stockGerenteFilterIds.length} gerente(s) selecionado(s)`}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setStockGerenteFilterIds(gerentesForStockOptions.map((g) => g.id))}
+                            className="text-[11px] px-2 py-1 rounded border border-gray-300 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                          >
+                            Marcar todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStockGerenteFilterIds([])}
+                            className="text-[11px] px-2 py-1 rounded border border-gray-300 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { void loadStockLeadIds(); }}
+                        disabled={!bancaId || loadingStockLeadIds}
+                        className="px-3 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      >
+                        {loadingStockLeadIds ? 'Carregando IDs do estoque...' : 'Carregar IDs do estoque'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                      Mostra os IDs em <strong className="font-medium text-gray-800 dark:text-gray-200">estoque ativo</strong> da banca e marca na tabela quais IDs também estão no estoque.
+                    </p>
+                    {stockLeadIdsLoaded && (
+                      <div className="mt-2 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                        <p>
+                          IDs no estoque: <strong>{stockLeadIdsList.length}</strong>
+                          {hasSearchedLeads ? (
+                            <>
+                              {' '}· IDs do estoque visíveis na tabela: <strong>{stockIdsInFilteredCount}</strong>
+                              {' '}· IDs já transferidos ao gerente visíveis: <strong>{stockTransferredToGerenteInFilteredCount}</strong>
+                            </>
+                          ) : null}
+                        </p>
+                        <p>
+                          IDs transferidos para estoque do gerente (histórico):{' '}
+                          <strong>{stockTransferredToGerenteIdsList.length}</strong>
+                        </p>
+                        <p className="font-mono break-all">
+                          {stockLeadIdsList.length > 0
+                            ? stockLeadIdsList.slice(0, 60).join(', ') + (stockLeadIdsList.length > 60 ? ` ... +${stockLeadIdsList.length - 60}` : '')
+                            : 'Nenhum ID em estoque ativo para este filtro.'}
+                        </p>
+                        <p className="font-mono break-all">
+                          {stockTransferredToGerenteIdsList.length > 0
+                            ? stockTransferredToGerenteIdsList.slice(0, 60).join(', ') +
+                              (stockTransferredToGerenteIdsList.length > 60
+                                ? ` ... +${stockTransferredToGerenteIdsList.length - 60}`
+                                : '')
+                            : 'Nenhum ID já transferido para estoque do gerente neste filtro.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-4 items-end">
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Inatividade (dias)</label>
@@ -7989,6 +8978,8 @@ export default function AdminLeadTransferPage() {
                             {filteredLeads.slice(0, 100).map((lead) => {
                               const name = String(lead.name ?? lead.full_name ?? lead.email ?? '-');
                               const email = String(lead.email ?? '');
+                              const isInStockNow = stockLeadIdsSet.has(String(lead.id));
+                              const isTransferredToGerenteStock = stockTransferredToGerenteIdsSet.has(String(lead.id));
                               const totalDepositado = lead.total_depositado != null ? parseFloat(String(lead.total_depositado)) : null;
                               const balance = lead.balance != null ? parseFloat(String(lead.balance)) : null;
                               const totalApostado = lead.total_apostado != null ? parseFloat(String(lead.total_apostado)) : null;
@@ -7998,7 +8989,21 @@ export default function AdminLeadTransferPage() {
                               const fmt = (v: number | null) => (v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',')}` : '-');
                               return (
                                 <tr key={String(lead.id)} className="border-t border-gray-100 dark:border-[#404040]">
-                                  <td className="p-2 font-mono text-gray-600 dark:text-gray-400 text-xs">{String(lead.id)}</td>
+                                  <td className="p-2">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-mono text-gray-600 dark:text-gray-400 text-xs">{String(lead.id)}</span>
+                                      {isInStockNow ? (
+                                        <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30">
+                                          Estoque
+                                        </span>
+                                      ) : null}
+                                      {!isInStockNow && isTransferredToGerenteStock ? (
+                                        <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30">
+                                          Transf. gerente
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </td>
                                   <td className="p-2 min-w-0 max-w-[200px]">
                                     <span className="block font-medium text-gray-800 dark:text-gray-200 truncate" title={name}>{name}</span>
                                     {email ? <span className="block text-xs text-gray-500 dark:text-gray-400 truncate" title={email}>{email}</span> : null}
@@ -8188,6 +9193,58 @@ export default function AdminLeadTransferPage() {
                   )}
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                     <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Estoque:</span>
+                        <select
+                          multiple
+                          value={stockGerenteFilterIds}
+                          onChange={(e) =>
+                            setStockGerenteFilterIds(Array.from(e.currentTarget.selectedOptions).map((opt) => opt.value))
+                          }
+                          disabled={!bancaId || loadingStockLeadIds}
+                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 min-w-[240px] h-[92px]"
+                          title="Filtra IDs de estoque por um ou mais gerentes para comparação nesta tabela"
+                        >
+                          {gerentesForStockOptions.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {(g.full_name || g.email || g.id).trim()}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setStockGerenteFilterIds(gerentesForStockOptions.map((g) => g.id))}
+                            className="text-[11px] px-2 py-1 rounded border border-gray-300 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                          >
+                            Marcar todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStockGerenteFilterIds([])}
+                            className="text-[11px] px-2 py-1 rounded border border-gray-300 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { void loadStockLeadIds(); }}
+                          disabled={!bancaId || loadingStockLeadIds}
+                          className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors disabled:opacity-50"
+                        >
+                          {loadingStockLeadIds ? 'Carregando estoque...' : 'Carregar IDs do estoque'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={verifyStockIdsInConsultorTable}
+                          disabled={!stockLeadIdsLoaded || filteredLeads.length === 0}
+                          className="text-sm px-3 py-1.5 rounded-lg border border-blue-400/60 dark:border-blue-500/50 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50"
+                          title="Verifica quantos IDs da tabela atual também estão no estoque carregado"
+                        >
+                          Verificar IDs na tabela
+                        </button>
+                      </div>
                       <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
                         <option value="">Status: Todos</option>
                         {uniqueStatuses.map((s) => (
@@ -8322,6 +9379,13 @@ export default function AdminLeadTransferPage() {
                       </button>
                     </div>
                   </div>
+                  {stockLeadIdsLoaded && (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                      Estoque ativo carregado: <strong>{stockLeadIdsList.length}</strong> ID(s) ·
+                      IDs da tabela no estoque: <strong>{stockIdsInFilteredCount}</strong> ·
+                      já transferidos ao gerente na tabela: <strong>{stockTransferredToGerenteInFilteredCount}</strong>.
+                    </p>
+                  )}
                   <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-lg">
                     <table className="w-full text-sm min-w-[720px]">
                       <thead className="bg-gray-100 dark:bg-[#333] border-b-2 border-gray-200 dark:border-[#404040]">
@@ -8353,6 +9417,8 @@ export default function AdminLeadTransferPage() {
                             const id = lead.id;
                             const key = String(id);
                             const checked = selectedLeadIds.has(key);
+                            const isInStockNow = stockLeadIdsSet.has(key);
+                            const isTransferredToGerenteStock = stockTransferredToGerenteIdsSet.has(key);
                             const name = (lead.name as string) ?? (lead.full_name as string) ?? (lead.email as string) ?? '-';
                             const email = (lead.email as string) ?? '';
                             const status = lead.status as string | null | undefined;
@@ -8369,7 +9435,21 @@ export default function AdminLeadTransferPage() {
                                 <td className="p-2 sticky left-0 bg-inherit z-0">
                                   <input type="checkbox" checked={checked} onChange={() => toggleLead(id)} className="rounded border-gray-300 dark:border-[#555]" />
                                 </td>
-                                <td className="p-2 font-mono text-gray-600 dark:text-gray-400 text-xs hidden sm:table-cell">{key}</td>
+                                <td className="p-2 hidden sm:table-cell">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono text-gray-600 dark:text-gray-400 text-xs">{key}</span>
+                                    {isInStockNow ? (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30">
+                                        Estoque
+                                      </span>
+                                    ) : null}
+                                    {!isInStockNow && isTransferredToGerenteStock ? (
+                                      <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30">
+                                        Transf. gerente
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </td>
                                 <td className="p-2 min-w-0 max-w-[200px]">
                                   <span className="block font-medium text-gray-800 dark:text-gray-100 truncate" title={name}>{name}</span>
                                   {email ? <span className="block text-xs text-gray-500 dark:text-gray-400 truncate" title={email}>{email}</span> : null}

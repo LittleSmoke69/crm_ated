@@ -27,11 +27,11 @@ import {
   type ActiveCampaignSpendRow,
 } from '@/lib/meta/metaAdsService';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
+import type { CrmBancaLite } from '@/lib/services/gestor-names-by-crm-banca';
 import {
-  buildGestorNamesByCrmBancaIdMap,
-  buildGestorUserIdsByCrmBancaIdMap,
-  type CrmBancaLite,
-} from '@/lib/services/gestor-names-by-crm-banca';
+  resolvePrimaryGestorDisplayByCrmBancaIds,
+  type GestorDisplayForCampaign,
+} from '@/lib/services/meta-campaign-gestor-display';
 import {
   convertMetaSpendToBrl,
   resolveExchangeRatesForCurrencies,
@@ -1204,6 +1204,34 @@ export async function upsertMetaConfig(
 }
 
 /**
+ * Remove linhas legadas `meta_integrations` das bancas que não têm mais nenhum vínculo em
+ * `meta_integration_bancas`. Evita que a visão geral continue exibindo integração após desvincular
+ * no modelo compartilhado.
+ */
+export async function cleanupLegacyMetaIntegrationsWithNoSharedLink(bancaIds: string[]): Promise<void> {
+  const ids = Array.from(new Set(bancaIds.map((x) => String(x ?? '').trim()).filter(Boolean)));
+  if (ids.length === 0) return;
+
+  const { data: stillLinked, error: linkErr } = await supabaseServiceRole
+    .from('meta_integration_bancas')
+    .select('banca_id')
+    .in('banca_id', ids);
+  if (linkErr) throw new Error(linkErr.message);
+
+  const hasShared = new Set(
+    (stillLinked ?? []).map((r: { banca_id: string }) => String(r.banca_id).trim()).filter(Boolean)
+  );
+  const orphanBancaIds = ids.filter((bid) => !hasShared.has(bid));
+  if (orphanBancaIds.length === 0) return;
+
+  const { error: delErr } = await supabaseServiceRole
+    .from('meta_integrations')
+    .delete()
+    .in('banca_id', orphanBancaIds);
+  if (delErr) throw new Error(delErr.message);
+}
+
+/**
  * Substitui apenas os vínculos meta_integration_bancas (não altera token nem outros campos da config).
  * Exige ao menos uma banca; para zerar vínculos, use deleteMetaIntegrationConfig.
  */
@@ -1237,6 +1265,7 @@ export async function setMetaIntegrationBancaLinks(integrationId: string, bancaI
       .eq('integration_id', id)
       .in('banca_id', toRemove);
     if (delErr) throw new Error(delErr.message);
+    await cleanupLegacyMetaIntegrationsWithNoSharedLink(toRemove);
   }
   if (toAdd.length > 0) {
     const { error: insErr } = await supabaseServiceRole
@@ -1299,13 +1328,28 @@ export async function deleteMetaIntegrationConfig(integrationId: string): Promis
   const id = String(integrationId).trim();
   if (!id) throw new Error('integration_id é obrigatório.');
 
+  const linkedBeforeShared = await listBancasByIntegration(id);
+
   const { data: cfgDeleted, error: cfgErr } = await supabaseServiceRole
     .from('meta_integration_configs')
     .delete()
     .eq('id', id)
     .select('id');
   if (cfgErr) throw new Error(cfgErr.message);
-  if (cfgDeleted?.length) return;
+  if (cfgDeleted?.length) {
+    await cleanupLegacyMetaIntegrationsWithNoSharedLink(linkedBeforeShared);
+    return;
+  }
+
+  const { data: legRow } = await supabaseServiceRole
+    .from('meta_integrations')
+    .select('banca_id')
+    .eq('id', id)
+    .maybeSingle();
+  const legacyBancaId =
+    legRow && (legRow as { banca_id?: string }).banca_id
+      ? String((legRow as { banca_id: string }).banca_id)
+      : '';
 
   const { data: legDeleted, error: legErr } = await supabaseServiceRole
     .from('meta_integrations')
@@ -1314,6 +1358,7 @@ export async function deleteMetaIntegrationConfig(integrationId: string): Promis
     .select('id');
   if (legErr) throw new Error(legErr.message);
   if (!legDeleted?.length) throw new Error('Integração Meta não encontrada ou já removida.');
+  if (legacyBancaId) await cleanupLegacyMetaIntegrationsWithNoSharedLink([legacyBancaId]);
 }
 
 /** Primeiro token válido entre todas as integrações da banca; senão legado. */
@@ -1534,6 +1579,8 @@ export interface MetaCampaignWithMetrics {
   }>;
   consultor_total_leads?: number;
   consultor_total_deposited?: number;
+  /** Consultores atribuídos via "card Ads" (ads_attribution_consultor_ids) no admin/meta. */
+  ads_attribution_consultors?: Array<{ id: string; email: string; full_name: string | null }>;
 }
 
 const META_RESULT_ACTION_TYPES = new Set([
@@ -1553,6 +1600,53 @@ function extractResultsFromRawActions(rawActions: Array<{ action_type: string; v
   return rawActions
     .filter((a) => META_RESULT_ACTION_TYPES.has(a.action_type))
     .reduce((sum, a) => sum + (parseInt(a.value || '0', 10) || 0), 0);
+}
+
+async function resolveAdsAttributionConsultorsByCampaign(
+  bancaId: string,
+  campaignIds: string[]
+): Promise<Map<string, Array<{ id: string; email: string; full_name: string | null }>>> {
+  const result = new Map<string, Array<{ id: string; email: string; full_name: string | null }>>();
+  if (!campaignIds.length) return result;
+  try {
+    const { data: rows } = await supabaseServiceRole
+      .from('meta_campaigns')
+      .select('campaign_id, ads_attribution_consultor_ids')
+      .eq('banca_id', bancaId)
+      .in('campaign_id', campaignIds);
+    if (!rows?.length) return result;
+    const allIds = new Set<string>();
+    const idsByCampaign = new Map<string, string[]>();
+    for (const row of rows) {
+      const ids = Array.isArray((row as any).ads_attribution_consultor_ids)
+        ? (row as any).ads_attribution_consultor_ids.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
+        : [];
+      if (ids.length) {
+        idsByCampaign.set(String((row as any).campaign_id), ids);
+        ids.forEach((id: string) => allIds.add(id));
+      }
+    }
+    if (!allIds.size) return result;
+    const { data: profiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('id', Array.from(allIds));
+    const profileMap = new Map<string, { id: string; email: string; full_name: string | null }>();
+    for (const p of profiles ?? []) {
+      profileMap.set(String((p as any).id), {
+        id: String((p as any).id),
+        email: String((p as any).email ?? ''),
+        full_name: (p as any).full_name ?? null,
+      });
+    }
+    for (const [campId, ids] of idsByCampaign) {
+      const resolved = ids.map((id) => profileMap.get(id)).filter((p): p is { id: string; email: string; full_name: string | null } => Boolean(p));
+      if (resolved.length) result.set(campId, resolved);
+    }
+  } catch {
+    // non-critical
+  }
+  return result;
 }
 
 export async function getMetaCampaignsWithInsights(
@@ -1596,12 +1690,10 @@ export async function getMetaCampaignsWithInsights(
 
   const { data: insights } = await insightsQuery;
   const campaignIdsForSummary = campaigns.map((c: { campaign_id: string }) => c.campaign_id);
-  const consultorSummaryByCampaign = await buildCampaignConsultorSummary(
-    bancaId,
-    campaignIdsForSummary,
-    dateFrom ?? null,
-    dateTo ?? null
-  );
+  const [consultorSummaryByCampaign, adsAttributionByCampaign] = await Promise.all([
+    buildCampaignConsultorSummary(bancaId, campaignIdsForSummary, dateFrom ?? null, dateTo ?? null),
+    resolveAdsAttributionConsultorsByCampaign(bancaId, campaignIdsForSummary),
+  ]);
 
   if (!insights?.length) {
     return campaigns.map((c: { campaign_id: string; name: string | null }) => {
@@ -1620,6 +1712,7 @@ export async function getMetaCampaignsWithInsights(
       assigned_consultors: consultorSummary?.assigned_consultors ?? [],
       consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
       consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+      ads_attribution_consultors: adsAttributionByCampaign.get(c.campaign_id) ?? [],
     };
     });
   }
@@ -1681,6 +1774,7 @@ export async function getMetaCampaignsWithInsights(
       assigned_consultors: consultorSummary?.assigned_consultors ?? [],
       consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
       consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+      ads_attribution_consultors: adsAttributionByCampaign.get(c.campaign_id) ?? [],
     };
   });
 }
@@ -1792,12 +1886,10 @@ export async function fetchGestorMetaDashboardFromGraph(
     }
 
     const orderedIds = visibleCampaigns.map((c) => String(c.id));
-    const consultorSummaryByCampaign = await buildCampaignConsultorSummary(
-      bancaId,
-      orderedIds,
-      dateFrom ?? null,
-      dateTo ?? null
-    );
+    const [consultorSummaryByCampaign, adsAttributionByCampaign] = await Promise.all([
+      buildCampaignConsultorSummary(bancaId, orderedIds, dateFrom ?? null, dateTo ?? null),
+      resolveAdsAttributionConsultorsByCampaign(bancaId, orderedIds),
+    ]);
 
     const metaCampaignsData: MetaCampaignWithMetrics[] = visibleCampaigns.map((c) => {
       const id = String(c.id);
@@ -1817,6 +1909,7 @@ export async function fetchGestorMetaDashboardFromGraph(
         assigned_consultors: consultorSummary?.assigned_consultors ?? [],
         consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
         consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+        ads_attribution_consultors: adsAttributionByCampaign.get(id) ?? [],
       };
     });
 
@@ -1839,9 +1932,9 @@ export interface AdminMetaLiveCampaignRow {
   banca_id: string;
   banca_name: string;
   banca_url: string | null;
-  /** Gestores (hierarquia + user_bancas) da banca CRM atribuída à linha — preenchido em `enrichAdminMetaCampaignRowsWithBancaNames`. */
+  /** Gestor de tráfego na banca (`user_bancas`), até um perfil — preenchido em `enrichAdminMetaCampaignRowsWithBancaNames`. */
   gestor_names?: string[];
-  /** IDs `profiles.id` dos gestores da banca (mesmo escopo que `gestor_names`). */
+  /** ID `profiles.id` do mesmo gestor (mesmo escopo que `gestor_names`). */
   gestor_user_ids?: string[];
   campaign_id: string;
   /** Tipo salvo em `meta_campaigns` (sincronizado). */
@@ -2375,13 +2468,11 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
   const bancaById = new Map<string, CrmBancaLite>(
     (bancas ?? []).map((b: { id: string; name: string | null; url: string | null }) => [b.id, b])
   );
-  let gestorByBanca = new Map<string, string[]>();
-  let gestorIdsByBanca = new Map<string, string[]>();
+  let gestorByBanca = new Map<string, GestorDisplayForCampaign>();
   try {
-    gestorByBanca = await buildGestorNamesByCrmBancaIdMap(bancaIds, bancaById);
-    gestorIdsByBanca = await buildGestorUserIdsByCrmBancaIdMap(bancaIds, bancaById);
+    gestorByBanca = await resolvePrimaryGestorDisplayByCrmBancaIds(bancaIds);
   } catch (err: unknown) {
-    logMetaReturn('enrichAdminMetaCampaignRowsWithBancaNames gestor_names', {
+    logMetaReturn('enrichAdminMetaCampaignRowsWithBancaNames gestor_user_bancas', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -2389,8 +2480,9 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
     const b = bancaById.get(row.banca_id);
     row.banca_name = b?.name ?? b?.url ?? row.banca_id;
     row.banca_url = b?.url ?? null;
-    row.gestor_names = gestorByBanca.get(row.banca_id) ?? [];
-    row.gestor_user_ids = gestorIdsByBanca.get(row.banca_id) ?? [];
+    const g = gestorByBanca.get(row.banca_id) ?? { gestor_names: [], gestor_user_ids: [] };
+    row.gestor_names = g.gestor_names;
+    row.gestor_user_ids = g.gestor_user_ids;
   }
 }
 

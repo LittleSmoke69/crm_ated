@@ -2,12 +2,13 @@
  * API Route: /api/maturation/jobs
  *
  * GET: Lista apenas jobs do usuário autenticado.
- * POST: Cria novo job (chama Netlify Function maturation-start)
+ * POST: Cria novo job (delega para runMaturationStart — mesmo núcleo que POST /api/maturation/start).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { runMaturationStart } from '@/lib/services/maturation/start-job';
 
 const JOB_DETAIL_SELECT = `
   *,
@@ -18,8 +19,11 @@ const JOB_DETAIL_SELECT = `
   ),
   master_instances (
     id,
+    evolution_instance_id,
     evolution_instances (
-      instance_name
+      id,
+      instance_name,
+      status
     )
   )
 `;
@@ -63,13 +67,16 @@ export async function GET(req: NextRequest) {
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
-    const runningJobIds = mergedJobs.filter((j: any) => j.status === 'running').map((j: any) => j.id);
+    /** Próximo disparo: rodando ou pausado (a UI “Maturação em execução” cobre ambos). */
+    const jobsWithScheduleIds = mergedJobs
+      .filter((j: any) => j.status === 'running' || j.status === 'paused')
+      .map((j: any) => j.id);
     let nextScheduledByJob: Record<string, string> = {};
-    if (runningJobIds.length > 0) {
+    if (jobsWithScheduleIds.length > 0) {
       const { data: pendingSteps } = await supabaseServiceRole
         .from('maturation_steps')
         .select('job_id, scheduled_at')
-        .in('job_id', runningJobIds)
+        .in('job_id', jobsWithScheduleIds)
         .eq('status', 'pending')
         .order('scheduled_at', { ascending: true });
       const byJob: Record<string, string> = {};
@@ -112,11 +119,18 @@ export async function GET(req: NextRequest) {
       const stepsSent = stepStatuses.filter((s) => s === 'sent').length;
       const stepsFailed = stepStatuses.filter((s) => s === 'failed').length;
       const stepsPending = stepStatuses.filter((s) => s === 'pending' || s === 'processing').length;
+      const evoId =
+        (job.master_instances as { evolution_instance_id?: string } | undefined)?.evolution_instance_id ??
+        (instance as { id?: string } | undefined)?.id ??
+        null;
+      const evoStatus = (instance as { status?: string | null } | undefined)?.status ?? null;
       return {
         id: job.id,
         campaign_id: job.campaign_id ?? null,
         plan: job.maturation_plans,
         instance_name: instance?.instance_name || null,
+        evolution_instance_id: evoId,
+        instance_evolution_status: evoStatus,
         target_chat_id: job.target_chat_id,
         status: job.status,
         progress_total: job.progress_total,
@@ -155,61 +169,58 @@ export async function POST(req: NextRequest) {
     const userId = auth.userId;
     
     const body = await req.json();
-    const { plan_id, target_chat_id, use_virgin_messages, preferred_evolution_instance_ids, delay_seconds_override } = body;
+    const {
+      plan_id,
+      target_chat_id,
+      use_virgin_messages,
+      preferred_evolution_instance_ids,
+      delay_seconds_override,
+      use_tenant_default_mutual_plan,
+    } = body;
     
     const useVirgin = use_virgin_messages === true;
-    if (!useVirgin && !plan_id) {
+    const useTenantDefault = use_tenant_default_mutual_plan === true;
+    if (!useVirgin && !useTenantDefault && !plan_id) {
       return NextResponse.json(
-        { error: 'plan_id é obrigatório, ou use use_virgin_messages: true' },
+        { error: 'plan_id é obrigatório, use use_virgin_messages: true ou use_tenant_default_mutual_plan: true' },
         { status: 400 }
       );
     }
-    
-    // Em produção (Netlify) chama a função; em dev local chama a API interna (evita Invalid URL com path relativo)
-    const netlifyBase = process.env.NETLIFY_FUNCTIONS_URL || process.env.NEXT_PUBLIC_NETLIFY_FUNCTIONS_URL || '';
-    const useNetlifyFunction =
-      netlifyBase &&
-      (netlifyBase.startsWith('http://') || netlifyBase.startsWith('https://'));
 
-    const payload: Record<string, unknown> = {
-      target_chat_id: target_chat_id || undefined,
-      preferred_evolution_instance_ids: Array.isArray(preferred_evolution_instance_ids) ? preferred_evolution_instance_ids : undefined,
-      delay_seconds_override: delay_seconds_override != null ? Number(delay_seconds_override) : undefined,
-    };
-    if (useVirgin) {
-      payload.use_virgin_messages = true;
-    } else {
-      payload.plan_id = plan_id;
-    }
-
-    let functionUrl: string;
-    if (useNetlifyFunction) {
-      functionUrl = `${netlifyBase.replace(/\/$/, '')}/maturation-start`;
-    } else {
-      const internalBase = process.env.INTERNAL_API_BASE_URL || 'http://localhost:3000';
-      functionUrl = `${internalBase}/api/maturation/start`;
-    }
-
-    const response = await fetch(functionUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': userId,
-        Authorization: `Bearer ${userId}`,
+    const result = await runMaturationStart(supabaseServiceRole, {
+      userId,
+      visibilityRequest: req,
+      body: {
+        plan_id,
+        target_chat_id: target_chat_id || undefined,
+        use_virgin_messages: useVirgin,
+        preferred_evolution_instance_ids: Array.isArray(preferred_evolution_instance_ids)
+          ? preferred_evolution_instance_ids
+          : undefined,
+        outbound_target_chat_ids: Array.isArray(body.outbound_target_chat_ids)
+          ? (body.outbound_target_chat_ids as string[])
+          : undefined,
+        delay_seconds_override: delay_seconds_override != null ? Number(delay_seconds_override) : undefined,
+        use_tenant_default_mutual_plan: useTenantDefault,
       },
-      body: JSON.stringify(payload),
     });
 
-    const result = await response.json();
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: result.error || 'Erro ao iniciar job' },
-        { status: response.status }
-      );
+    if (result.success) {
+      return NextResponse.json({
+        success: true,
+        job_id: result.job_id,
+        job_ids: result.job_ids,
+        campaign_id: result.campaign_id,
+        master_instance: result.master_instance,
+        master_instances: result.master_instances,
+        total_steps: result.total_steps,
+      });
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json(
+      { error: result.error || 'Erro ao iniciar job' },
+      { status: result.statusCode }
+    );
   } catch (error: any) {
     console.error('[POST /api/maturation/jobs] Erro:', error);
     return NextResponse.json(

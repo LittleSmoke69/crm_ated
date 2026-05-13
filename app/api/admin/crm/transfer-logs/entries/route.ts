@@ -59,19 +59,39 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    const entryColumnsFull =
+      'lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution, lead_name, lead_email, lead_phone, last_interaction_snapshot, total_saque_snapshot';
+
     let { data: entries, error } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
-      .select('lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+      .select(entryColumnsFull)
       .eq('banca_id', resolved.bancaId)
       .eq('transfer_log_id', logId)
       .order('lead_id', { ascending: true });
+
+    if (
+      error?.code === 'PGRST204' ||
+      (error?.message ?? '').includes('lead_name') ||
+      (error?.message ?? '').includes('lead_email')
+    ) {
+      const retry = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select(
+          'lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution'
+        )
+        .eq('banca_id', resolved.bancaId)
+        .eq('transfer_log_id', logId)
+        .order('lead_id', { ascending: true });
+      entries = retry.data as unknown as typeof entries;
+      error = retry.error;
+    }
 
     if (error) {
       console.error(`${LOG_PREFIX} GET error:`, error);
       return errorResponse('Erro ao buscar leads da transferência.');
     }
 
-    let rawList = Array.isArray(entries) ? entries : [];
+    let rawList: unknown[] = Array.isArray(entries) ? entries : [];
 
     /**
      * Compatibilidade com dados inconsistentes:
@@ -84,11 +104,23 @@ export async function GET(req: NextRequest) {
     if (rawList.length === 0) {
       const { data: entriesByLogOnly, error: entriesByLogOnlyErr } = await supabaseServiceRole
         .from('admin_lead_transfer_entries')
-        .select('lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution')
+        .select(entryColumnsFull)
         .eq('transfer_log_id', logId)
         .order('lead_id', { ascending: true });
 
-      if (entriesByLogOnlyErr) {
+      if (
+        entriesByLogOnlyErr?.code === 'PGRST204' ||
+        (entriesByLogOnlyErr?.message ?? '').includes('lead_name')
+      ) {
+        const r2 = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select(
+            'lead_id, had_balance, saldo_snapshot, source_consultant_email, target_consultant_email, transfer_type, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, resolution_status, resolved_at, current_total_depositado_at_resolution, current_total_apostado_at_resolution'
+          )
+          .eq('transfer_log_id', logId)
+          .order('lead_id', { ascending: true });
+        rawList = Array.isArray(r2.data) ? r2.data : [];
+      } else if (entriesByLogOnlyErr) {
         console.error(`${LOG_PREFIX} Fallback query (entries by log only) error:`, entriesByLogOnlyErr);
       } else {
         rawList = Array.isArray(entriesByLogOnly) ? entriesByLogOnly : [];
@@ -139,7 +171,7 @@ export async function GET(req: NextRequest) {
         }
       }
     }
-    const targetEmail = rawList[0]?.target_consultant_email?.trim();
+    const targetEmail = (rawList[0] as { target_consultant_email?: string | null } | undefined)?.target_consultant_email?.trim();
     const detailByLeadId = new Map<string, EntryLeadDetail>();
 
     if (targetEmail && resolved.crmBaseUrl) {
@@ -188,10 +220,29 @@ export async function GET(req: NextRequest) {
       resolved_at?: string | null;
       current_total_depositado_at_resolution?: number | null;
       current_total_apostado_at_resolution?: number | null;
+      lead_name?: string | null;
+      lead_email?: string | null;
+      lead_phone?: string | null;
+      last_interaction_snapshot?: string | null;
+      total_saque_snapshot?: number | null;
     };
-    const list = rawList.map((e: EntryRow) => {
+    const list = (rawList as EntryRow[]).map((e: EntryRow) => {
       const leadId = String(e.lead_id ?? '');
-      const detail = detailByLeadId.get(leadId) ?? {};
+      let detail = detailByLeadId.get(leadId) ?? {};
+      if (!detail.name && !detail.email && leadId.includes('-')) {
+        const tail = leadId.split('-').pop() ?? '';
+        if (tail && tail !== leadId) {
+          const alt = detailByLeadId.get(tail);
+          if (alt && (alt.name || alt.email)) detail = alt;
+        }
+      }
+      const dbLeadName = (e.lead_name ?? '').trim();
+      const dbEmail = (e.lead_email ?? '').trim();
+      const dbPhone = (e.lead_phone ?? '').trim();
+      const crmNameParts = `${detail.name ?? ''} ${detail.last_name ?? ''}`.trim();
+      const mergedEmail = (detail.email ?? '').trim() || dbEmail || null;
+      const mergedPhone =
+        (detail.phone ?? detail.whatsapp ?? '').trim() || dbPhone || null;
       return {
         lead_id: e.lead_id,
         had_balance: e.had_balance === true,
@@ -207,10 +258,10 @@ export async function GET(req: NextRequest) {
         resolved_at: e.resolved_at ?? null,
         current_total_depositado_at_resolution: e.current_total_depositado_at_resolution != null ? Number(e.current_total_depositado_at_resolution) : null,
         current_total_apostado_at_resolution: e.current_total_apostado_at_resolution != null ? Number(e.current_total_apostado_at_resolution) : null,
-        name: detail.name ?? null,
-        last_name: detail.last_name ?? null,
-        email: detail.email ?? null,
-        phone: detail.phone ?? detail.whatsapp ?? null,
+        name: crmNameParts ? (detail.name ?? null) : dbLeadName || null,
+        last_name: crmNameParts ? (detail.last_name ?? null) : null,
+        email: mergedEmail,
+        phone: mergedPhone || null,
         whatsapp: detail.whatsapp ?? null,
         status: detail.status ?? null,
         temperature: detail.temperature ?? null,
@@ -218,7 +269,20 @@ export async function GET(req: NextRequest) {
         total_apostado: detail.total_apostado ?? null,
         total_ganho: detail.total_ganho ?? null,
         created_at: detail.created_at ?? null,
+        last_interaction_snapshot: e.last_interaction_snapshot ?? null,
+        total_saque_snapshot: e.total_saque_snapshot != null ? Number(e.total_saque_snapshot) : null,
       };
+    });
+
+    const leadsComEmail = list.filter((row: { email?: string | null }) => (row.email ?? '').trim().length > 0).length;
+    console.info(`${LOG_PREFIX} GET (modal Ver leads)`, {
+      transfer_log_id: logId,
+      banca_id: resolved.bancaId,
+      leads_retornados: list.length,
+      leads_com_email_crm_ou_db: leadsComEmail,
+      consultor_destino_entries:
+        (rawList[0] as { target_consultant_email?: string | null } | undefined)?.target_consultant_email ?? null,
+      nota: 'Nome/e-mail: CRM (destino) quando bate o lead_id; senão usa lead_name/lead_email gravados na transferência.',
     });
 
     return successResponse(list);

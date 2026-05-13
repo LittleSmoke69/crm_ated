@@ -311,7 +311,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
               className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-sm"
             >
               <option value="maturado">Maturado</option>
-              <option value="virgem">Virgem (auto 5 dias)</option>
+              <option value="virgem">Virgem (Maturador / rede mútua)</option>
             </select>
           </div>
           <div>

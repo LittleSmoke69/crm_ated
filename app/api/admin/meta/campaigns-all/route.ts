@@ -16,7 +16,7 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
-import { buildGestorNamesByCrmBancaIdMap, buildGestorUserIdsByCrmBancaIdMap } from '@/lib/services/gestor-names-by-crm-banca';
+import { resolvePrimaryGestorDisplayByCrmBancaIds } from '@/lib/services/meta-campaign-gestor-display';
 
 /** Alinhado ao GET /api/admin/meta/overview: dia único sem linhas em meta_insights_daily usa o último dia com dados até date_to. */
 async function resolveInsightsForMetrics(args: {
@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
     let q = supabaseServiceRole
       .from('meta_campaigns')
       .select(
-        'banca_id,campaign_id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,updated_at,campaign_kind,redirect_project_id',
+        'banca_id,campaign_id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,updated_at,campaign_kind,redirect_project_id,ads_attribution_consultor_id,ads_attribution_consultor_ids',
         { count: 'exact' }
       )
       .order('updated_at', { ascending: false });
@@ -141,6 +141,12 @@ export async function GET(req: NextRequest) {
       if (error.code === '42703' || msg.includes('redirect_project_id')) {
         return errorResponse(
           'Migração pendente: aplique migrations/add_redirect_project_to_meta_campaigns.sql para vincular campanhas a redirects.',
+          500
+        );
+      }
+      if (error.code === '42703' || msg.includes('ads_attribution_consultor')) {
+        return errorResponse(
+          'Migração pendente: aplique supabase/migrations/20260508120000_meta_campaigns_ads_attribution_consultor.sql e 20260509100000_meta_campaigns_ads_attribution_consultor_ids.sql.',
           500
         );
       }
@@ -173,16 +179,49 @@ export async function GET(req: NextRequest) {
       redirectById = new Map((redirects ?? []).map((r) => [r.id, r]));
     }
 
-    /** Gestor por banca CRM da campanha: hierarquia (subárvore do dono) + user_bancas. */
-    let gestorNamesByBanca = new Map<string, string[]>();
-    let gestorUserIdsByBanca = new Map<string, string[]>();
+    const adsAttrIds = Array.from(
+      (() => {
+        const s = new Set<string>();
+        for (const c of campaigns ?? []) {
+          const row = c as {
+            ads_attribution_consultor_id?: string | null;
+            ads_attribution_consultor_ids?: string[] | null;
+          };
+          const one = String(row.ads_attribution_consultor_id ?? '').trim();
+          if (one) s.add(one);
+          const arr = Array.isArray(row.ads_attribution_consultor_ids) ? row.ads_attribution_consultor_ids : [];
+          for (const x of arr) {
+            const id = String(x ?? '').trim();
+            if (id) s.add(id);
+          }
+        }
+        return s;
+      })()
+    );
+    let adsAttrProfileById = new Map<string, { id: string; email: string; full_name: string | null }>();
+    if (adsAttrIds.length > 0) {
+      const { data: attrProfs, error: apErr } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name')
+        .in('id', adsAttrIds);
+      if (apErr) return errorResponse(`Erro ao buscar perfis de atribuição Ads: ${apErr.message}`, 500);
+      for (const p of attrProfs ?? []) {
+        const row = p as { id: string; email: string; full_name: string | null };
+        adsAttrProfileById.set(String(row.id), {
+          id: String(row.id),
+          email: String(row.email ?? ''),
+          full_name: row.full_name ?? null,
+        });
+      }
+    }
+
+    let gestorByBancaId: Map<string, { gestor_names: string[]; gestor_user_ids: string[] }> = new Map();
     if (bancaIds.length > 0) {
       try {
-        gestorNamesByBanca = await buildGestorNamesByCrmBancaIdMap(bancaIds, bancaById);
-        gestorUserIdsByBanca = await buildGestorUserIdsByCrmBancaIdMap(bancaIds, bancaById);
+        gestorByBancaId = await resolvePrimaryGestorDisplayByCrmBancaIds(bancaIds);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        return errorResponse(`Erro ao resolver gestores por banca: ${msg}`, 500);
+        return errorResponse(`Erro ao resolver gestor por banca (user_bancas): ${msg}`, 500);
       }
     }
 
@@ -277,12 +316,14 @@ export async function GET(req: NextRequest) {
       const consultorSummary = consultorSummaryByBancaCampaign
         .get(String(c.banca_id))
         ?.get(String(c.campaign_id));
+      const gestorCell =
+        gestorByBancaId.get(String(c.banca_id)) ?? { gestor_names: [], gestor_user_ids: [] };
       return {
         banca_id: c.banca_id,
         banca_name: banca?.name ?? banca?.url ?? c.banca_id,
         banca_url: banca?.url ?? null,
-        gestor_names: gestorNamesByBanca.get(String(c.banca_id)) ?? [],
-        gestor_user_ids: gestorUserIdsByBanca.get(String(c.banca_id)) ?? [],
+        gestor_names: gestorCell.gestor_names,
+        gestor_user_ids: gestorCell.gestor_user_ids,
         campaign_id: c.campaign_id,
         name: c.name ?? null,
         objective: c.objective ?? null,
@@ -306,6 +347,66 @@ export async function GET(req: NextRequest) {
         assigned_consultors: consultorSummary?.assigned_consultors ?? [],
         consultor_total_leads: consultorSummary?.consultor_total_leads ?? 0,
         consultor_total_deposited: consultorSummary?.consultor_total_deposited ?? 0,
+        ads_attribution_consultor_ids: (() => {
+          const row = c as {
+            ads_attribution_consultor_ids?: string[] | null;
+            ads_attribution_consultor_id?: string | null;
+          };
+          const fromArr = Array.isArray(row.ads_attribution_consultor_ids)
+            ? row.ads_attribution_consultor_ids
+                .map((x) => String(x ?? '').trim())
+                .filter((id) => id.length > 0)
+            : [];
+          const dedup = Array.from(new Set(fromArr));
+          if (dedup.length > 0) return dedup;
+          const legacy = String(row.ads_attribution_consultor_id ?? '').trim();
+          return legacy ? [legacy] : [];
+        })(),
+        ads_attribution_consultor_id:
+          (() => {
+            const row = c as {
+              ads_attribution_consultor_ids?: string[] | null;
+              ads_attribution_consultor_id?: string | null;
+            };
+            const fromArr = Array.isArray(row.ads_attribution_consultor_ids)
+              ? row.ads_attribution_consultor_ids
+                  .map((x) => String(x ?? '').trim())
+                  .filter((id) => id.length > 0)
+              : [];
+            if (fromArr.length > 0) return fromArr[0];
+            return (c as { ads_attribution_consultor_id?: string | null }).ads_attribution_consultor_id ?? null;
+          })(),
+        ads_attribution_consultors: (() => {
+          const row = c as {
+            ads_attribution_consultor_ids?: string[] | null;
+            ads_attribution_consultor_id?: string | null;
+          };
+          const order: string[] = [];
+          const seen = new Set<string>();
+          const fromArr = Array.isArray(row.ads_attribution_consultor_ids)
+            ? row.ads_attribution_consultor_ids
+            : [];
+          for (const x of fromArr) {
+            const id = String(x ?? '').trim();
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            order.push(id);
+          }
+          if (order.length === 0) {
+            const legacy = String(row.ads_attribution_consultor_id ?? '').trim();
+            if (legacy) order.push(legacy);
+          }
+          const profs = order
+            .map((id) => adsAttrProfileById.get(id))
+            .filter((p): p is { id: string; email: string; full_name: string | null } => p != null);
+          return profs;
+        })(),
+        ads_attribution_consultor: (() => {
+          const aid = String(
+            (c as { ads_attribution_consultor_id?: string | null }).ads_attribution_consultor_id ?? ''
+          ).trim();
+          return aid ? adsAttrProfileById.get(aid) ?? null : null;
+        })(),
       };
     });
 

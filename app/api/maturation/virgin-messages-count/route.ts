@@ -9,21 +9,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+import { parseVirginMessagePlansFromConfig } from '@/lib/maturation/virgin-message-plans';
+
 const KEY_MESSAGES = 'messages';
 
 function countValidMessages(value: unknown): number {
-  if (!Array.isArray(value)) return 0;
-  return value.filter((m) => {
-    if (typeof m === 'string') return (m as string).trim().length > 0;
-    if (m && typeof m === 'object' && 'type' in m) {
-      const o = m as Record<string, unknown>;
-      const type = String(o.type).toLowerCase();
-      if (type === 'text') return typeof o.text === 'string' && (o.text as string).trim().length > 0;
-      if (['video', 'image', 'audio'].includes(type))
-        return typeof o.media_path === 'string' && (o.media_path as string).trim().length > 0;
-    }
-    return false;
-  }).length;
+  const plans = parseVirginMessagePlansFromConfig(value);
+  if (plans.length === 0) return 0;
+  return plans.reduce((acc, plan) => acc + plan.length, 0);
 }
 
 export async function GET(req: NextRequest) {

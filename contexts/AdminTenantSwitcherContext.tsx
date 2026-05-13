@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useLayoutEffect, useState } from 'react';
 
 /** sessionStorage — alinhado ao TenantSwitcher e à página /admin/zaploto */
 export const ADMIN_ZAPLOTO_TENANT_STORAGE_KEY = 'admin_zaploto_id';
@@ -25,6 +25,22 @@ export function AdminTenantSwitcherProvider({ children }: { children: React.Reac
     return sessionStorage.getItem(ADMIN_TENANT_KEY);
   });
 
+  /**
+   * No SSR/hidratação o primeiro render pode vir com `null` mesmo com `sessionStorage` já definido
+   * (initializer só roda no servidor sem `window`). Sincroniza antes do paint para o switcher e os fetches
+   * enxergarem o tenant escolhido.
+   */
+  useLayoutEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(ADMIN_TENANT_KEY)?.trim();
+      if (stored) {
+        setSelectedTenantIdState((prev) => (prev !== stored ? stored : prev));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const setSelectedTenantId = (id: string | null) => {
     setSelectedTenantIdState(id);
     if (typeof window !== 'undefined') {
@@ -34,8 +50,12 @@ export function AdminTenantSwitcherProvider({ children }: { children: React.Reac
   };
 
   const getTenantHeader = (): Record<string, string> => {
-    if (selectedTenantId) {
-      return { 'X-Zaploto-Id': selectedTenantId };
+    const id =
+      (typeof window !== 'undefined'
+        ? selectedTenantId?.trim() || sessionStorage.getItem(ADMIN_TENANT_KEY)?.trim()
+        : selectedTenantId?.trim()) || '';
+    if (id) {
+      return { 'X-Zaploto-Id': id };
     }
     return {} as Record<string, string>;
   };

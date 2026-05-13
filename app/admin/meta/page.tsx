@@ -30,6 +30,7 @@ import {
   UserPlus,
   Trash2,
   Radio,
+  Unplug,
   X,
 } from 'lucide-react';
 
@@ -532,8 +533,15 @@ export default function AdminMetaPage() {
     Record<string, LocalMetaCurrencyChoice>
   >({});
   const [campaignConsultorDraft, setCampaignConsultorDraft] = useState<Record<string, string[]>>({});
+  /** Consultores que recebem o spend no card Ads (Meu Desempenho); [] = automático pelos vínculos. */
+  const [campaignAdsAttributionDraft, setCampaignAdsAttributionDraft] = useState<Record<string, string[]>>({});
+  const [campaignAdsAttributionSavingKey, setCampaignAdsAttributionSavingKey] = useState<string | null>(null);
   const [campaignConsultorSavingKey, setCampaignConsultorSavingKey] = useState<string | null>(null);
   const [consultorsByBanca, setConsultorsByBanca] = useState<Record<string, Array<{ id: string; email: string; full_name: string | null }>>>({});
+  /** Filtro por banca para o select «Consultor · card Ads» (nome/e-mail). */
+  const [consultorAdsFilterByBanca, setConsultorAdsFilterByBanca] = useState<Record<string, string>>({});
+  /** Chave da campanha com o dropdown de consultores aberto (banca_id:campaign_id). */
+  const [openAdsDropdownKey, setOpenAdsDropdownKey] = useState<string | null>(null);
   const [consultorModalOpen, setConsultorModalOpen] = useState(false);
   const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
   const [consultorModalSearch, setConsultorModalSearch] = useState('');
@@ -559,6 +567,8 @@ export default function AdminMetaPage() {
   /** Integração da qual copiar token ao salvar «nova integração» sem access_token (prioridade no backend). */
   const [adminMetaReuseTokenFromIntegrationId, setAdminMetaReuseTokenFromIntegrationId] = useState('');
   const [metaIntegrationUiBusy, setMetaIntegrationUiBusy] = useState(false);
+  /** Linha da visão geral em processo de desvínculo banca ↔ integração (`banca_id:integration_id`). */
+  const [overviewUnlinkKey, setOverviewUnlinkKey] = useState<string | null>(null);
   /** Valor atual da seleção no dropdown (para loadConfig assíncrono não voltar sempre à «primary» da API). */
   const adminMetaSelectedIntegrationIdRef = useRef('');
 
@@ -776,6 +786,20 @@ export default function AdminMetaPage() {
     document.addEventListener('mousedown', onDocDown);
     return () => document.removeEventListener('mousedown', onDocDown);
   }, [overviewFilterBancaOpen]);
+
+  useEffect(() => {
+    if (!openAdsDropdownKey) return;
+    const onDocDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const dropdowns = document.querySelectorAll('[data-ads-dropdown]');
+      for (const el of Array.from(dropdowns)) {
+        if (el.contains(target)) return;
+      }
+      setOpenAdsDropdownKey(null);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [openAdsDropdownKey]);
 
   const META_TIMEZONE = 'America/Sao_Paulo';
 
@@ -1321,6 +1345,127 @@ export default function AdminMetaPage() {
     }
   };
 
+  /** Remove uma banca da integração atual via API; exige ao menos 2 bancas selecionadas (mantém as demais). */
+  const handleQuickUnlinkBancaFromIntegration = async (bancaId: string) => {
+    if (!userId || adminMetaCreateNewIntegration || !config?.configured) return;
+    const integ =
+      adminMetaSelectedIntegrationId || (config.integration_id ? String(config.integration_id) : '');
+    if (!integ) return;
+    const linked = Array.from(
+      new Set(selectedBancaIds.map((x) => String(x).trim()).filter(Boolean))
+    );
+    if (!linked.includes(bancaId) || linked.length <= 1) return;
+
+    const bancaLabel = (() => {
+      const banca = bancas.find((b) => String(b.id) === String(bancaId));
+      return banca?.name || banca?.url || bancaId;
+    })();
+    const ok = window.confirm(
+      `Remover a banca "${bancaLabel}" desta integração?\n\nAs outras bancas vinculadas serão mantidas.`
+    );
+    if (!ok) return;
+
+    const remaining = linked.filter((id) => id !== bancaId);
+    setMetaIntegrationUiBusy(true);
+    setTestResult(null);
+    setSyncResult(null);
+    try {
+      const res = await fetch('/api/admin/meta/integration', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({ integration_id: integ, banca_ids: remaining }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTestResult({ success: false, error: data.error || 'Erro ao remover vínculo da banca.' });
+        return;
+      }
+      setSelectedBancaIds(remaining);
+      setSelectedIntegrationContextBancaId((prev) =>
+        prev === bancaId ? remaining[0] || '' : prev
+      );
+      await loadOverview();
+      await loadConfig(remaining);
+      void loadLiveAggregate();
+      void loadAllCampaigns();
+      setTestResult({
+        success: true,
+        infoMessage: `Banca "${bancaLabel}" removida desta integração. As demais permanecem vinculadas.`,
+      });
+    } catch (err: any) {
+      setTestResult({ success: false, error: err?.message || 'Erro ao remover vínculo da banca.' });
+    } finally {
+      setMetaIntegrationUiBusy(false);
+    }
+  };
+
+  /** Visão geral: desvincular esta linha (banca + integração) sem precisar do seletor de configuração. */
+  const handleOverviewUnlinkBancaRow = async (row: MetaOverviewRow) => {
+    if (!userId || !row.integration_id || !row.configured) return;
+    const rowKey = `${row.banca_id}:${row.integration_id}`;
+    const label = row.banca_name || row.banca_url || row.banca_id;
+    const onlyBancaOnIntegration = row.integrations_count <= 1;
+    const ok = window.confirm(
+      onlyBancaOnIntegration
+        ? `Remover a banca «${label}» desta integração?\n\nÉ a única banca vinculada: a integração Meta será excluída por completo.`
+        : `Remover a banca «${label}» desta integração (conta ${row.integration_index}/${row.integrations_count})?\n\nAs outras bancas permanecem vinculadas à mesma integração.`
+    );
+    if (!ok) return;
+
+    const remainingSelected = selectedBancaIds
+      .map((x) => String(x).trim())
+      .filter((id) => id !== String(row.banca_id).trim());
+
+    setOverviewUnlinkKey(rowKey);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/admin/meta/integration', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          integration_id: row.integration_id,
+          remove_banca_id: row.banca_id,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTestResult({ success: false, error: data.error || 'Erro ao desvincular banca.' });
+        return;
+      }
+
+      setSelectedBancaIds(remainingSelected);
+      setSelectedIntegrationContextBancaId((prev) =>
+        String(prev) === String(row.banca_id) ? remainingSelected[0] || '' : prev
+      );
+
+      await loadOverview();
+      if (remainingSelected.length > 0) {
+        await loadConfig(remainingSelected);
+      } else {
+        setConfig(null);
+        setAdminMetaSelectedIntegrationId('');
+        setAdminMetaCreateNewIntegration(false);
+        setAdminMetaReuseTokenFromIntegrationId('');
+        setSyncedData(null);
+      }
+      void loadLiveAggregate();
+      void loadAllCampaigns();
+
+      setTestResult({
+        success: true,
+        infoMessage:
+          data.data?.removed_integration === true
+            ? `Integração Meta da banca «${label}» foi removida. A visão geral foi atualizada.`
+            : `Banca «${label}» desvinculada. A visão geral foi atualizada.`,
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTestResult({ success: false, error: msg || 'Erro ao desvincular.' });
+    } finally {
+      setOverviewUnlinkKey(null);
+    }
+  };
+
   const handleRemoveMetaIntegration = async () => {
     if (!userId || adminMetaCreateNewIntegration || !config?.configured) return;
     const integ =
@@ -1618,15 +1763,26 @@ export default function AdminMetaPage() {
         setAllCampaignsRows(data.data.rows);
         const nextDraft: Record<string, string[]> = {};
         const nextRedirectDraft: Record<string, string> = {};
+        const nextAdsAttrDraft: Record<string, string[]> = {};
         for (const row of data.data.rows as any[]) {
           const key = `${String(row.banca_id)}:${String(row.campaign_id)}`;
           nextDraft[key] = Array.isArray(row.assigned_consultors)
             ? row.assigned_consultors.map((c: any) => String(c.id)).filter(Boolean)
             : [];
           nextRedirectDraft[key] = row.redirect_project_id ? String(row.redirect_project_id) : '';
+          const fromArr = Array.isArray(row.ads_attribution_consultor_ids)
+            ? row.ads_attribution_consultor_ids.map((x: unknown) => String(x ?? '').trim()).filter(Boolean)
+            : [];
+          nextAdsAttrDraft[key] =
+            fromArr.length > 0
+              ? Array.from(new Set(fromArr))
+              : row.ads_attribution_consultor_id
+                ? [String(row.ads_attribution_consultor_id)]
+                : [];
         }
         setCampaignConsultorDraft(nextDraft);
         setCampaignRedirectDraft(nextRedirectDraft);
+        setCampaignAdsAttributionDraft(nextAdsAttrDraft);
       } else {
         setAllCampaignsRows([]);
         setAllCampaignsError(data.error || 'Erro ao carregar campanhas (todas as integrações).');
@@ -1699,6 +1855,47 @@ export default function AdminMetaPage() {
       }
     },
     [userId, loadAllCampaigns, loadOverview, loadLiveAggregate, loadSyncedData, primaryBancaId]
+  );
+
+  const handleSaveCampaignAdsAttribution = useCallback(
+    async (
+      bancaId: string,
+      campaignId: string,
+      adsAttributionConsultorIds: string[],
+      campaignName?: string | null
+    ) => {
+      if (!userId) return;
+      const key = `${bancaId}:${campaignId}`;
+      setCampaignAdsAttributionSavingKey(key);
+      setAllCampaignsError(null);
+      try {
+        const res = await fetch('/api/admin/meta/campaign-ads-attribution', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+          body: JSON.stringify({
+            banca_id: bancaId,
+            campaign_id: campaignId,
+            ads_attribution_consultor_ids: adsAttributionConsultorIds,
+            ...(campaignName != null && String(campaignName).trim() !== ''
+              ? { name: String(campaignName).trim() }
+              : {}),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setAllCampaignsError(data.error || 'Erro ao salvar consultor do card Ads.');
+          await loadAllCampaigns();
+          return;
+        }
+        await loadAllCampaigns();
+      } catch (err: any) {
+        setAllCampaignsError(err?.message || 'Erro ao salvar consultor do card Ads.');
+        await loadAllCampaigns();
+      } finally {
+        setCampaignAdsAttributionSavingKey(null);
+      }
+    },
+    [userId, loadAllCampaigns]
   );
 
   /**
@@ -1879,9 +2076,48 @@ export default function AdminMetaPage() {
           }
         })
       );
-      setConsultorsByBanca(Object.fromEntries(entries));
+      setConsultorsByBanca((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
     })();
   }, [userId, allCampaignsRows]);
+
+  // Complementary fetch: loads consultors for live-stream banca_ids not already covered by the allCampaignsRows page.
+  // allCampaignsRows is paginated, so the live stream may show campaigns from bancas not on the current DB page.
+  // Uses stable string keys so the effect only re-runs when the banca_id sets actually change.
+  const liveCampaignBancaKey = (liveAggregate?.campaigns ?? [])
+    .map((r: any) => String(r.banca_id ?? ''))
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  const dbCampaignBancaKey = (allCampaignsRows || [])
+    .map((r: any) => String(r.banca_id ?? ''))
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  useEffect(() => {
+    if (!userId || !liveCampaignBancaKey) return;
+    const dbBancaSet = new Set(dbCampaignBancaKey.split(',').filter(Boolean));
+    const missingBancaIds = [...new Set(liveCampaignBancaKey.split(',').filter(Boolean))].filter(
+      (id) => !dbBancaSet.has(id)
+    );
+    if (missingBancaIds.length === 0) return;
+    void (async () => {
+      const entries = await Promise.all(
+        missingBancaIds.map(async (bancaId) => {
+          try {
+            const res = await fetch(`/api/admin/meta/campaign-consultors?banca_id=${encodeURIComponent(bancaId)}`, {
+              headers: { 'X-User-Id': userId },
+            });
+            const data = await res.json();
+            if (!data.success) return [bancaId, []] as const;
+            return [bancaId, data.data?.consultors || []] as const;
+          } catch {
+            return [bancaId, []] as const;
+          }
+        })
+      );
+      setConsultorsByBanca((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    })();
+  }, [userId, liveCampaignBancaKey, dbCampaignBancaKey]);
 
   useEffect(() => {
     if (!userId) return;
@@ -2091,7 +2327,7 @@ export default function AdminMetaPage() {
     return metricSyncedCampaignRows.filter((row: any) => String(row.banca_id) === bid);
   }, [metricSyncedCampaignRows, scopedMetaBancaFilter, overviewFilterBancaId]);
 
-  /** Totais vindos do cache (campaigns-all): gasto e leads por tipo — sem API Graph, “resultados” usam leads sincronizados. */
+  /** Totais vindos do cache (campaigns-all): gasto e leads por tipo — sem API Graph, "resultados" usam leads sincronizados. */
   const cacheKindSummary = useMemo(() => {
     return (metricSyncedCampaignRows as any[]).reduce(
       (acc, row: any) => {
@@ -2113,38 +2349,6 @@ export default function AdminMetaPage() {
     (loadingLiveAggregate && !liveAggregate) ||
     (scopedMetaBancaFilter && !usingLiveMetaCards && !liveAggregateError) ||
     (!scopedMetaBancaFilter && !usingLiveMetaCards && allCampaignsLoading);
-
-  /** Primeiro `gestor_names` não vazio por banca vindo do cache `campaigns-all` (para enriquecer o merge ao vivo). */
-  const bancaGestorNamesFromCampaignsCache = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const row of allCampaignsRows ?? []) {
-      const bid = String((row as any)?.banca_id ?? '').trim();
-      if (!bid || m.has(bid)) continue;
-      const g = (row as any)?.gestor_names;
-      if (!Array.isArray(g)) continue;
-      const names = Array.from(
-        new Set(g.map((x: unknown) => String(x ?? '').trim()).filter((s: string) => s.length > 0))
-      );
-      if (names.length > 0) m.set(bid, names);
-    }
-    return m;
-  }, [allCampaignsRows]);
-
-  /** Primeiro `gestor_user_ids` não vazio por banca vindo do cache `campaigns-all`. */
-  const bancaGestorUserIdsFromCampaignsCache = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const row of allCampaignsRows ?? []) {
-      const bid = String((row as any)?.banca_id ?? '').trim();
-      if (!bid || m.has(bid)) continue;
-      const g = (row as any)?.gestor_user_ids;
-      if (!Array.isArray(g)) continue;
-      const ids = Array.from(
-        new Set(g.map((x: unknown) => String(x ?? '').trim()).filter((s: string) => s.length > 0))
-      );
-      if (ids.length > 0) m.set(bid, ids);
-    }
-    return m;
-  }, [allCampaignsRows]);
 
   /** Cotação USD→BRL do último aggregate (usada só para reconversão local ao mudar moeda na linha). */
   const liveUsdBrlRate = useMemo(() => {
@@ -2180,10 +2384,9 @@ export default function AdminMetaPage() {
             .map((x) => String(x ?? '').trim())
             .filter((s) => s.length > 0)
         : [];
-      const fromBancaCache = bancaGestorNamesFromCampaignsCache.get(bancaId) ?? [];
       const gestorMerged: string[] = [];
       const seenG = new Set<string>();
-      for (const n of [...fromLive, ...fromDb, ...fromBancaCache]) {
+      for (const n of [...fromLive, ...fromDb]) {
         if (!n || seenG.has(n)) continue;
         seenG.add(n);
         gestorMerged.push(n);
@@ -2197,10 +2400,9 @@ export default function AdminMetaPage() {
             .map((x) => String(x ?? '').trim())
             .filter((s) => s.length > 0)
         : [];
-      const fromBancaCacheIds = bancaGestorUserIdsFromCampaignsCache.get(bancaId) ?? [];
       const gestorUserIdsMerged: string[] = [];
       const seenGu = new Set<string>();
-      for (const id of [...fromLiveIds, ...fromDbIds, ...fromBancaCacheIds]) {
+      for (const id of [...fromLiveIds, ...fromDbIds]) {
         if (!id || seenGu.has(id)) continue;
         seenGu.add(id);
         gestorUserIdsMerged.push(id);
@@ -2258,6 +2460,23 @@ export default function AdminMetaPage() {
         assigned_consultors: dbRow?.assigned_consultors ?? [],
         consultor_total_leads: dbRow?.consultor_total_leads ?? 0,
         consultor_total_deposited: dbRow?.consultor_total_deposited ?? 0,
+        ads_attribution_consultor_ids:
+          (dbRow as { ads_attribution_consultor_ids?: string[] | null } | undefined)
+            ?.ads_attribution_consultor_ids ?? null,
+        ads_attribution_consultor_id:
+          (dbRow as { ads_attribution_consultor_id?: string | null } | undefined)
+            ?.ads_attribution_consultor_id ?? null,
+        ads_attribution_consultors:
+          (dbRow as {
+            ads_attribution_consultors?: Array<{
+              id: string;
+              email: string;
+              full_name: string | null;
+            }> | null;
+          })?.ads_attribution_consultors ?? null,
+        ads_attribution_consultor:
+          (dbRow as { ads_attribution_consultor?: { id: string; email: string; full_name: string | null } | null }
+            | undefined)?.ads_attribution_consultor ?? null,
       };
     });
     const dedup = new Map<string, (typeof merged)[0]>();
@@ -2303,10 +2522,9 @@ export default function AdminMetaPage() {
             .map((x) => String(x ?? '').trim())
             .filter((s) => s.length > 0)
         : [];
-      const fromBancaCache = bancaGestorNamesFromCampaignsCache.get(bancaIdStr) ?? [];
       const gestorMerged: string[] = [];
       const seenG = new Set<string>();
-      for (const n of [...cacheGestorNames, ...fromBancaCache]) {
+      for (const n of cacheGestorNames) {
         if (!n || seenG.has(n)) continue;
         seenG.add(n);
         gestorMerged.push(n);
@@ -2316,10 +2534,9 @@ export default function AdminMetaPage() {
             .map((x) => String(x ?? '').trim())
             .filter((s) => s.length > 0)
         : [];
-      const fromBancaCacheUids = bancaGestorUserIdsFromCampaignsCache.get(bancaIdStr) ?? [];
       const gestorUidsMerged: string[] = [];
       const seenUid = new Set<string>();
-      for (const id of [...cacheGestorUids, ...fromBancaCacheUids]) {
+      for (const id of cacheGestorUids) {
         if (!id || seenUid.has(id)) continue;
         seenUid.add(id);
         gestorUidsMerged.push(id);
@@ -2343,8 +2560,6 @@ export default function AdminMetaPage() {
     allCampaignsRows,
     cachedMetricRowsForCrmScope,
     scopedMetaBancaFilter,
-    bancaGestorNamesFromCampaignsCache,
-    bancaGestorUserIdsFromCampaignsCache,
   ]);
 
   /**
@@ -2505,15 +2720,15 @@ export default function AdminMetaPage() {
   }, [usingLiveMetaCards, liveAggregate]);
 
   /**
-   * Cards de resumo Meta. O card principal de "Gasto" mostra o valor efetivamente
-   * cobrado no método de pagamento (cartão) no período do filtro, vindo da edge
-   * `/activities` da Ad Account com `event_type=ad_account_billing_charge`.
-   * Esse valor casa com o que o cartão de crédito mostra (já que o `balance` é só
-   * o que está pendente para a próxima cobrança).
+   * Cards de resumo Meta. O número principal de gasto é a **soma do spend estimado (Insights)**
+   * no período do filtro — todas as campanhas e tipos (normal + bolão), no escopo das bancas —
+   * para ficar coerente com o card "Spend Insights · bolão". Cobranças no cartão vêm da API de
+   * billing (`ad_account_billing_charge`) e podem divergir (threshold, fuso, contas sem permissão).
    */
   const metaSummaryCards = useMemo(() => {
     if (usingLiveMetaCards && liveAggregate?.totals) {
       return {
+        spendAll: displayMetricSummary.spendAll,
         cardCharges: liveCardCharges,
         billingDue: liveBillingDue,
         spendBolao: displayMetricSummary.spendBolao,
@@ -2525,6 +2740,7 @@ export default function AdminMetaPage() {
     }
     if (scopedMetaBancaFilter) {
       return {
+        spendAll: 0,
         cardCharges: 0,
         billingDue: 0,
         spendBolao: 0,
@@ -2538,7 +2754,9 @@ export default function AdminMetaPage() {
     if (overviewApiTotals) {
       const normal = overviewKindSummary.normal;
       const bolao = overviewKindSummary.bolao;
+      const spendAll = (Number(normal.spend) || 0) + (Number(bolao.spend) || 0);
       return {
+        spendAll,
         cardCharges: 0,
         billingDue: 0,
         spendBolao: bolao.spend || 0,
@@ -2549,6 +2767,7 @@ export default function AdminMetaPage() {
       };
     }
     return {
+      spendAll: cacheKindSummary.spendAll,
       cardCharges: 0,
       billingDue: 0,
       spendBolao: cacheKindSummary.spendBolao,
@@ -2936,8 +3155,12 @@ export default function AdminMetaPage() {
         ) : null}
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
+          {/* Card 1: Gasto em Anúncios */}
           <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Gasto total · cobrado no cartão</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Gasto em Anúncios</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
+              Total estimado pelo Meta Ads no período selecionado.
+            </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
@@ -2946,25 +3169,67 @@ export default function AdminMetaPage() {
             ) : (
               <>
                 <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
+                  {formatBRL(metaSummaryCards.spendAll)}
+                </p>
+                {metaSummaryCards.spendBolao > 0 && (
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
+                    Bolão:{' '}
+                    <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+                      {formatBRL(metaSummaryCards.spendBolao)}
+                    </span>
+                  </p>
+                )}
+                {(metaSummaryCards.resultsNormal > 0 || metaSummaryCards.resultsBolao > 0) && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 dark:border-[#333] flex gap-5">
+                    <div>
+                      <p className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase">Resultados Normal</p>
+                      <p className="text-sm font-bold text-gray-900 dark:text-gray-50 tabular-nums">
+                        {metaSummaryCards.resultsNormal.toLocaleString('pt-BR')}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase">Resultados Bolão</p>
+                      <p className="text-sm font-bold text-gray-900 dark:text-gray-50 tabular-nums">
+                        {metaSummaryCards.resultsBolao.toLocaleString('pt-BR')}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Card 2: Cobrado no Cartão */}
+          <div className={`${metaCard} p-4`}>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Cobrado no Cartão</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
+              Débitos reais no cartão pela Meta no período. A cobrança ocorre ao atingir o limite da conta.
+            </p>
+            {metaSummaryCardsLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
+                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <span className="text-sm">Carregando dados…</span>
+              </div>
+            ) : usingLiveMetaCards && liveAggregate?.billing ? (
+              <>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
                   {formatBRL(metaSummaryCards.cardCharges)}
                 </p>
                 {liveCardChargesUsdComponent > 0 ? (
-                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200/90 mt-1 tabular-nums">
+                  <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300 mt-1 tabular-nums">
                     {formatMoneyByCurrency(liveCardChargesUsdComponent, 'USD')}
-                    <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400 ml-1">
-                      (soma das cobranças em contas USD no período)
-                    </span>
+                    <span className="font-normal text-gray-500 dark:text-gray-400 ml-1">(contas USD)</span>
                   </p>
                 ) : null}
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
                   {liveCardChargesCount > 0
                     ? `${liveCardChargesCount} ${liveCardChargesCount === 1 ? 'cobrança' : 'cobranças'} no período`
-                    : 'Sem cobranças no período (cobrança é por threshold, não diária).'}
+                    : 'Sem cobranças no período.'}
                 </p>
                 {(liveCardChargesCountWindow > liveCardChargesCount || liveLatestCharge) ? (
                   <p
                     className="text-[11px] text-gray-500 dark:text-gray-400 mt-1"
-                    title="Histórico completo dos últimos ~90 dias (independente do filtro do painel)."
+                    title="Histórico dos últimos 90 dias."
                   >
                     Últimos 90d:{' '}
                     <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
@@ -2973,7 +3238,7 @@ export default function AdminMetaPage() {
                     {liveCardChargesWindowUsdComponent > 0 ? (
                       <>
                         {' · '}
-                        <span className="font-medium text-amber-800 dark:text-amber-200/90 tabular-nums">
+                        <span className="font-medium text-amber-700 dark:text-amber-300 tabular-nums">
                           {formatMoneyByCurrency(liveCardChargesWindowUsdComponent, 'USD')}
                         </span>
                       </>
@@ -3009,55 +3274,38 @@ export default function AdminMetaPage() {
                     ) : null}
                   </p>
                 ) : null}
-                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
-                  Balance pendente:{' '}
-                  <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">{formatBRL(metaSummaryCards.billingDue)}</span>
-                </p>
               </>
+            ) : (
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-3 italic">
+                Disponível ao selecionar uma banca com dados ao vivo.
+              </p>
             )}
           </div>
+
+          {/* Card 3: A Pagar */}
           <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Spend Insights · bolão</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Spend estimado da Meta em campanhas marcadas como “Bolão”.</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">A Pagar</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
+              Gasto acumulado ainda não cobrado no cartão. Será debitado ao atingir o próximo limite.
+            </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
+            ) : usingLiveMetaCards && liveAggregate?.billing ? (
+              <>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
+                  {formatBRL(metaSummaryCards.billingDue)}
+                </p>
+                {liveBillingAccountsLabel ? (
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">{liveBillingAccountsLabel}</p>
+                ) : null}
+              </>
             ) : (
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
-                {formatBRL(metaSummaryCards.spendBolao)}
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-3 italic">
+                Disponível ao selecionar uma banca com dados ao vivo.
               </p>
-            )}
-          </div>
-          <div className={`${metaCard} p-4`}>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Resultado · normal vs bolão</p>
-            {metaSummaryCardsLoading ? (
-              <>
-                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">Aguarde enquanto os números são obtidos.</p>
-                <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2.5rem]">
-                  <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
-                  <span className="text-sm">Carregando dados…</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">{metaSummaryCards.resultsSub}</p>
-                <div className="mt-3 flex flex-wrap gap-6">
-                  <div>
-                    <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">Normal</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 tabular-nums">
-                      {metaSummaryCards.resultsNormal.toLocaleString('pt-BR')}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">Bolão</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-gray-50 tabular-nums">
-                      {metaSummaryCards.resultsBolao.toLocaleString('pt-BR')}
-                    </p>
-                  </div>
-                </div>
-              </>
             )}
           </div>
         </div>
@@ -3114,10 +3362,10 @@ export default function AdminMetaPage() {
                     </span>
                     <span
                       className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-950/70 px-2.5 py-0.5 text-[11px] font-semibold uppercase text-amber-900 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800"
-                      title="Campo balance da Ad Account: valor pendente que ainda não foi cobrado."
+                      title="Gasto acumulado ainda não cobrado no cartão."
                     >
                       <DollarSign className="w-3 h-3 shrink-0" />
-                      Balance pendente: {formatBRL(liveBillingDue)}
+                      A pagar: {formatBRL(liveBillingDue)}
                       {liveBillingAccountsLabel ? ` · ${liveBillingAccountsLabel}` : ''}
                     </span>
                   </>
@@ -3178,6 +3426,13 @@ export default function AdminMetaPage() {
           </div>
 
           <div className="space-y-4">
+            {/* Erro silencioso de campaigns-all (ex.: migration pendente) */}
+            {allCampaignsError && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span><strong>Erro ao carregar campanhas do banco:</strong> {allCampaignsError}</span>
+              </div>
+            )}
             {/* Tabela de campanhas — sempre visível, não depende de banca específica */}
             {crmCampaignsBlockLoading ? (
               <div className="py-8 flex justify-center">
@@ -3202,14 +3457,20 @@ export default function AdminMetaPage() {
                     </button>
                     {expandedTab === 'campaigns' && (
                       <div className="overflow-x-auto max-h-[min(72vh,920px)] overflow-y-auto">
-                        <table className="w-full text-xs sm:text-sm text-left min-w-[1580px] xl:min-w-[2480px] text-gray-800 dark:text-gray-200">
+                        <table className="w-full text-xs sm:text-sm text-left min-w-[1720px] xl:min-w-[2600px] text-gray-800 dark:text-gray-200">
                           <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0 z-10 shadow-sm">
                             <tr>
                               <th className="px-4 py-2.5">Início</th>
+                              <th
+                                className="px-4 py-2 min-w-[200px]"
+                                title="Consultores que acumulam o spend Meta desta campanha no card «Ads (Meta/Redirect)» em Meu Desempenho (cada um com o valor integral). Sem seleção = regra automática (vínculos + redirect)."
+                              >
+                                Consultores · card Ads
+                              </th>
                               <th className="px-4 py-2.5">Gestor</th>
                               <th className="px-4 py-2.5">Banca</th>
                               <th className="px-4 py-2.5 min-w-[220px]">Campanha</th>
-                              <th className="px-4 py-2 text-right">Spend Insights</th>
+                              <th className="px-4 py-2 text-right">Gasto na Campanha</th>
                               <th className="px-4 py-2">Tipo</th>
                               <th
                                 className="px-4 py-2"
@@ -3223,9 +3484,6 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2 text-right">Leads</th>
                               <th className="px-4 py-2 text-right">Resultados</th>
                               <th className="px-4 py-2 text-right">Leads consultores</th>
-                              <th className="px-4 py-2 text-right">Depósito consultores</th>
-                              <th className="px-4 py-2">Status</th>
-                              <th className="px-4 py-2">Objetivo</th>
                               <th className="px-4 py-2 text-right">Orçamento diário</th>
                               <th
                                 className="px-4 py-2"
@@ -3352,9 +3610,170 @@ export default function AdminMetaPage() {
                                   : isActiveCampaign
                                     ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-l-2 border-l-emerald-400'
                                     : 'hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80';
+                              const bancaKeyAds = String(c.banca_id ?? '');
+                              const rawAdsConsultors = consultorsByBanca[bancaKeyAds] || [];
+                              const adsPickKey = `${bancaKeyAds}:${String(c.campaign_id)}`;
+                              const adsIdsFromRow = (() => {
+                                const ids = (c as { ads_attribution_consultor_ids?: string[] | null })
+                                  .ads_attribution_consultor_ids;
+                                if (Array.isArray(ids) && ids.length > 0) {
+                                  return Array.from(
+                                    new Set(ids.map((x) => String(x ?? '').trim()).filter((s) => s.length > 0))
+                                  );
+                                }
+                                const one = (c as { ads_attribution_consultor_id?: string | null })
+                                  .ads_attribution_consultor_id;
+                                return one ? [String(one)] : [];
+                              })();
+                              const adsSelectedIds =
+                                campaignAdsAttributionDraft[adsPickKey] ?? adsIdsFromRow;
+                              const adsFilterQuery = (consultorAdsFilterByBanca[bancaKeyAds] || '').trim().toLowerCase();
+                              let adsConsultorOptionsForSelect = adsFilterQuery
+                                ? rawAdsConsultors.filter((co) => {
+                                    const label = `${co.full_name || ''} ${co.email || ''}`.toLowerCase();
+                                    return label.includes(adsFilterQuery);
+                                  })
+                                : rawAdsConsultors;
+                              for (const sid of adsSelectedIds) {
+                                const selCo = rawAdsConsultors.find((co) => co.id === sid);
+                                if (
+                                  selCo &&
+                                  !adsConsultorOptionsForSelect.some((co) => co.id === sid)
+                                ) {
+                                  adsConsultorOptionsForSelect = [selCo, ...adsConsultorOptionsForSelect];
+                                }
+                              }
+                              const isAdsDropdownOpen = openAdsDropdownKey === adsPickKey;
                               return (
                                 <tr key={rowKey} className={rowClass}>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                  <td className="px-4 py-2 align-top">
+                                    {c.banca_id ? (
+                                      <div data-ads-dropdown className="relative flex flex-col gap-1 min-w-[200px] max-w-[260px]">
+                                        {/* Chips + toggle button row */}
+                                        <div
+                                          className="flex flex-wrap items-center gap-1 cursor-pointer"
+                                          onClick={() => setOpenAdsDropdownKey(isAdsDropdownOpen ? null : adsPickKey)}
+                                        >
+                                          {adsSelectedIds.length > 0 ? (
+                                            <>
+                                              {adsSelectedIds.map((sid) => {
+                                                const selCo = rawAdsConsultors.find((co) => co.id === sid);
+                                                const name = selCo?.full_name || selCo?.email || sid;
+                                                return (
+                                                  <span
+                                                    key={sid}
+                                                    className="inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 text-[10px] font-medium px-2 py-0.5 leading-tight max-w-full"
+                                                  >
+                                                    <span className="truncate max-w-[150px]">{name}</span>
+                                                    <button
+                                                      type="button"
+                                                      disabled={campaignAdsAttributionSavingKey === adsPickKey}
+                                                      className="shrink-0 opacity-60 hover:opacity-100 disabled:pointer-events-none"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        const next = adsSelectedIds.filter((id) => id !== sid);
+                                                        setCampaignAdsAttributionDraft((prev) => ({ ...prev, [adsPickKey]: next }));
+                                                        void handleSaveCampaignAdsAttribution(String(c.banca_id), String(c.campaign_id), next, c.name ?? null);
+                                                      }}
+                                                    >
+                                                      ×
+                                                    </button>
+                                                  </span>
+                                                );
+                                              })}
+                                            </>
+                                          ) : (
+                                            <span className="text-[10px] text-gray-400 dark:text-gray-500 italic">
+                                              Automático (vínculos)
+                                            </span>
+                                          )}
+                                          {/* Chevron toggle */}
+                                          <span className="ml-auto shrink-0 text-gray-400 dark:text-gray-500 text-[10px] select-none">
+                                            {isAdsDropdownOpen ? '▲' : '▼'}
+                                          </span>
+                                        </div>
+                                        {/* Collapsible dropdown */}
+                                        {isAdsDropdownOpen && (
+                                          <div className="absolute top-full left-0 z-50 mt-1 w-64 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] shadow-lg p-1.5 space-y-1">
+                                            {/* Filter input */}
+                                            {rawAdsConsultors.length > 4 ? (
+                                              <input
+                                                type="search"
+                                                autoFocus
+                                                placeholder="Filtrar nome ou e-mail…"
+                                                value={consultorAdsFilterByBanca[bancaKeyAds] ?? ''}
+                                                onChange={(e) =>
+                                                  setConsultorAdsFilterByBanca((prev) => ({
+                                                    ...prev,
+                                                    [bancaKeyAds]: e.target.value,
+                                                  }))
+                                                }
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full px-2 py-1 rounded-md border border-gray-200 dark:border-[#404040] text-[11px] text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
+                                              />
+                                            ) : null}
+                                            {/* Checkbox list */}
+                                            <div
+                                              title="Spend Meta no Meu Desempenho: consultores marcados. «Automático» = sem marcação."
+                                              className={`max-h-[min(220px,36vh)] overflow-y-auto space-y-0.5 ${campaignAdsAttributionSavingKey === adsPickKey ? 'opacity-50 pointer-events-none' : ''}`}
+                                            >
+                                              {adsConsultorOptionsForSelect.map((co) => {
+                                                const checked = adsSelectedIds.includes(co.id);
+                                                return (
+                                                  <label
+                                                    key={co.id}
+                                                    className={`flex items-start gap-2 cursor-pointer rounded px-1 py-0.5 ${checked ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'hover:bg-gray-50 dark:hover:bg-[#333]'}`}
+                                                  >
+                                                    <input
+                                                      type="checkbox"
+                                                      className="mt-0.5 shrink-0 accent-indigo-600"
+                                                      checked={checked}
+                                                      disabled={campaignAdsAttributionSavingKey === adsPickKey}
+                                                      onChange={(e) => {
+                                                        const next = e.target.checked
+                                                          ? Array.from(new Set([...adsSelectedIds, co.id]))
+                                                          : adsSelectedIds.filter((id) => id !== co.id);
+                                                        setCampaignAdsAttributionDraft((prev) => ({
+                                                          ...prev,
+                                                          [adsPickKey]: next,
+                                                        }));
+                                                        void handleSaveCampaignAdsAttribution(
+                                                          String(c.banca_id),
+                                                          String(c.campaign_id),
+                                                          next,
+                                                          c.name ?? null
+                                                        );
+                                                      }}
+                                                    />
+                                                    <span className={`text-[11px] leading-tight ${checked ? 'text-indigo-800 dark:text-indigo-200 font-medium' : 'text-gray-700 dark:text-gray-300'}`}>
+                                                      {co.full_name || co.email || co.id}
+                                                    </span>
+                                                  </label>
+                                                );
+                                              })}
+                                            </div>
+                                            {rawAdsConsultors.length === 0 ? (
+                                              <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+                                                Nenhum perfil elegível na rede desta banca (consultor, gerente, admin, gestor ou
+                                                super_admin — vínculo em user_bancas ou hierarquia enroller abaixo do
+                                                dono/gestores). Ajuste vínculos ou cadastre em Admin › Hierarquia.
+                                              </p>
+                                            ) : null}
+                                            {rawAdsConsultors.length > 0 &&
+                                            adsFilterQuery &&
+                                            adsConsultorOptionsForSelect.length === 0 ? (
+                                              <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                                                Nenhum nome coincide com o filtro.
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-gray-400">—</span>
+                                    )}
+                                  </td>
                                   <td className="px-4 py-2 text-xs text-gray-700 dark:text-gray-300">
                                     {Array.isArray(c.gestor_names) && c.gestor_names.length > 0 ? c.gestor_names.join(', ') : '—'}
                                   </td>
@@ -3552,9 +3971,6 @@ export default function AdminMetaPage() {
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{(Number(c.consultor_total_leads) || 0).toLocaleString('pt-BR')}</td>
-                                  <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">R$ {(Number(c.consultor_total_deposited) || 0).toFixed(2)}</td>
-                                  <td className="px-4 py-2 text-gray-700 dark:text-white">{c.effective_status || c.status || '-'}</td>
-                                  <td className="px-4 py-2 text-gray-700 dark:text-white">{c.objective || '-'}</td>
                                   <td className="px-4 py-2 text-right text-gray-700 dark:text-white">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
                                   <td className="px-4 py-2">
                                     {c.banca_id ? (
@@ -3800,7 +4216,7 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
                               <th className="px-4 py-2"><MousePointer className="w-4 h-4 inline" /> Impressões</th>
                               <th className="px-4 py-2">Cliques</th>
-                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Spend Insights</th>
+                              <th className="px-4 py-2"><DollarSign className="w-4 h-4 inline" /> Gasto na Campanha</th>
                               <th className="px-4 py-2">Leads</th>
                               <th className="px-4 py-2">CPM</th>
                               <th className="px-4 py-2">CPC</th>
@@ -3972,22 +4388,40 @@ export default function AdminMetaPage() {
                         {row.last_sync_date_preset ? <p className="text-gray-500 dark:text-gray-500 mt-0.5">{row.last_sync_date_preset}</p> : null}
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedBancaIds([row.banca_id]);
-                            setAdminMetaCreateNewIntegration(false);
-                            if (row.integration_id) setAdminMetaSelectedIntegrationId(row.integration_id);
-                            else setAdminMetaSelectedIntegrationId('');
-                            setSyncedData(null);
-                            setTimeout(() => {
-                              document.getElementById('dados-sincronizados-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                            }, 0);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white text-xs font-medium"
-                        >
-                          Ver dados
-                        </button>
+                        <div className="flex flex-col gap-2 items-start">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedBancaIds([row.banca_id]);
+                              setAdminMetaCreateNewIntegration(false);
+                              if (row.integration_id) setAdminMetaSelectedIntegrationId(row.integration_id);
+                              else setAdminMetaSelectedIntegrationId('');
+                              setSyncedData(null);
+                              setTimeout(() => {
+                                document.getElementById('dados-sincronizados-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 0);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white text-xs font-medium"
+                          >
+                            Ver dados
+                          </button>
+                          {row.configured && row.integration_id ? (
+                            <button
+                              type="button"
+                              disabled={overviewUnlinkKey !== null}
+                              onClick={() => void handleOverviewUnlinkBancaRow(row)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 bg-amber-50/90 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-xs font-medium disabled:opacity-50"
+                              title="Remove só o vínculo desta banca com esta integração; atualiza a lista."
+                            >
+                              {overviewUnlinkKey === `${row.banca_id}:${row.integration_id}` ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                              ) : (
+                                <Unplug className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              Desvincular banca
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -4183,6 +4617,48 @@ export default function AdminMetaPage() {
                 </div>
               ) : null}
             </div>
+            {selectedBancaIds.length > 0 ? (
+              <div className="mt-3 max-w-xl">
+                <p className="text-[11px] font-medium text-gray-600 dark:text-gray-400 mb-2">
+                  {config?.configured && !adminMetaCreateNewIntegration && selectedBancaIds.length > 1
+                    ? 'Bancas vinculadas — use × para desvincular uma e manter as outras'
+                    : 'Bancas selecionadas neste grupo'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedBancaIds.map((bid) => {
+                    const b = bancas.find((x) => String(x.id) === String(bid));
+                    const label = b?.name || b?.url || shortUuid(bid);
+                    const showRemove =
+                      Boolean(config?.configured) &&
+                      !adminMetaCreateNewIntegration &&
+                      Boolean(adminMetaSelectedIntegrationId || config?.integration_id) &&
+                      selectedBancaIds.length > 1;
+                    return (
+                      <span
+                        key={bid}
+                        className="inline-flex items-center gap-1 max-w-full rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] pl-2.5 pr-1 py-1 text-xs text-gray-800 dark:text-gray-100 shadow-sm"
+                      >
+                        <span className="truncate max-w-[220px]" title={label}>
+                          {label}
+                        </span>
+                        {showRemove ? (
+                          <button
+                            type="button"
+                            disabled={metaIntegrationUiBusy || saving}
+                            onClick={() => void handleQuickUnlinkBancaFromIntegration(bid)}
+                            className="shrink-0 rounded-md p-1 text-gray-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/50 dark:hover:text-red-300 disabled:opacity-40 touch-manipulation"
+                            title={`Remover «${label}» desta integração (mantém as outras)`}
+                            aria-label={`Remover ${label} desta integração`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        ) : null}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 max-w-xl">
               Com uma integração selecionada no bloco abaixo, as caixas definem em quais bancas ela vale (tabela{' '}
               <code className="text-[11px] bg-gray-100 dark:bg-[#333] text-gray-800 dark:text-gray-200 px-1 rounded">meta_integration_bancas</code>

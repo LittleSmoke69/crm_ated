@@ -29,6 +29,8 @@ import {
   ArrowDownToLine,
   XCircle,
   CheckCircle2,
+  Undo2,
+  RotateCcw,
 } from 'lucide-react';
 
 type Banca = { id: string; name?: string | null; url?: string | null };
@@ -45,6 +47,7 @@ type StockPackage = {
   pending_leads: number;
   distributed_leads: number;
   canceled_leads: number;
+  reverted_leads: number;
   /** Preenchido quando admin visualiza vários gerentes ou filtro explícito */
   stock_gerente_user_id?: string | null;
   gerente_name?: string | null;
@@ -55,7 +58,7 @@ type StockLead = {
   transfer_log_id: string;
   banca_id: string;
   original_source_consultant_email: string | null;
-  stock_status: 'em_estoque' | 'repassado' | 'cancelado';
+  stock_status: 'em_estoque' | 'repassado' | 'cancelado' | 'revertido';
   received_at: string;
   deadline_days: number;
   transfer_type: string;
@@ -88,7 +91,15 @@ type HistoryItem = {
   stock_pending: number;
   stock_distributed: number;
   stock_canceled: number;
-  status_label: 'em_estoque' | 'repassado' | 'cancelado_total' | 'cancelado_parcial' | 'distribuido';
+  stock_reverted: number;
+  status_label:
+    | 'em_estoque'
+    | 'repassado'
+    | 'cancelado_total'
+    | 'cancelado_parcial'
+    | 'revertido_total'
+    | 'revertido_parcial'
+    | 'distribuido';
   stock_gerente_user_id?: string | null;
   stock_gerente_name?: string | null;
 };
@@ -112,7 +123,7 @@ type PackageSortField = 'created_at' | 'transfer_type' | 'deadline_days' | 'pend
 type HistorySortField = 'created_at' | 'kind' | 'transfer_type' | 'count' | 'total_balance' | 'target_consultant_name';
 type SortDir = 'asc' | 'desc';
 type ActiveTab = 'packages' | 'history';
-type HistoryFilter = 'all' | 'reserved' | 'distributed' | 'canceled';
+type HistoryFilter = 'all' | 'reserved' | 'distributed' | 'canceled' | 'reverted';
 
 type BalanceFilterMode = 'all' | 'with_balance' | 'without_balance' | 'range';
 /** Igual à transferência de leads: depositado e apostado */
@@ -243,6 +254,11 @@ export default function GerenteLeadStockTransferPage() {
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
   const [historySort, setHistorySort] = useState<{ field: HistorySortField; dir: SortDir }>({ field: 'created_at', dir: 'desc' });
 
+  const [reverting, setReverting] = useState(false);
+  /** Lista do pacote aberto: em estoque vs cancelados (admin cancelou a reserva). */
+  const [packageLeadStatusTab, setPackageLeadStatusTab] = useState<'em_estoque' | 'cancelado'>('em_estoque');
+  const [restoringCanceled, setRestoringCanceled] = useState(false);
+
   const isAdminStockViewer = userStatus === 'admin' || userStatus === 'super_admin';
   const [adminGerenteFilter, setAdminGerenteFilter] = useState('');
   const [adminGerentes, setAdminGerentes] = useState<{ id: string; email: string; full_name: string | null }[]>([]);
@@ -310,7 +326,7 @@ export default function GerenteLeadStockTransferPage() {
           ? `&gerente_user_id=${encodeURIComponent(gerenteForPackage)}`
           : '';
       const res = await fetch(
-        `/api/gerente/crm/lead-stock/package-leads?banca_id=${encodeURIComponent(bancaId)}&transfer_log_id=${encodeURIComponent(selectedLogId)}&status=em_estoque${gidQs}`,
+        `/api/gerente/crm/lead-stock/package-leads?banca_id=${encodeURIComponent(bancaId)}&transfer_log_id=${encodeURIComponent(selectedLogId)}&status=${encodeURIComponent(packageLeadStatusTab)}${gidQs}`,
         { headers: authHeaders(userId) }
       );
       const json = await res.json();
@@ -326,7 +342,7 @@ export default function GerenteLeadStockTransferPage() {
     } finally {
       setLoadingLeads(false);
     }
-  }, [userId, bancaId, selectedLogId, showToast, isAdminStockViewer, packages, adminGerenteFilter]);
+  }, [userId, bancaId, selectedLogId, packageLeadStatusTab, showToast, isAdminStockViewer, packages, adminGerenteFilter]);
 
   const loadHistory = useCallback(async () => {
     if (!userId || !bancaId) {
@@ -445,7 +461,6 @@ export default function GerenteLeadStockTransferPage() {
   }, [loadConsultores]);
 
   useEffect(() => {
-    void loadPackageLeads();
     setSelected(new Set());
     setLeadSearch('');
     setBalanceFilter('all');
@@ -458,7 +473,15 @@ export default function GerenteLeadStockTransferPage() {
     setApostaMinStr('');
     setApostaMaxStr('');
     setBulkFirstNInput('');
-  }, [selectedLogId, loadPackageLeads]);
+  }, [selectedLogId]);
+
+  useEffect(() => {
+    if (!selectedLogId || !userId || !bancaId) {
+      setLeads([]);
+      return;
+    }
+    void loadPackageLeads();
+  }, [selectedLogId, packageLeadStatusTab, userId, bancaId, loadPackageLeads]);
 
   useEffect(() => {
     if (activeTab === 'history') void loadHistory();
@@ -467,6 +490,265 @@ export default function GerenteLeadStockTransferPage() {
   const currentPackage = useMemo(
     () => packages.find((p) => p.transfer_log_id === selectedLogId) ?? null,
     [packages, selectedLogId]
+  );
+
+  const gerenteIdForRevert = useCallback(
+    (pkg: StockPackage | null): string | null => {
+      if (!pkg || !userId) return null;
+      if (isAdminStockViewer) {
+        const fromPkg = (pkg.stock_gerente_user_id ?? '').trim();
+        if (fromPkg) return fromPkg;
+        const fromFilter = adminGerenteFilter.trim();
+        if (fromFilter) return fromFilter;
+        return null;
+      }
+      return userId;
+    },
+    [userId, isAdminStockViewer, adminGerenteFilter]
+  );
+
+  const runRevertFromPackageDetail = useCallback(
+    async (opts: { lead_ids?: string[] }) => {
+      if (!userId || !bancaId || !selectedLogId) return;
+      const pkg = packages.find((p) => p.transfer_log_id === selectedLogId) ?? null;
+      const gerenteId = gerenteIdForRevert(pkg);
+      if (!gerenteId) {
+        showToast(
+          isAdminStockViewer
+            ? 'Não foi possível identificar o gerente do pacote. Filtre um gerente ou use o botão na lista de pacotes.'
+            : 'Não foi possível reverter.',
+          'error'
+        );
+        return;
+      }
+      const pendingCount = pkg?.pending_leads ?? 0;
+      const selCount = opts.lead_ids?.length ?? 0;
+      const msg =
+        opts.lead_ids && opts.lead_ids.length > 0
+          ? `Reverter ${selCount} lead(s) selecionado(s) ao consultor de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`
+          : `Reverter ${pendingCount} lead(s) ainda em estoque ao consultor de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`;
+      if (!window.confirm(msg)) return;
+
+      setReverting(true);
+      try {
+        const body: Record<string, unknown> = {
+          banca_id: bancaId,
+          transfer_log_id: selectedLogId,
+        };
+        if (isAdminStockViewer) body.gerente_user_id = gerenteId;
+        if (opts.lead_ids?.length) body.lead_ids = opts.lead_ids;
+
+        const res = await fetch('/api/gerente/crm/revert-stock-to-donor', {
+          method: 'POST',
+          headers: authHeaders(userId),
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          showToast(json?.message ?? 'Reversão registrada.', 'success');
+          setSelected(new Set());
+          await Promise.all([loadPackageLeads(), loadPackages(), loadHistory()]);
+        } else {
+          showToast(json?.error ?? 'Erro ao reverter.', 'error');
+        }
+      } catch {
+        showToast('Erro ao reverter.', 'error');
+      } finally {
+        setReverting(false);
+      }
+    },
+    [
+      userId,
+      bancaId,
+      selectedLogId,
+      packages,
+      gerenteIdForRevert,
+      isAdminStockViewer,
+      showToast,
+      loadPackageLeads,
+      loadPackages,
+      loadHistory,
+    ]
+  );
+
+  const runRevertFromPackageList = useCallback(
+    async (pkg: StockPackage) => {
+      if (!userId || !bancaId) return;
+      const gerenteId = gerenteIdForRevert(pkg);
+      if (!gerenteId) {
+        showToast('Selecione um gerente no filtro ou abra um pacote cuja linha identifique o gerente.', 'error');
+        return;
+      }
+      if (
+        !window.confirm(
+          `Reverter ${pkg.pending_leads} lead(s) em estoque deste pacote ao consultor de origem (registro interno)? O CRM não é alterado automaticamente.`
+        )
+      )
+        return;
+
+      setReverting(true);
+      try {
+        const body: Record<string, unknown> = {
+          banca_id: bancaId,
+          transfer_log_id: pkg.transfer_log_id,
+        };
+        if (isAdminStockViewer) body.gerente_user_id = gerenteId;
+
+        const res = await fetch('/api/gerente/crm/revert-stock-to-donor', {
+          method: 'POST',
+          headers: authHeaders(userId),
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          showToast(json?.message ?? 'Reversão registrada.', 'success');
+          await Promise.all([loadPackages(), loadHistory()]);
+          if (selectedLogId === pkg.transfer_log_id) {
+            await loadPackageLeads();
+          }
+        } else {
+          showToast(json?.error ?? 'Erro ao reverter.', 'error');
+        }
+      } catch {
+        showToast('Erro ao reverter.', 'error');
+      } finally {
+        setReverting(false);
+      }
+    },
+    [
+      userId,
+      bancaId,
+      gerenteIdForRevert,
+      isAdminStockViewer,
+      showToast,
+      loadPackages,
+      loadHistory,
+      loadPackageLeads,
+      selectedLogId,
+    ]
+  );
+
+  const runRestoreCanceledFromPackageList = useCallback(
+    async (pkg: StockPackage) => {
+      if (!userId || !bancaId) return;
+      const gerenteId = gerenteIdForRevert(pkg);
+      if (!gerenteId) {
+        showToast('Selecione um gerente no filtro ou use a linha que identifica o gerente.', 'error');
+        return;
+      }
+      const n = pkg.canceled_leads ?? 0;
+      if (n === 0) return;
+      if (
+        !window.confirm(
+          `Reverter ${n} lead(s) em status Cancelado: voltam ao estoque ativo do gerente (em estoque)? O CRM não é alterado automaticamente.`
+        )
+      )
+        return;
+
+      setRestoringCanceled(true);
+      try {
+        const body: Record<string, unknown> = {
+          banca_id: bancaId,
+          transfer_log_id: pkg.transfer_log_id,
+        };
+        if (isAdminStockViewer) body.gerente_user_id = gerenteId;
+
+        const res = await fetch('/api/gerente/crm/restore-canceled-stock', {
+          method: 'POST',
+          headers: authHeaders(userId),
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          showToast(json?.message ?? 'Cancelamento revertido no estoque.', 'success');
+          await Promise.all([loadPackages(), loadHistory()]);
+          if (selectedLogId === pkg.transfer_log_id) {
+            await loadPackageLeads();
+          }
+        } else {
+          showToast(json?.error ?? 'Erro ao reverter cancelamento.', 'error');
+        }
+      } catch {
+        showToast('Erro ao reverter cancelamento.', 'error');
+      } finally {
+        setRestoringCanceled(false);
+      }
+    },
+    [
+      userId,
+      bancaId,
+      gerenteIdForRevert,
+      isAdminStockViewer,
+      showToast,
+      loadPackages,
+      loadHistory,
+      loadPackageLeads,
+      selectedLogId,
+    ]
+  );
+
+  const runRestoreCanceledFromPackageDetail = useCallback(
+    async (opts: { lead_ids?: string[] }) => {
+      if (!userId || !bancaId || !selectedLogId) return;
+      const pkg = packages.find((p) => p.transfer_log_id === selectedLogId) ?? null;
+      const gerenteId = gerenteIdForRevert(pkg);
+      if (!gerenteId) {
+        showToast(
+          isAdminStockViewer
+            ? 'Não foi possível identificar o gerente do pacote. Filtre um gerente na lista de pacotes.'
+            : 'Não foi possível restaurar.',
+          'error'
+        );
+        return;
+      }
+      const canceledCount = pkg?.canceled_leads ?? 0;
+      const msg =
+        opts.lead_ids && opts.lead_ids.length > 0
+          ? `Restaurar ${opts.lead_ids!.length} lead(s) cancelado(s) para o estoque ativo deste gerente? (Volta a \"em estoque\" para distribuir de novo; não altera o CRM sozinho.)`
+          : `Restaurar ${canceledCount} lead(s) cancelado(s) para o estoque ativo deste gerente?`;
+      if (!window.confirm(msg)) return;
+
+      setRestoringCanceled(true);
+      try {
+        const body: Record<string, unknown> = {
+          banca_id: bancaId,
+          transfer_log_id: selectedLogId,
+        };
+        if (isAdminStockViewer) body.gerente_user_id = gerenteId;
+        if (opts.lead_ids?.length) body.lead_ids = opts.lead_ids;
+
+        const res = await fetch('/api/gerente/crm/restore-canceled-stock', {
+          method: 'POST',
+          headers: authHeaders(userId),
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          showToast(json?.message ?? 'Reservas restauradas no estoque.', 'success');
+          setSelected(new Set());
+          setPackageLeadStatusTab('em_estoque');
+          await Promise.all([loadPackageLeads(), loadPackages(), loadHistory()]);
+        } else {
+          showToast(json?.error ?? 'Erro ao restaurar.', 'error');
+        }
+      } catch {
+        showToast('Erro ao restaurar.', 'error');
+      } finally {
+        setRestoringCanceled(false);
+      }
+    },
+    [
+      userId,
+      bancaId,
+      selectedLogId,
+      packages,
+      gerenteIdForRevert,
+      isAdminStockViewer,
+      showToast,
+      loadPackageLeads,
+      loadPackages,
+      loadHistory,
+    ]
   );
 
   /** KPIs globais dos pacotes */
@@ -604,6 +886,12 @@ export default function GerenteLeadStockTransferPage() {
       if (historyFilter === 'reserved' && h.kind !== 'reserved') return false;
       if (historyFilter === 'distributed' && h.kind !== 'distributed') return false;
       if (historyFilter === 'canceled' && h.status_label !== 'cancelado_total' && h.status_label !== 'cancelado_parcial') return false;
+      if (
+        historyFilter === 'reverted' &&
+        h.status_label !== 'revertido_total' &&
+        h.status_label !== 'revertido_parcial'
+      )
+        return false;
       if (!term) return true;
       return (
         (h.target_consultant_name ?? '').toLowerCase().includes(term) ||
@@ -864,18 +1152,35 @@ export default function GerenteLeadStockTransferPage() {
 
         {/* Conteúdo principal */}
         {activeTab === 'history' ? (
-          <HistoryView
-            items={historyView}
-            totalCount={history.length}
-            loading={loadingHistory}
-            search={historySearch}
-            onSearchChange={setHistorySearch}
-            filter={historyFilter}
-            onFilterChange={setHistoryFilter}
-            sort={historySort}
-            onToggleSort={toggleHistorySort}
-            showGerenteColumn={showGerenteColumnMerged}
-          />
+          <div className="space-y-4">
+            {isAdminStockViewer && (
+              <div className="rounded-xl border border-blue-200 dark:border-blue-900/45 bg-blue-50/90 dark:bg-blue-950/30 px-4 py-3 text-xs text-blue-950 dark:text-blue-100">
+                <p className="font-semibold text-blue-900 dark:text-blue-50 mb-1">Transferências feitas pelos gerentes</p>
+                <p className="text-blue-900/90 dark:text-blue-100/95 leading-relaxed">
+                  Aqui aparecem também as linhas <strong>Estoque → Consultor</strong> (repasse pelo gerente). Use o filtro{' '}
+                  <strong>Repasses feitos</strong> para ver só esse tipo. A coluna <strong>Gerente</strong> indica quem
+                  executou o repasse.
+                </p>
+                <p className="text-blue-900/85 dark:text-blue-100/90 mt-2 leading-relaxed">
+                  Para <strong>reverter reservas ainda em estoque</strong> (devolver ao consultor doador no registro do
+                  estoque), vá à aba <strong>Pacotes do estoque</strong> e use <strong>Reverter</strong> no pacote — não
+                  desfaz automaticamente o CRM nos repasses já feitos pelo gerente.
+                </p>
+              </div>
+            )}
+            <HistoryView
+              items={historyView}
+              totalCount={history.length}
+              loading={loadingHistory}
+              search={historySearch}
+              onSearchChange={setHistorySearch}
+              filter={historyFilter}
+              onFilterChange={setHistoryFilter}
+              sort={historySort}
+              onToggleSort={toggleHistorySort}
+              showGerenteColumn={isAdminStockViewer}
+            />
+          </div>
         ) : !selectedLogId ? (
           <PackagesList
             packagesView={packagesView}
@@ -884,7 +1189,16 @@ export default function GerenteLeadStockTransferPage() {
             onSearchChange={setPkgSearch}
             sort={pkgSort}
             onToggleSort={togglePkgSort}
-            onOpen={(id) => setSelectedLogId(id)}
+            onOpen={(id) => {
+              setPackageLeadStatusTab('em_estoque');
+              setSelectedLogId(id);
+            }}
+            onRevertPackage={(pkg) => void runRevertFromPackageList(pkg)}
+            reverting={reverting}
+            revertAllowed={(pkg) => !!gerenteIdForRevert(pkg)}
+            onRestoreCanceledPackage={(pkg) => void runRestoreCanceledFromPackageList(pkg)}
+            restoringCanceled={restoringCanceled}
+            restoreCanceledAllowed={(pkg) => !!gerenteIdForRevert(pkg)}
             showGerenteColumn={showGerenteColumnMerged}
             viewerMode={isAdminStockViewer ? 'admin' : 'gerente'}
           />
@@ -931,6 +1245,32 @@ export default function GerenteLeadStockTransferPage() {
                         <span className="text-sm font-semibold text-gray-800 dark:text-white whitespace-nowrap">
                           Leads no pacote
                         </span>
+                        <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#444] p-0.5 gap-0.5 bg-gray-50 dark:bg-[#333]">
+                          <button
+                            type="button"
+                            onClick={() => setPackageLeadStatusTab('em_estoque')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                              packageLeadStatusTab === 'em_estoque'
+                                ? 'bg-[#8CD955]/25 text-[#5a7a35] dark:text-[#8CD955] border border-[#8CD955]/40'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                          >
+                            Em estoque
+                            {currentPackage != null ? ` (${currentPackage.pending_leads})` : ''}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPackageLeadStatusTab('cancelado')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                              packageLeadStatusTab === 'cancelado'
+                                ? 'bg-red-500/15 text-red-800 dark:text-red-200 border border-red-500/35'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                          >
+                            Cancelados
+                            {currentPackage != null ? ` (${currentPackage.canceled_leads})` : ''}
+                          </button>
+                        </div>
                         <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
                           lista: {filteredListStats.visible} / {leads.length}
                           {' · '}
@@ -1159,7 +1499,9 @@ export default function GerenteLeadStockTransferPage() {
                     <Inbox className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
                     <p className="text-sm text-gray-500 dark:text-gray-400">
                       {leads.length === 0
-                        ? 'Nenhum lead em estoque neste pacote.'
+                        ? packageLeadStatusTab === 'cancelado'
+                          ? 'Nenhum lead cancelado neste pacote (ou já foram restaurados ao estoque).'
+                          : 'Nenhum lead em estoque neste pacote.'
                         : 'Nenhum lead corresponde à busca ou aos filtros (saldo, depósito, aposta). Ajuste os filtros acima.'}
                     </p>
                   </div>
@@ -1263,12 +1605,25 @@ export default function GerenteLeadStockTransferPage() {
                     <div className="rounded-lg border border-blue-200 dark:border-blue-900/40 bg-blue-50/80 dark:bg-blue-950/25 p-3 text-xs text-blue-900 dark:text-blue-100">
                       Use esta tela para conferir leads e histórico. Para distribuir leads a consultores, o gerente deve abrir o mesmo pacote na conta dele.
                     </div>
+                    {packageLeadStatusTab === 'cancelado' && (currentPackage?.canceled_leads ?? 0) > 0 ? (
+                      <div className="rounded-lg border border-amber-200 dark:border-amber-900/45 bg-amber-50/90 dark:bg-amber-950/25 p-3 text-xs text-amber-950 dark:text-amber-100">
+                        Na aba <strong>Cancelados</strong>, use o painel <strong>Restaurar cancelados no estoque do gerente</strong> para
+                        desfazer o cancelamento da reserva e devolver os leads ao estoque ativo deste gerente.
+                      </div>
+                    ) : null}
                     {currentPackage?.gerente_name ? (
                       <p className="text-[11px] text-gray-600 dark:text-gray-400">
                         Pacote no estoque de:{' '}
                         <span className="font-semibold text-gray-800 dark:text-gray-200">{currentPackage.gerente_name}</span>
                       </p>
                     ) : null}
+                  </div>
+                ) : packageLeadStatusTab === 'cancelado' ? (
+                  <div className="p-4 space-y-3">
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-900/45 bg-amber-50/90 dark:bg-amber-950/25 p-3 text-xs text-amber-950 dark:text-amber-100">
+                      Estes leads tiveram a <strong>reserva cancelada pelo admin</strong>. Restaure-os ao estoque (painel abaixo)
+                      para voltarem a ficar disponíveis para repasse aos consultores.
+                    </div>
                   </div>
                 ) : (
                   <div className="p-4 space-y-4">
@@ -1327,6 +1682,93 @@ export default function GerenteLeadStockTransferPage() {
                 )}
               </div>
 
+              {currentPackage &&
+                packageLeadStatusTab === 'em_estoque' &&
+                currentPackage.pending_leads > 0 &&
+                gerenteIdForRevert(currentPackage) && (
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-violet-200 dark:border-violet-900/50 overflow-hidden">
+                    <div className="px-4 py-3 bg-violet-50 dark:bg-violet-950/30 border-b border-violet-200 dark:border-violet-900/40">
+                      <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                        <Undo2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                        Reverter ao consultor de origem
+                      </h2>
+                      <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5">
+                        Registra no estoque como revertido (consultor doador nos dados da reserva). O CRM não é alterado neste passo.
+                      </p>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      <button
+                        type="button"
+                        disabled={reverting}
+                        onClick={() => void runRevertFromPackageDetail({})}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-violet-300 dark:border-violet-700 text-violet-900 dark:text-violet-100 font-semibold text-sm bg-violet-50 dark:bg-violet-950/40 hover:bg-violet-100 dark:hover:bg-violet-950/70 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {reverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Undo2 className="w-4 h-4" />}
+                        Reverter todos em estoque ({currentPackage.pending_leads})
+                      </button>
+                      {!isAdminStockViewer && selected.size > 0 && (
+                        <button
+                          type="button"
+                          disabled={reverting}
+                          onClick={() => void runRevertFromPackageDetail({ lead_ids: Array.from(selected) })}
+                          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-800 dark:text-gray-100 font-semibold text-sm bg-gray-50 dark:bg-[#333] hover:bg-gray-100 dark:hover:bg-[#3d3d3d] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {reverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Undo2 className="w-4 h-4" />}
+                          Reverter selecionados ({selected.size})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {currentPackage &&
+                packageLeadStatusTab === 'cancelado' &&
+                (currentPackage.canceled_leads ?? 0) > 0 &&
+                gerenteIdForRevert(currentPackage) && (
+                  <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-amber-200 dark:border-amber-900/45 overflow-hidden">
+                    <div className="px-4 py-3 bg-amber-50 dark:bg-amber-950/25 border-b border-amber-200 dark:border-amber-900/40">
+                      <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-amber-700 dark:text-amber-400" />
+                        Restaurar cancelados no estoque do gerente
+                      </h2>
+                      <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5">
+                        Leads marcados como cancelados pela administração voltam a <strong>em estoque</strong> para este
+                        gerente poder repassar. Não altera o CRM automaticamente.
+                      </p>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      <button
+                        type="button"
+                        disabled={restoringCanceled}
+                        onClick={() => void runRestoreCanceledFromPackageDetail({})}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-amber-400 dark:border-amber-800 text-amber-950 dark:text-amber-50 font-semibold text-sm bg-amber-50 dark:bg-amber-950/35 hover:bg-amber-100 dark:hover:bg-amber-950/55 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {restoringCanceled ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-4 h-4" />
+                        )}
+                        Restaurar todos os cancelados ({currentPackage.canceled_leads})
+                      </button>
+                      {!isAdminStockViewer && selected.size > 0 && (
+                        <button
+                          type="button"
+                          disabled={restoringCanceled}
+                          onClick={() => void runRestoreCanceledFromPackageDetail({ lead_ids: Array.from(selected) })}
+                          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-800 dark:text-gray-100 font-semibold text-sm bg-gray-50 dark:bg-[#333] hover:bg-gray-100 dark:hover:bg-[#3d3d3d] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {restoringCanceled ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <RotateCcw className="w-4 h-4" />
+                          )}
+                          Restaurar selecionados ({selected.size})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
               {currentPackage && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-4 text-xs space-y-2">
                   <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-1">Progresso do pacote</h3>
@@ -1334,10 +1776,12 @@ export default function GerenteLeadStockTransferPage() {
                     pending={currentPackage.pending_leads}
                     distributed={currentPackage.distributed_leads}
                     canceled={currentPackage.canceled_leads}
+                    reverted={currentPackage.reverted_leads ?? 0}
                   />
-                  <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                     <LegendDot color="#8CD955" label="Em estoque" value={currentPackage.pending_leads} />
                     <LegendDot color="#10b981" label="Distribuídos" value={currentPackage.distributed_leads} />
+                    <LegendDot color="#8b5cf6" label="Revertidos" value={currentPackage.reverted_leads ?? 0} />
                     <LegendDot color="#ef4444" label="Cancelados" value={currentPackage.canceled_leads} />
                   </div>
                 </div>
@@ -1359,15 +1803,27 @@ export default function GerenteLeadStockTransferPage() {
                 Saldo total {formatMoney(selectedSummary.totalSaldo)} · {selectedSummary.origens} origem(ns)
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => void doTransfer()}
-              disabled={transferring || !targetEmail}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#8CD955] text-white font-semibold hover:bg-[#7BC84A] disabled:opacity-50"
-            >
-              {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
-              Transferir
-            </button>
+            {packageLeadStatusTab === 'em_estoque' ? (
+              <button
+                type="button"
+                onClick={() => void doTransfer()}
+                disabled={transferring || !targetEmail}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#8CD955] text-white font-semibold hover:bg-[#7BC84A] disabled:opacity-50"
+              >
+                {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
+                Transferir
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void runRestoreCanceledFromPackageDetail({ lead_ids: Array.from(selected) })}
+                disabled={restoringCanceled}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600 disabled:opacity-50"
+              >
+                {restoringCanceled ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                Restaurar
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1506,13 +1962,24 @@ function LegendDot({ color, label, value }: { color: string; label: string; valu
   );
 }
 
-function ProgressBar({ pending, distributed, canceled }: { pending: number; distributed: number; canceled: number }) {
-  const total = Math.max(pending + distributed + canceled, 1);
+function ProgressBar({
+  pending,
+  distributed,
+  canceled,
+  reverted,
+}: {
+  pending: number;
+  distributed: number;
+  canceled: number;
+  reverted: number;
+}) {
+  const total = Math.max(pending + distributed + canceled + reverted, 1);
   const toPct = (n: number) => `${(n / total) * 100}%`;
   return (
     <div className="w-full h-2.5 rounded-full bg-gray-100 dark:bg-[#333] overflow-hidden flex">
       <span className="h-full bg-[#8CD955]" style={{ width: toPct(pending) }} />
       <span className="h-full bg-emerald-500" style={{ width: toPct(distributed) }} />
+      <span className="h-full bg-violet-500" style={{ width: toPct(reverted) }} />
       <span className="h-full bg-red-500" style={{ width: toPct(canceled) }} />
     </div>
   );
@@ -1526,6 +1993,12 @@ function PackagesList({
   sort,
   onToggleSort,
   onOpen,
+  onRevertPackage,
+  reverting,
+  revertAllowed,
+  onRestoreCanceledPackage,
+  restoringCanceled,
+  restoreCanceledAllowed,
   showGerenteColumn,
   viewerMode,
 }: {
@@ -1536,6 +2009,12 @@ function PackagesList({
   sort: { field: PackageSortField; dir: SortDir };
   onToggleSort: (field: PackageSortField) => void;
   onOpen: (id: string) => void;
+  onRevertPackage: (pkg: StockPackage) => void;
+  reverting: boolean;
+  revertAllowed: (pkg: StockPackage) => boolean;
+  onRestoreCanceledPackage: (pkg: StockPackage) => void;
+  restoringCanceled: boolean;
+  restoreCanceledAllowed: (pkg: StockPackage) => boolean;
   showGerenteColumn?: boolean;
   viewerMode?: 'gerente' | 'admin';
 }) {
@@ -1584,6 +2063,12 @@ function PackagesList({
                 <ThSortPkg label="Prazo" field="deadline_days" current={sort} onToggle={onToggleSort} />
                 <ThSortPkg label="Em estoque" field="pending_leads" current={sort} onToggle={onToggleSort} align="right" />
                 <ThSortPkg label="Distribuídos" field="distributed_leads" current={sort} onToggle={onToggleSort} align="right" />
+                <th className="px-3 py-2.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                  Cancelados
+                </th>
+                <th className="px-3 py-2.5 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                  Revertidos
+                </th>
                 {showGerenteColumn && (
                   <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400">Gerente</th>
                 )}
@@ -1632,6 +2117,12 @@ function PackagesList({
                     <td className="px-3 py-2.5 text-right text-gray-600 dark:text-gray-400 tabular-nums">
                       {p.distributed_leads}
                     </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-red-700 dark:text-red-300 font-medium">
+                      {p.canceled_leads ?? 0}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-violet-700 dark:text-violet-300 font-medium">
+                      {p.reverted_leads ?? 0}
+                    </td>
                     {showGerenteColumn && (
                       <td
                         className="px-3 py-2.5 text-gray-700 dark:text-gray-200 truncate max-w-[160px]"
@@ -1644,15 +2135,56 @@ function PackagesList({
                       {p.performed_by_name ?? '—'}
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onOpen(p.transfer_log_id)}
-                        disabled={p.pending_leads === 0}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        <Users className="w-3 h-3" />
-                        {viewerMode === 'admin' ? 'Ver leads' : 'Abrir e distribuir'}
-                      </button>
+                      <div className="inline-flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onOpen(p.transfer_log_id)}
+                          disabled={(p.pending_leads ?? 0) === 0 && (p.canceled_leads ?? 0) === 0}
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Users className="w-3 h-3" />
+                          {viewerMode === 'admin' ? 'Ver leads' : 'Abrir e distribuir'}
+                        </button>
+                        <button
+                          type="button"
+                          title={
+                            !revertAllowed(p)
+                              ? 'Defina o gerente no filtro ou use a visão com coluna Gerente.'
+                              : 'Marca no estoque como revertido ao email do consultor de origem (sem chamar o CRM).'
+                          }
+                          onClick={() => onRevertPackage(p)}
+                          disabled={
+                            reverting || restoringCanceled || p.pending_leads === 0 || !revertAllowed(p)
+                          }
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-violet-300 dark:border-violet-700 text-violet-800 dark:text-violet-200 bg-violet-50 dark:bg-violet-950/40 hover:bg-violet-100 dark:hover:bg-violet-950/70 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {reverting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                          Reverter
+                        </button>
+                        <button
+                          type="button"
+                          title={
+                            !restoreCanceledAllowed(p)
+                              ? 'Defina o gerente no filtro ou use a visão com coluna Gerente.'
+                              : 'Cancelado: volta os leads ao estoque ativo do gerente (em estoque).'
+                          }
+                          onClick={() => onRestoreCanceledPackage(p)}
+                          disabled={
+                            restoringCanceled ||
+                            reverting ||
+                            (p.canceled_leads ?? 0) === 0 ||
+                            !restoreCanceledAllowed(p)
+                          }
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-400 dark:border-amber-800 text-amber-950 dark:text-amber-100 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-950/70 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {restoringCanceled ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <RotateCcw className="w-3 h-3" />
+                          )}
+                          Reverter cancel.
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1702,6 +2234,20 @@ function HistoryStatusBadge({ item }: { item: HistoryItem }) {
     );
   }
   switch (item.status_label) {
+    case 'revertido_total':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35">
+          <Undo2 className="w-3 h-3" />
+          Revertido ao doador
+        </span>
+      );
+    case 'revertido_parcial':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35">
+          <Undo2 className="w-3 h-3" />
+          Revertido parcial ({item.stock_reverted})
+        </span>
+      );
     case 'repassado':
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
@@ -1809,6 +2355,7 @@ function HistoryView({
     { id: 'reserved', label: 'Reservas recebidas' },
     { id: 'distributed', label: 'Repasses feitos' },
     { id: 'canceled', label: 'Canceladas' },
+    { id: 'reverted', label: 'Revertidas' },
   ];
 
   return (
@@ -1949,6 +2496,12 @@ function HistoryView({
                     {h.kind === 'reserved' && h.status_label === 'cancelado_parcial' && (
                       <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
                         {h.stock_pending} em estoque · {h.stock_distributed} repassados
+                      </div>
+                    )}
+                    {h.kind === 'reserved' && h.status_label === 'revertido_parcial' && (
+                      <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                        {h.stock_reverted} revertido(s) · {h.stock_pending} em estoque · {h.stock_distributed} repassados
+                        {h.stock_canceled > 0 ? ` · ${h.stock_canceled} cancelado(s)` : ''}
                       </div>
                     )}
                     {h.kind === 'reserved' && h.status_label === 'em_estoque' && h.stock_distributed > 0 && (

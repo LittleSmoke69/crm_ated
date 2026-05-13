@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { withTenantSlug } from '@/lib/utils/tenant-href';
+import { getWlSlugHeadersForApi, withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
-import { useDashboardData, WhatsAppInstance, DbGroup, EvolutionGroup, Contact } from '@/hooks/useDashboardData';
+import { useDashboardData, DbGroup, EvolutionGroup, Contact } from '@/hooks/useDashboardData';
 import {
   Users,
   Plus,
@@ -19,9 +19,9 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
-import { supabase } from '@/lib/supabase';
 import { postGroupFetchAndResolve } from '@/lib/utils/group-fetch-client';
 
 /** Evita SyntaxError quando a API retorna HTML (404, 500, etc.) em vez de JSON. */
@@ -40,16 +40,36 @@ async function parseJsonFromResponse(response: Response): Promise<unknown> {
   }
 }
 
+function normalizeSearchText(value: string): string {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function slugifyFileName(value: string): string {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s-]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()
+    .slice(0, 80);
+}
+
 const GroupsPage = () => {
-  const { checking } = useRequireAuth();
+  const { checking, userStatus } = useRequireAuth();
+  const canExtractContactsCsv = userStatus === 'admin' || userStatus === 'super_admin';
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const {
     userId,
     instances,
     contacts,
-    dbGroups,
     availableGroups,
-    setDbGroups,
     setAvailableGroups,
     showToast,
     addLog,
@@ -78,6 +98,15 @@ const GroupsPage = () => {
   const [availGroupsSearch, setAvailGroupsSearch] = useState('');
   const [availGroupsPage, setAvailGroupsPage] = useState(1);
   const [availGroupsPerPage, setAvailGroupsPerPage] = useState(10);
+
+  /** Grupos salvos no banco só da instância selecionada (evita sobrescrita por loadInitialData do hook). */
+  const [instanceDbGroups, setInstanceDbGroups] = useState<DbGroup[]>([]);
+
+  /** Extrair contatos → CSV (GET Evolution `/group/participants/{instance}`) */
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractGroupId, setExtractGroupId] = useState('');
+  const [extractGroupSearch, setExtractGroupSearch] = useState('');
+
   useEffect(() => {
     if (userId) {
       loadInitialData();
@@ -175,9 +204,11 @@ const GroupsPage = () => {
     try {
       const response = await fetch('/api/crm/groups/create', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'X-User-Id': userId,
+          ...getWlSlugHeadersForApi(),
         },
         body: JSON.stringify({
           instanceName: selectedInstanceForCreate,
@@ -242,7 +273,8 @@ const GroupsPage = () => {
     try {
       const response = await fetch('/api/groups', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
         body: JSON.stringify({
           instanceName: selectedInstance,
           groupId: group.id,
@@ -251,10 +283,12 @@ const GroupsPage = () => {
           size: group.size,
         }),
       });
-      const data = (await parseJsonFromResponse(response)) as { error?: string };
+      const data = (await parseJsonFromResponse(response)) as { error?: string; message?: string };
       if (response.ok) {
-        showToast('Grupo salvo com sucesso', 'success');
+        showToast(data.message || 'Grupo salvo com sucesso', 'success');
         await loadDbGroups();
+        setExtractGroupSearch('');
+        setExtractGroupId(group.id || '');
       } else {
         showToast(data.error || 'Erro ao salvar grupo', 'error');
       }
@@ -278,7 +312,8 @@ const GroupsPage = () => {
       }));
       const response = await fetch('/api/groups/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId, ...getWlSlugHeadersForApi() },
         body: JSON.stringify({ instanceName: selectedInstance, groups }),
       });
       const data = (await parseJsonFromResponse(response)) as {
@@ -303,32 +338,140 @@ const GroupsPage = () => {
 
   const loadDbGroups = useCallback(async () => {
     if (!selectedInstance || !userId) {
-      setDbGroups([]);
+      setInstanceDbGroups([]);
       return;
     }
-    const { data, error } = await supabase
-      .from('whatsapp_groups')
-      .select('group_id, group_subject')
-      .eq('user_id', userId)
-      .eq('instance_name', selectedInstance)
-      .order('group_subject', { ascending: true });
 
-    if (error) {
-      addLog(`Erro ao carregar grupos: ${error.message}`, 'error');
-    } else {
-      setDbGroups((data || []) as DbGroup[]);
+    try {
+      const response = await fetch(`/api/groups?instanceName=${encodeURIComponent(selectedInstance)}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId,
+          ...getWlSlugHeadersForApi(),
+        },
+      });
+
+      const payload = (await parseJsonFromResponse(response)) as {
+        success?: boolean;
+        data?: DbGroup[];
+        error?: string;
+      };
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || 'Erro ao carregar grupos salvos');
+      }
+
+      setInstanceDbGroups(Array.isArray(payload.data) ? payload.data : []);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Erro ao carregar grupos salvos';
+      addLog(`Erro ao carregar grupos: ${msg}`, 'error');
+      showToast(msg, 'error');
+      setInstanceDbGroups([]);
     }
-  }, [selectedInstance, userId, setDbGroups, addLog]);
+  }, [selectedInstance, userId, addLog, showToast]);
 
   useEffect(() => {
     loadDbGroups();
   }, [loadDbGroups]);
 
-  // Filtros e paginação (deduplica por group_id para evitar keys duplicadas no React)
-  const rawFilteredSaved = dbGroups.filter(g => {
-    const q = savedGroupsSearch.toLowerCase().trim();
+  useEffect(() => {
+    setExtractGroupId('');
+    setExtractGroupSearch('');
+  }, [selectedInstance]);
+
+  const filteredExtractDbGroups = instanceDbGroups.filter((g) => {
+    const q = normalizeSearchText(extractGroupSearch);
     if (!q) return true;
-    return (g.group_subject || '').toLowerCase().includes(q) || (g.group_id || '').toLowerCase().includes(q);
+    const subject = normalizeSearchText(g.group_subject || '');
+    const id = normalizeSearchText(g.group_id || '');
+    return subject.includes(q) || id.includes(q);
+  });
+
+  const handleExtractContactsCsv = async () => {
+    if (!userId) {
+      showToast('Sessão inválida', 'error');
+      return;
+    }
+    if (!selectedInstance) {
+      showToast('Selecione uma instância', 'error');
+      return;
+    }
+    if (!extractGroupId.trim()) {
+      showToast('Selecione um grupo salvo no banco para esta instância', 'error');
+      return;
+    }
+
+    setExtractLoading(true);
+    try {
+      const response = await fetch('/api/groups/extract-contacts', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId,
+          ...getWlSlugHeadersForApi(),
+        },
+        body: JSON.stringify({
+          instanceName: selectedInstance,
+          groupId: extractGroupId.trim(),
+        }),
+      });
+
+      const result = (await parseJsonFromResponse(response)) as {
+        success?: boolean;
+        data?: Array<{ telefone: string }>;
+        message?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !result.success) {
+        showToast(result.error || 'Erro ao extrair contatos do grupo', 'error');
+        return;
+      }
+
+      const rows = Array.isArray(result.data) ? result.data : [];
+      const phones = rows.map(r => r.telefone).filter(Boolean);
+      if (phones.length === 0) {
+        showToast('Nenhum telefone encontrado nos participantes', 'info');
+        return;
+      }
+
+      const BOM = '\uFEFF';
+      const csvBody = phones.map(p => `"${String(p).replace(/"/g, '""')}"`).join('\n');
+      const csv = `${BOM}telefone\n${csvBody}`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const selectedGroup = instanceDbGroups.find((g) => g.group_id === extractGroupId);
+      const groupNameForFile =
+        selectedGroup?.group_subject || selectedGroup?.group_id || extractGroupId.trim();
+      const safeSlug = slugifyFileName(groupNameForFile) || 'grupo';
+      a.href = url;
+      a.download = `contatos-${safeSlug}-${Date.now()}.csv`;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showToast(result.message || `${phones.length} contato(s) no CSV`, 'success');
+    } catch (error) {
+      console.error('Erro ao extrair contatos:', error);
+      showToast(error instanceof Error ? error.message : 'Erro ao gerar CSV', 'error');
+    } finally {
+      setExtractLoading(false);
+    }
+  };
+
+  // Filtros e paginação (deduplica por group_id para evitar keys duplicadas no React)
+  const rawFilteredSaved = instanceDbGroups.filter(g => {
+    const q = normalizeSearchText(savedGroupsSearch);
+    if (!q) return true;
+    const subject = normalizeSearchText(g.group_subject || '');
+    const id = normalizeSearchText(g.group_id || '');
+    return subject.includes(q) || id.includes(q);
   });
   const seenGroupIds = new Set<string>();
   const filteredSavedGroups = rawFilteredSaved.filter(g => {
@@ -338,9 +481,11 @@ const GroupsPage = () => {
   });
 
   const filteredAvailGroups = availableGroups.filter(g => {
-    const q = availGroupsSearch.toLowerCase().trim();
+    const q = normalizeSearchText(availGroupsSearch);
     if (!q) return true;
-    return (g.subject || '').toLowerCase().includes(q) || (g.id || '').toLowerCase().includes(q);
+    const subject = normalizeSearchText(g.subject || '');
+    const id = normalizeSearchText(g.id || '');
+    return subject.includes(q) || id.includes(q);
   });
 
   const pagedSavedGroups = filteredSavedGroups.slice(
@@ -569,6 +714,96 @@ const GroupsPage = () => {
                 </div>
               </div>
             </div>
+
+            {/* Extrair contatos (CSV): apenas admin / super_admin */}
+            {canExtractContactsCsv && (
+              <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
+                <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-1 flex items-center gap-2">
+                  <Download className="w-5 h-5 text-[#6AB83D]" aria-hidden />
+                  Extrair contatos (CSV)
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                  Busca participantes via Evolution{' '}
+                  <code className="text-xs bg-gray-200 dark:bg-[#333] px-1 rounded">GET /group/participants/&#123;instância&#125;</code>
+                  {' '}e gera um arquivo com a coluna <span className="font-medium text-gray-700 dark:text-gray-300">telefone</span>.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Instância *
+                    </label>
+                    <select
+                      value={selectedInstance}
+                      onChange={e => setSelectedInstance(e.target.value)}
+                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                    >
+                      <option value="">Selecione uma instância</option>
+                      {instances.map(inst => (
+                        <option key={inst.id || inst.instance_name} value={inst.instance_name}>
+                          {inst.instance_name} ({inst.status})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Grupo salvo no banco
+                    </label>
+                    <div className="relative mb-2">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
+                      <input
+                        type="text"
+                        value={extractGroupSearch}
+                        onChange={e => setExtractGroupSearch(e.target.value)}
+                        placeholder="Pesquisar grupo salvo..."
+                        disabled={!selectedInstance || instanceDbGroups.length === 0}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 disabled:opacity-50"
+                      />
+                    </div>
+                    <select
+                      value={extractGroupId}
+                      onChange={e => setExtractGroupId(e.target.value)}
+                      disabled={!selectedInstance || instanceDbGroups.length === 0}
+                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] disabled:opacity-50"
+                    >
+                      <option value="">
+                        {!selectedInstance
+                          ? 'Selecione a instância'
+                          : instanceDbGroups.length === 0
+                            ? 'Nenhum grupo salvo — carregue e salve grupos antes'
+                            : filteredExtractDbGroups.length === 0
+                              ? 'Nenhum grupo encontrado para essa busca'
+                              : 'Selecione um grupo'}
+                      </option>
+                      {filteredExtractDbGroups.map(g => (
+                        <option key={g.group_id} value={g.group_id}>
+                          {(g.group_subject || 'Sem nome').slice(0, 80)}
+                          {g.group_subject && g.group_subject.length > 80 ? '…' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExtractContactsCsv}
+                    disabled={extractLoading || !selectedInstance || !extractGroupId.trim()}
+                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {extractLoading ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin shrink-0" />
+                        Extraindo…
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-5 h-5 shrink-0" />
+                        Baixar CSV com telefones
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Coluna Direita - preenche a altura da coluna esquerda */}

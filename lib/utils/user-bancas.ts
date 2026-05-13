@@ -4,6 +4,75 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export type BancaInfo = { id?: string; name: string; url: string | null };
 
+/** Normaliza `user_bancas.banca_ids` (JSONB array, ou string JSON legada). */
+export function parseCrmBancaIdsFromUserBancasJson(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x ?? '').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const p = JSON.parse(s) as unknown;
+      if (Array.isArray(p)) return p.map((x) => String(x ?? '').trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * `profiles.id` com `crm_bancas.id` em `user_bancas.banca_ids`.
+ * Mesma regra que GET /api/admin/crm/bancas?with_users=1 (match em memória; UUID case-insensitive).
+ * Evita `.filter('banca_ids', 'cs', …)` em JSONB, que costuma falhar no PostgREST.
+ */
+const LOG_USER_BANCAS_BANCA_LINK =
+  typeof process !== 'undefined' && process.env.LOG_META_ADS_HIERARCHY === '1';
+
+export async function getUserIdsLinkedToCrmBancaViaUserBancas(bancaId: string): Promise<string[]> {
+  const target = String(bancaId ?? '').trim().toLowerCase();
+  if (!target) return [];
+
+  const { data: userBancasRows, error } = await supabaseServiceRole
+    .from('user_bancas')
+    .select('user_id, banca_ids');
+  if (error) throw new Error(error.message);
+
+  const rows = userBancasRows ?? [];
+  let rowsWithNonArrayBancaIds = 0;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const uid = String((row as { user_id?: string | null }).user_id ?? '').trim();
+    if (!uid || seen.has(uid)) continue;
+    const rawBancaIds = (row as { banca_ids?: unknown }).banca_ids;
+    if (rawBancaIds != null && !Array.isArray(rawBancaIds) && typeof rawBancaIds !== 'string') {
+      rowsWithNonArrayBancaIds += 1;
+    }
+    const ids = parseCrmBancaIdsFromUserBancasJson(rawBancaIds).map((x) => x.toLowerCase());
+    if (!ids.includes(target)) continue;
+    seen.add(uid);
+    out.push(uid);
+  }
+
+  if (LOG_USER_BANCAS_BANCA_LINK) {
+    console.info(
+      '[user_bancas][crm_banca_link]',
+      JSON.stringify({
+        banca_id: target,
+        user_bancas_rows_scanned: rows.length,
+        matched_profile_ids: out.length,
+        rows_with_unexpected_banca_ids_shape: rowsWithNonArrayBancaIds,
+        sample_matched_ids: out.slice(0, 8),
+      })
+    );
+  }
+
+  return out;
+}
+
 /**
  * Retorna todas as bancas que o usuário faz parte.
  * - Consultor/Gerente: se tiver escolha em user_bancas, retorna essas (com id); senão retorna da hierarquia.
@@ -63,13 +132,13 @@ export async function userHasCrmBanca(userId: string, crmBancaId: string): Promi
 /** True se o consultor tem `crmBancaId` em user_bancas.banca_ids. */
 export async function consultorHasCrmBanca(consultorId: string, crmBancaId: string): Promise<boolean> {
   if (!consultorId || !crmBancaId) return false;
-  const { data } = await supabaseServiceRole
+  const { data: row } = await supabaseServiceRole
     .from('user_bancas')
-    .select('user_id')
+    .select('banca_ids')
     .eq('user_id', consultorId)
-    .filter('banca_ids', 'cs', JSON.stringify([crmBancaId]))
     .maybeSingle();
-  return !!data;
+  const ids = parseCrmBancaIdsFromUserBancasJson(row?.banca_ids).map((x) => x.toLowerCase());
+  return ids.includes(String(crmBancaId).trim().toLowerCase());
 }
 
 /**

@@ -49,6 +49,7 @@ import {
   normalizeActivationMassSendInstanceNames,
 } from '@/lib/crm/mass-send-instance-names';
 import { getActivationEvolutionFetchTimeoutMs } from '@/lib/crm/activation-evolution-fetch-timeout';
+import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -349,7 +350,7 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
     };
   } else if (message.message_type === 'text_with_attachment' && message.attachment_url) {
     url = `${baseUrl}/message/sendMedia/${instanceName}`;
-    const { mediatype, mimetype, fileName } = resolveMediaMeta(message);
+    const { mediatype, mimetype, fileName } = resolveEvolutionSendMediaMeta(message);
     body = {
       number: groupId,
       mediatype,
@@ -435,21 +436,6 @@ async function sendGroupToEvolution(ctx: EvolutionContext, groupId: string): Pro
     const userFacing = sanitizeMassSendErrorMessage(detail) || detail;
     return { success: false, error: userFacing, fetchDiag };
   }
-}
-
-function resolveMediaMeta(message: DbMessage): { mediatype: string; mimetype: string; fileName: string } {
-  const mime = message.attachment_mime || 'image/png';
-  if (message.attachment_type === 'video') return { mediatype: 'video', mimetype: message.attachment_mime || 'video/mp4', fileName: 'video.mp4' };
-  if (message.attachment_type === 'audio') return { mediatype: 'document', mimetype: message.attachment_mime || 'audio/mpeg', fileName: 'audio.mp3' };
-  if (message.attachment_type === 'image') {
-    const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('gif') ? 'gif' : 'png';
-    return { mediatype: 'image', mimetype: mime, fileName: `image.${ext}` };
-  }
-  const url = String(message.attachment_url || '').toLowerCase();
-  if (url.match(/\.(mp4|mov|avi|webm)/) || mime.startsWith('video/')) return { mediatype: 'video', mimetype: mime || 'video/mp4', fileName: 'video.mp4' };
-  if (url.match(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt)/) || mime.startsWith('application/')) return { mediatype: 'document', mimetype: mime || 'application/pdf', fileName: 'file' };
-  const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('gif') ? 'gif' : 'png';
-  return { mediatype: 'image', mimetype: mime, fileName: `image.${ext}` };
 }
 
 // ─── Idempotência: grupos já com sucesso em activation_mass_send_job_groups ───

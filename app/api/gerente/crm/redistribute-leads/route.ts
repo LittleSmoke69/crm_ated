@@ -177,12 +177,15 @@ export async function POST(req: NextRequest) {
         Number(crmResult.count ?? crmResult.data?.count ?? 0) || group.leadIds.length;
 
       const snapshotByLeadId = new Map<string, Record<string, unknown>>();
-      const { data: snapRows } = await supabaseServiceRole
-        .from('admin_lead_transfer_entries')
-        .select(
-          'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot'
-        )
-        .in('id', group.entryIds);
+      const selectSnapWithEmail =
+        'lead_id, lead_email, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      const selectSnapBasic =
+        'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      const snapFirst = await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapWithEmail).in('id', group.entryIds);
+      const snapRows =
+        snapFirst.error && ((snapFirst.error.message ?? '').includes('lead_email') || snapFirst.error.code === 'PGRST204')
+          ? (await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapBasic).in('id', group.entryIds)).data
+          : snapFirst.data;
       for (const s of (snapRows ?? []) as Array<Record<string, unknown>>) {
         snapshotByLeadId.set(String(s.lead_id), s);
       }
@@ -227,6 +230,10 @@ export async function POST(req: NextRequest) {
           source_consultant_email: group.sourceEmail,
           target_consultant_email: target,
           transfer_type: group.transferType,
+          lead_email:
+            snap.lead_email != null && String(snap.lead_email).trim() !== ''
+              ? String(snap.lead_email).trim().toLowerCase()
+              : null,
           lead_name: snap.lead_name ?? null,
           lead_phone: snap.lead_phone ?? null,
           saldo_snapshot: balance,
@@ -241,6 +248,12 @@ export async function POST(req: NextRequest) {
       });
 
       let { error: entriesError } = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(newEntries);
+      if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_email')) {
+        const retryE = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .insert(newEntries.map(({ lead_email: _e, ...rest }) => rest));
+        entriesError = retryE.error;
+      }
       if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_name')) {
         const retry = await supabaseServiceRole
           .from('admin_lead_transfer_entries')

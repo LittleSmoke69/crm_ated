@@ -6,7 +6,7 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
-import type { LeadSnapshotInput } from '@/lib/server/crm/leadRedistributionCore';
+import { normalizeLeadEmailForDb, type LeadSnapshotInput } from '@/lib/server/crm/leadRedistributionCore';
 
 const LOG_PREFIX = '[lead-transfer][admin-to-stock-reservation]';
 
@@ -21,6 +21,8 @@ export type ReserveAdminToStockParams = {
   transferDeadlineDays: number;
   filtersSnapshot?: Record<string, unknown> | null;
   leadSnapshots?: LeadSnapshotInput[];
+  /** Log de origem (expirado/resolvido): usado para copiar lead_name/lead_email das entries quando o payload não traz nome. */
+  sourceTransferLogId?: string | null;
 };
 
 export type ReserveAdminToStockResult =
@@ -48,6 +50,7 @@ export async function reserveAdminToGerenteStock(
     transferDeadlineDays,
     filtersSnapshot,
     leadSnapshots,
+    sourceTransferLogId,
   } = params;
 
   const source = sourceConsultantEmail.trim();
@@ -108,6 +111,90 @@ export async function reserveAdminToGerenteStock(
     for (const s of leadSnapshots) snapshotByLeadId.set(String(s.lead_id), s);
   }
 
+  const sourceLogId = (sourceTransferLogId ?? '').trim();
+  if (sourceLogId && bancaId) {
+    const needEnrich = normalizedLeadIds.filter((lid) => {
+      const sid = String(lid);
+      const cur = snapshotByLeadId.get(sid);
+      const nameEmpty = !cur?.name || String(cur.name).trim() === '';
+      const emailEmpty = !cur?.email || String(cur.email).trim() === '';
+      return nameEmpty || emailEmpty;
+    });
+    const selectFull =
+      'lead_id, lead_name, lead_email, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+    const chunkSize = 120;
+    for (let i = 0; i < needEnrich.length; i += chunkSize) {
+      const chunk = needEnrich.slice(i, i + chunkSize).map(String);
+      let chunkRows: Record<string, unknown>[] | null = null;
+      let chunkErr = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select(selectFull)
+        .eq('transfer_log_id', sourceLogId)
+        .eq('banca_id', bancaId)
+        .in('lead_id', chunk);
+      let error = chunkErr.error;
+      chunkRows = Array.isArray(chunkErr.data) ? (chunkErr.data as Record<string, unknown>[]) : [];
+      if (error?.code === 'PGRST204' || (error?.message ?? '').includes('lead_name')) {
+        const r2 = await supabaseServiceRole
+          .from('admin_lead_transfer_entries')
+          .select(
+            'lead_id, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot'
+          )
+          .eq('transfer_log_id', sourceLogId)
+          .eq('banca_id', bancaId)
+          .in('lead_id', chunk);
+        error = r2.error;
+        chunkRows = Array.isArray(r2.data) ? (r2.data as Record<string, unknown>[]) : [];
+      }
+      if (error) {
+        console.warn(`${LOG_PREFIX} enrich snapshots (log=${sourceLogId}):`, error.message ?? error);
+        continue;
+      }
+      for (const row of chunkRows ?? []) {
+        const lid = row.lead_id != null ? String(row.lead_id) : '';
+        if (!lid) continue;
+        const prev = snapshotByLeadId.get(lid) ?? { lead_id: row.lead_id as number | string };
+        const ln = typeof row.lead_name === 'string' ? row.lead_name.trim() : '';
+        const em = typeof row.lead_email === 'string' ? row.lead_email.trim() : '';
+        const ph = typeof row.lead_phone === 'string' ? row.lead_phone.trim() : '';
+        const prevNameOk = prev.name != null && String(prev.name).trim() !== '';
+        const prevEmailOk = prev.email != null && String(prev.email).trim() !== '';
+        snapshotByLeadId.set(lid, {
+          ...prev,
+          lead_id: prev.lead_id,
+          name: prevNameOk ? prev.name : ln || null,
+          email: prevEmailOk ? prev.email : em || null,
+          phone: prev.phone != null && String(prev.phone).trim() !== '' ? prev.phone : ph || null,
+          balance:
+            prev.balance != null
+              ? prev.balance
+              : row.saldo_snapshot != null
+                ? Number(row.saldo_snapshot)
+                : prev.balance,
+          last_interaction:
+            prev.last_interaction ??
+            (typeof row.last_interaction_snapshot === 'string' ? row.last_interaction_snapshot : null),
+          total_depositado:
+            prev.total_depositado ??
+            (row.total_depositado_snapshot != null ? Number(row.total_depositado_snapshot) : null),
+          total_apostado:
+            prev.total_apostado ??
+            (row.total_apostado_snapshot != null ? Number(row.total_apostado_snapshot) : null),
+          total_ganho: prev.total_ganho ?? (row.total_ganho_snapshot != null ? Number(row.total_ganho_snapshot) : null),
+          available_withdraw:
+            prev.available_withdraw ??
+            (row.available_withdraw_snapshot != null ? Number(row.available_withdraw_snapshot) : null),
+          total_saque:
+            prev.total_saque != null && prev.total_saque !== ''
+              ? prev.total_saque
+              : row.total_saque_snapshot != null && row.total_saque_snapshot !== ''
+                ? Number(row.total_saque_snapshot as number | string)
+                : null,
+        });
+      }
+    }
+  }
+
   const entries = normalizedLeadIds.map((leadId) => {
     const sid = String(leadId);
     const snap = snapshotByLeadId.get(sid);
@@ -127,6 +214,7 @@ export async function reserveAdminToGerenteStock(
       source_consultant_email: source,
       target_consultant_email: targetDisplay,
       transfer_type: transferType,
+      lead_email: normalizeLeadEmailForDb(snap?.email),
       lead_name: snap?.name ?? null,
       lead_phone: snap?.phone ?? null,
       saldo_snapshot: balance,
@@ -144,6 +232,11 @@ export async function reserveAdminToGerenteStock(
   });
 
   let { error: entriesError } = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entries);
+  if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_email')) {
+    const entriesNoEmail = entries.map(({ lead_email: _e, ...rest }) => rest);
+    const retryE = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entriesNoEmail);
+    entriesError = retryE.error;
+  }
   if (
     entriesError?.code === 'PGRST204' &&
     (entriesError.message?.includes('stock_status') ||

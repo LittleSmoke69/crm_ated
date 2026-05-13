@@ -28,9 +28,9 @@ import Pagination from '@/components/Admin/Pagination';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
 
-/** Inclui admins com `user_bancas` em `user_ids` de cada banca (API with_users pode não listar admin). */
+/** Inclui admin/super_admin com `user_bancas` em `user_ids` de cada banca (API with_users pode omitir). */
 async function mergeAdminBancaUserIds(requesterUserId: string, bancasList: any[], profiles: any[]): Promise<any[]> {
-  const admins = profiles.filter((p: any) => p?.status === 'admin');
+  const admins = profiles.filter((p: any) => p?.status === 'admin' || p?.status === 'super_admin');
   if (!admins.length || !bancasList.length) return bancasList;
   const norm = (x: string) => String(x).trim().toLowerCase();
   const links = await Promise.all(
@@ -274,6 +274,27 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     }
   };
 
+  /** Atualiza só `user_ids` da banca no estado local para o card aparecer na hora (sem recarregar toda a hierarquia). */
+  const patchLocalBancaUserLink = (bancaId: string, profileId: string, mode: 'add' | 'remove') => {
+    const bidLc = String(bancaId ?? '').trim().toLowerCase();
+    const pidRaw = String(profileId ?? '').trim();
+    if (!bidLc || !pidRaw) return;
+    const bancaMatches = (b: any) => String(b?.id ?? '').trim().toLowerCase() === bidLc;
+    const apply = (rows: any[]) =>
+      (rows || []).map((b: any) => {
+        if (!bancaMatches(b)) return b;
+        const ids = Array.isArray(b.user_ids) ? [...b.user_ids].map((x: unknown) => String(x ?? '').trim()) : [];
+        const pidLc = pidRaw.toLowerCase();
+        if (mode === 'add') {
+          if (!ids.some((id) => id.toLowerCase() === pidLc)) ids.push(pidRaw);
+          return { ...b, user_ids: ids };
+        }
+        return { ...b, user_ids: ids.filter((id) => id.toLowerCase() !== pidLc) };
+      });
+    setCrmBancas((prev) => apply(prev || []));
+    setCrmBancasBasic((prev) => (prev && prev.length ? apply(prev) : prev));
+  };
+
   const addGestorToBanca = async (gestorId: string, bancaId: string) => {
     if (!userId) return;
     setGestorBancaLoading(bancaId);
@@ -281,7 +302,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       const getRes = await fetch(`/api/admin/users/${gestorId}/bancas`, { headers: { 'X-User-Id': userId } });
       const getData = await getRes.json();
       const current = (getData.data?.banca_ids || []) as string[];
-      if (current.includes(bancaId)) {
+      const normBid = String(bancaId ?? '').trim().toLowerCase();
+      if (current.some((id) => String(id ?? '').trim().toLowerCase() === normBid)) {
         setGestorBancaLoading(null);
         return;
       }
@@ -290,8 +312,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({ banca_ids: [...current, bancaId] }),
       });
-      if (putRes.ok) loadHierarchyData();
-      else showToast((await putRes.json()).error || 'Erro ao vincular usuário à banca', 'error');
+      if (putRes.ok) {
+        patchLocalBancaUserLink(bancaId, gestorId, 'add');
+        if (hierarchyAuditUnlockedRef.current) void fetchHierarchyAudit();
+      } else showToast((await putRes.json()).error || 'Erro ao vincular usuário à banca', 'error');
     } catch (e) {
       console.error(e);
       showToast('Erro ao vincular usuário à banca', 'error');
@@ -307,14 +331,16 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       const getRes = await fetch(`/api/admin/users/${gestorId}/bancas`, { headers: { 'X-User-Id': userId } });
       const getData = await getRes.json();
       const current = (getData.data?.banca_ids || []) as string[];
-      const next = current.filter((id: string) => id !== bancaId);
+      const next = current.filter((id: string) => String(id ?? '').trim().toLowerCase() !== String(bancaId ?? '').trim().toLowerCase());
       const putRes = await fetch(`/api/admin/users/${gestorId}/bancas`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
         body: JSON.stringify({ banca_ids: next }),
       });
-      if (putRes.ok) loadHierarchyData();
-      else showToast((await putRes.json()).error || 'Erro ao atualizar vínculo com a banca', 'error');
+      if (putRes.ok) {
+        patchLocalBancaUserLink(bancaId, gestorId, 'remove');
+        if (hierarchyAuditUnlockedRef.current) void fetchHierarchyAudit();
+      } else showToast((await putRes.json()).error || 'Erro ao atualizar vínculo com a banca', 'error');
     } catch (e) {
       console.error(e);
       showToast('Erro ao atualizar vínculo com a banca', 'error');
@@ -573,6 +599,29 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
     });
     admins.forEach((a: any) => {
+      if (a?.id && !seen.has(a.id)) {
+        seen.add(a.id);
+        merged.push(a);
+      }
+    });
+    return merged;
+  };
+
+  /** Superior válido para cargo Gestor: Dono da banca, Admin ou Super Admin (mesmo critério que validateHierarchy). */
+  const getSuperioresParaGestor = () => {
+    const donos = (hierarchy || []).filter((h: any) => h?.id);
+    const plataforma = (allUsers || []).filter(
+      (u: any) => u && (u.status === 'admin' || u.status === 'super_admin')
+    );
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    donos.forEach((d: any) => {
+      if (d?.id && !seen.has(d.id)) {
+        seen.add(d.id);
+        merged.push(d);
+      }
+    });
+    plataforma.forEach((a: any) => {
       if (a?.id && !seen.has(a.id)) {
         seen.add(a.id);
         merged.push(a);
@@ -1115,10 +1164,22 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   const renderBancaCard = (crmBanca: any) => {
     const bancaUrlNorm = normalizeBancaUrl(crmBanca.url);
     const owner = (hierarchy || []).find((h: any) => normalizeBancaUrl(h.banca_url) === bancaUrlNorm);
-    const gestoresInBanca = (crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'gestor');
-    const gestoresAvailable = (allUsers || []).filter((u: any) => u.status === 'gestor' && !gestoresInBanca.includes(u.id));
-    const adminsInBanca = (crmBanca.user_ids || []).filter((uid: string) => allUsers.find((x: any) => x.id === uid)?.status === 'admin');
-    const adminsAvailable = (allUsers || []).filter((u: any) => u.status === 'admin' && !adminsInBanca.includes(u.id));
+    /** Gestor formal ou Super Admin vinculado como gestor de tráfego nesta banca (Admin fica só na seção de plataforma abaixo). */
+    const gestoresCargoOnBanca = (crmBanca.user_ids || [])
+      .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+      .filter((u: any) => u && (u.status === 'gestor' || u.status === 'super_admin'));
+    const gestoresCargoDisponiveis = (allUsers || []).filter(
+      (u: any) =>
+        (u.status === 'gestor' || u.status === 'super_admin') &&
+        !gestoresCargoOnBanca.some((g: any) => g.id === u.id)
+    );
+
+    const plataformaGestorNaBanca = (crmBanca.user_ids || [])
+      .map((uid: string) => allUsers.find((x: any) => x.id === uid))
+      .filter((u: any) => u && u.status === 'admin');
+    const plataformaGestorDisponiveis = (allUsers || []).filter(
+      (u: any) => u.status === 'admin' && !plataformaGestorNaBanca.some((p: any) => p.id === u.id)
+    );
     const {
       gerentesInBanca,
       gerentesComConsultores: rawGerentesComConsultores,
@@ -1267,105 +1328,149 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           </div>
 
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1 flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-teal-600 dark:text-teal-400" />
-              Gestores desta banca
-              {gestoresInBanca.length > 0 && ` (${gestoresInBanca.length})`}
+              Gestores de tráfego — Gestor ou Super Admin
+              {gestoresCargoOnBanca.length > 0 && ` (${gestoresCargoOnBanca.length})`}
             </h3>
-            {(() => {
-              const gestores = (crmBanca.user_ids || []).map((uid: string) => allUsers.find((x: any) => x.id === uid)).filter((u: any) => u && u.status === 'gestor');
-              const available = (allUsers || []).filter((u: any) => u.status === 'gestor' && !gestores.some((g: any) => g.id === u.id));
-              return (
-                <>
-                  {gestores.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
-                      {gestores.map((u: any) => (
-                        <div key={u.id} className="bg-white dark:bg-[#333] rounded-xl border border-teal-100 dark:border-teal-800 p-4 flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="font-medium text-gray-900 dark:text-white truncate">{u.full_name || u.email}</p>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{u.email}</p>
-                            <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300">Gestor</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 dark:text-[#888] hover:bg-gray-100 dark:hover:bg-[#404040] rounded" title="Editar"><EditIcon className="w-4 h-4" /></button>
-                            <button type="button" onClick={() => removeGestorFromBanca(u.id, crmBanca.id)} disabled={gestorBancaLoading === crmBanca.id} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50" title="Remover gestor da banca"><X className="w-4 h-4" /></button>
-                          </div>
-                        </div>
-                      ))}
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Perfis com cargo <strong className="font-semibold text-gray-600 dark:text-gray-300">Gestor</strong> ou{' '}
+              <strong className="font-semibold text-gray-600 dark:text-gray-300">Super Admin</strong> que atuam como gestor de tráfego nesta banca.{' '}
+              <strong className="font-semibold text-gray-600 dark:text-gray-300">Admin</strong> (sem ser super) permanece na seção abaixo.
+            </p>
+            <>
+              {gestoresCargoOnBanca.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
+                  {gestoresCargoOnBanca.map((u: any) => (
+                    <div
+                      key={u.id}
+                      className={`bg-white dark:bg-[#333] rounded-xl border p-4 flex items-center justify-between gap-2 ${
+                        u.status === 'super_admin'
+                          ? 'border-amber-200 dark:border-amber-800/60'
+                          : 'border-teal-100 dark:border-teal-800'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-900 dark:text-white truncate">{u.full_name || u.email}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{u.email}</p>
+                        <span
+                          className={`inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold ${
+                            u.status === 'super_admin'
+                              ? 'bg-amber-100 dark:bg-amber-900/45 text-amber-900 dark:text-amber-100'
+                              : 'bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300'
+                          }`}
+                        >
+                          {u.status === 'super_admin' ? 'Super Admin — gestor nesta banca' : 'Cargo: Gestor'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 dark:text-[#888] hover:bg-gray-100 dark:hover:bg-[#404040] rounded" title="Editar">
+                          <EditIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeGestorFromBanca(u.id, crmBanca.id)}
+                          disabled={gestorBancaLoading === crmBanca.id}
+                          className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50"
+                          title="Remover gestor desta banca"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Adicionar gestor:</span>
-                    <select value="" onChange={(e) => { const v = e.target.value; if (v) addGestorToBanca(v, crmBanca.id); e.target.value = ''; }} disabled={gestorBancaLoading === crmBanca.id || gestoresAvailable.length === 0} className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-white min-w-[200px] disabled:opacity-50">
-                      <option value="">{gestoresAvailable.length === 0 ? 'Nenhum gestor disponível' : 'Selecione um gestor'}</option>
-                      {gestoresAvailable.map((u: any) => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
-                    </select>
-                  </div>
-                </>
-              );
-            })()}
+                  ))}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Adicionar Gestor ou Super Admin:</span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) addGestorToBanca(v, crmBanca.id);
+                    e.target.value = '';
+                  }}
+                  disabled={gestorBancaLoading === crmBanca.id || gestoresCargoDisponiveis.length === 0}
+                  className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-white min-w-[200px] disabled:opacity-50"
+                >
+                  <option value="">
+                    {gestoresCargoDisponiveis.length === 0 ? 'Nenhum disponível' : 'Selecione Gestor ou Super Admin'}
+                  </option>
+                  {gestoresCargoDisponiveis.map((u: any) => (
+                    <option key={u.id} value={u.id}>
+                      {(u.full_name || u.email) + (u.status === 'super_admin' ? ' (super admin)' : '')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
           </div>
 
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1 flex items-center gap-2">
               <Shield className="w-5 h-5 text-violet-600 dark:text-violet-400" />
-              Admins desta banca
-              {adminsInBanca.length > 0 && ` (${adminsInBanca.length})`}
+              Admin na função de gestor nesta banca
+              {plataformaGestorNaBanca.length > 0 && ` (${plataformaGestorNaBanca.length})`}
             </h3>
-            {(() => {
-              const admins = (crmBanca.user_ids || []).map((uid: string) => allUsers.find((x: any) => x.id === uid)).filter((u: any) => u && u.status === 'admin');
-              return (
-                <>
-                  {admins.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
-                      {admins.map((u: any) => (
-                        <div key={u.id} className="bg-white dark:bg-[#333] rounded-xl border border-violet-100 dark:border-violet-900/50 p-4 flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="font-medium text-gray-900 dark:text-white truncate">{u.full_name || u.email}</p>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{u.email}</p>
-                            <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-violet-100 dark:bg-violet-900/50 text-violet-800 dark:text-violet-200">Admin</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 dark:text-[#888] hover:bg-gray-100 dark:hover:bg-[#404040] rounded" title="Editar">
-                              <EditIcon className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeGestorFromBanca(u.id, crmBanca.id)}
-                              disabled={gestorBancaLoading === crmBanca.id}
-                              className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50"
-                              title="Remover admin desta banca"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Vincular admin:</span>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v) addGestorToBanca(v, crmBanca.id);
-                        e.target.value = '';
-                      }}
-                      disabled={gestorBancaLoading === crmBanca.id || adminsAvailable.length === 0}
-                      className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-white min-w-[200px] disabled:opacity-50"
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Somente perfis <strong className="font-semibold text-gray-600 dark:text-gray-300">Admin</strong> (não super) vinculados nesta banca para tráfego. Super Admin usa a seção acima junto com Gestor.
+            </p>
+            <>
+              {plataformaGestorNaBanca.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-3">
+                  {plataformaGestorNaBanca.map((u: any) => (
+                    <div
+                      key={u.id}
+                      className="bg-white dark:bg-[#333] rounded-xl border border-violet-100 dark:border-violet-900/50 p-4 flex items-center justify-between gap-2"
                     >
-                      <option value="">{adminsAvailable.length === 0 ? 'Nenhum admin disponível' : 'Selecione um admin'}</option>
-                      {adminsAvailable.map((u: any) => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name || u.email}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              );
-            })()}
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-900 dark:text-white truncate">{u.full_name || u.email}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{u.email}</p>
+                        <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold bg-violet-100 dark:bg-violet-900/50 text-violet-800 dark:text-violet-200">
+                          Admin — função gestor (banca)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => handleEditUser(u)} className="p-1.5 text-gray-500 dark:text-[#888] hover:bg-gray-100 dark:hover:bg-[#404040] rounded" title="Editar">
+                          <EditIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeGestorFromBanca(u.id, crmBanca.id)}
+                          disabled={gestorBancaLoading === crmBanca.id}
+                          className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded disabled:opacity-50"
+                          title="Remover vínculo de gestor de tráfego nesta banca"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Vincular Admin:</span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) addGestorToBanca(v, crmBanca.id);
+                    e.target.value = '';
+                  }}
+                  disabled={gestorBancaLoading === crmBanca.id || plataformaGestorDisponiveis.length === 0}
+                  className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-white min-w-[200px] disabled:opacity-50"
+                >
+                  <option value="">
+                    {plataformaGestorDisponiveis.length === 0 ? 'Nenhum disponível' : 'Selecione um admin'}
+                  </option>
+                  {plataformaGestorDisponiveis.map((u: any) => (
+                    <option key={u.id} value={u.id}>
+                      {(u.full_name || u.email) + ' (admin)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
           </div>
 
           {(owner || gerentesInBanca.length > 0 || consultoresLigadosAosGerentes.length > 0 || rawConsultoresSemGerente.length > 0) && (
@@ -2006,18 +2111,47 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Senha *</label>
                 <input type="password" value={createFormData.password} onChange={(e) => setCreateFormData({ ...createFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
               </div>
-              {(createFormData.status === 'gerente' || createFormData.status === 'consultor') && (
+              {(createFormData.status === 'gerente' || createFormData.status === 'consultor' || createFormData.status === 'gestor') && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{createFormData.status === 'consultor' ? 'Superior (Gerente ou Admin)' : 'Selecionar Dono da Banca'}</label>
-                  <select value={createFormData.enroller} onChange={(e) => setCreateFormData({ ...createFormData, enroller: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]">
-                    <option value="">Selecione...</option>
-                    {createFormData.status === 'consultor' ? (
-                      getSuperioresParaConsultor(createFormData.initialBancaIds?.[0] ?? null).map((g: any) => (
-                        <option key={g.id} value={g.id}>
-                          {[g.full_name || g.email, g.status === 'admin' || g.status === 'super_admin' ? `(${g.status})` : ''].filter(Boolean).join(' ')}
-                        </option>
-                      ))
-                    ) : (hierarchy || []).map((h: any) => <option key={h.id} value={h.id}>{h.banca_name || h.email}</option>)}
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    {createFormData.status === 'consultor'
+                      ? 'Superior (Gerente ou Admin)'
+                      : createFormData.status === 'gestor'
+                        ? 'Superior (Dono da banca, Admin ou Super Admin) — opcional'
+                        : 'Selecionar Dono da Banca'}
+                  </label>
+                  <select
+                    value={createFormData.enroller}
+                    onChange={(e) => setCreateFormData({ ...createFormData, enroller: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                  >
+                    <option value="">
+                      {createFormData.status === 'consultor' ? 'Selecione...' : 'Sem superior (opcional)'}
+                    </option>
+                    {createFormData.status === 'consultor'
+                      ? getSuperioresParaConsultor(createFormData.initialBancaIds?.[0] ?? null).map((g: any) => (
+                          <option key={g.id} value={g.id}>
+                            {[g.full_name || g.email, g.status === 'admin' || g.status === 'super_admin' ? `(${g.status})` : ''].filter(Boolean).join(' ')}
+                          </option>
+                        ))
+                      : createFormData.status === 'gestor'
+                        ? getSuperioresParaGestor().map((s: any) => (
+                            <option key={s.id} value={s.id}>
+                              {[
+                                s.full_name || s.email,
+                                s.status === 'super_admin'
+                                  ? '(Super Admin)'
+                                  : s.status === 'admin'
+                                    ? '(Admin)'
+                                    : '(Dono da banca)',
+                              ].join(' ')}
+                            </option>
+                          ))
+                        : (hierarchy || []).map((h: any) => (
+                            <option key={h.id} value={h.id}>
+                              {h.banca_name || h.email}
+                            </option>
+                          ))}
                   </select>
                 </div>
               )}

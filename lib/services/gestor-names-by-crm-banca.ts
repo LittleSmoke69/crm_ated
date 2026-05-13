@@ -1,5 +1,5 @@
 /**
- * Nomes de gestores de tráfego por `crm_bancas.id`.
+ * Nomes de gestores de tráfego por `crm_bancas.id` (perfis `gestor`, `admin` ou `super_admin` vinculados à banca).
  *
  * No Zaploto real, muitos gestores têm `enroller` nulo e aparecem **apenas** em `user_bancas.banca_ids`.
  * Quando existe dono da banca com URL/nome alinhado ao CRM, também incluímos gestores na subárvore do dono.
@@ -8,6 +8,7 @@
  */
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isTrafficManagerProfileStatus } from '@/lib/utils/traffic-manager-profile';
 
 export type CrmBancaLite = { id: string; name: string | null; url: string | null };
 
@@ -21,7 +22,7 @@ export function normalizeBancaUrlForCrmMatch(url?: string | null): string {
   return normalized.trim().toLowerCase();
 }
 
-function normalizeBancaNameForMatch(value: string | null | undefined): string {
+export function normalizeBancaNameForMatch(value: string | null | undefined): string {
   return String(value ?? '')
     .trim()
     .toLowerCase()
@@ -63,7 +64,7 @@ async function listGestorNamesInOwnerSubtree(ownerId: string): Promise<string[]>
       const id = String(p.id ?? '').trim();
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      if (String(p.status ?? '') === 'gestor') {
+      if (isTrafficManagerProfileStatus(p.status)) {
         const label = String(p.full_name || p.email || '').trim();
         if (label && !names.includes(label)) names.push(label);
       }
@@ -108,7 +109,7 @@ async function listGestorUserIdsInOwnerSubtree(ownerId: string): Promise<string[
       const id = String(p.id ?? '').trim();
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      if (String(p.status ?? '') === 'gestor' && !out.includes(id)) out.push(id);
+      if (isTrafficManagerProfileStatus(p.status) && !out.includes(id)) out.push(id);
       next.push(id);
     }
     frontier = next;
@@ -131,7 +132,7 @@ function mergeUniqueIds(...groups: string[][]): string[] {
 }
 
 /**
- * Para cada `crm_bancas.id`, lista de `profiles.id` com status gestor (mesmo escopo que {@link buildGestorNamesByCrmBancaIdMap}).
+ * Para cada `crm_bancas.id`, lista de `profiles.id` gestor/admin/super_admin vinculado (mesmo escopo que {@link buildGestorNamesByCrmBancaIdMap}).
  */
 export async function buildGestorUserIdsByCrmBancaIdMap(
   bancaIds: string[],
@@ -143,17 +144,17 @@ export async function buildGestorUserIdsByCrmBancaIdMap(
 
   const idSet = new Set(ids);
 
-  const { data: allGestores, error: gestErr } = await supabaseServiceRole
+  const { data: trafficManagers, error: gestErr } = await supabaseServiceRole
     .from('profiles')
     .select('id, status')
-    .eq('status', 'gestor');
+    .in('status', ['gestor', 'admin', 'super_admin']);
   if (gestErr) throw new Error(gestErr.message);
 
-  const gestorIdSet = new Set<string>();
-  for (const p of allGestores ?? []) {
+  const trafficManagerIdSet = new Set<string>();
+  for (const p of trafficManagers ?? []) {
     const id = String((p as { id: string }).id ?? '').trim();
     if (!id) continue;
-    gestorIdSet.add(id);
+    trafficManagerIdSet.add(id);
   }
 
   const idsFromUserBancasByBanca = new Map<string, string[]>();
@@ -164,7 +165,7 @@ export async function buildGestorUserIdsByCrmBancaIdMap(
 
   for (const row of userBancasRows ?? []) {
     const userId = String((row as { user_id?: string | null }).user_id ?? '').trim();
-    if (!userId || !gestorIdSet.has(userId)) continue;
+    if (!userId || !trafficManagerIdSet.has(userId)) continue;
     const bancaIdsRow = Array.isArray((row as { banca_ids?: unknown }).banca_ids)
       ? ((row as { banca_ids: unknown[] }).banca_ids ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)
       : [];
@@ -243,19 +244,19 @@ export async function buildGestorNamesByCrmBancaIdMap(
 
   const idSet = new Set(ids);
 
-  /** Todos os gestores (poucos registros) — evita `.in('id', …)` gigante a partir de user_bancas. */
-  const { data: allGestores, error: gestErr } = await supabaseServiceRole
+  /** Gestores de tráfego e admins (poucos registros) — evita `.in('id', …)` gigante a partir de user_bancas. */
+  const { data: trafficManagers, error: gestErr } = await supabaseServiceRole
     .from('profiles')
     .select('id, full_name, email, status')
-    .eq('status', 'gestor');
+    .in('status', ['gestor', 'admin', 'super_admin']);
   if (gestErr) throw new Error(gestErr.message);
 
   const gestorLabelById = new Map<string, string>();
-  const gestorIdSet = new Set<string>();
-  for (const p of allGestores ?? []) {
+  const trafficManagerIdSet = new Set<string>();
+  for (const p of trafficManagers ?? []) {
     const id = String((p as { id: string }).id ?? '').trim();
     if (!id) continue;
-    gestorIdSet.add(id);
+    trafficManagerIdSet.add(id);
     const label = String((p as { full_name?: string | null }).full_name || (p as { email?: string | null }).email || '').trim();
     if (label) gestorLabelById.set(id, label);
   }
@@ -268,7 +269,7 @@ export async function buildGestorNamesByCrmBancaIdMap(
 
   for (const row of userBancasRows ?? []) {
     const userId = String((row as { user_id?: string | null }).user_id ?? '').trim();
-    if (!userId || !gestorIdSet.has(userId)) continue;
+    if (!userId || !trafficManagerIdSet.has(userId)) continue;
     const label = gestorLabelById.get(userId);
     if (!label) continue;
     const bancaIdsRow = Array.isArray((row as { banca_ids?: unknown }).banca_ids)

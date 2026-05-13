@@ -2803,7 +2803,7 @@ const UsersSection = ({
                       {createFormData.status === 'gerente'
                         ? 'Selecionar Dono de Banca (opcional)'
                         : createFormData.status === 'gestor'
-                        ? 'Selecionar Dono de Banca ou Admin (vincula dados da banca)'
+                        ? 'Superior: Dono da banca, Admin ou Super Admin (opcional)'
                         : 'Selecionar Gerente *'}
                       {createFormData.status === 'consultor' && (
                         <span className="text-amber-600 ml-1">obrigatório</span>
@@ -2819,7 +2819,22 @@ const UsersSection = ({
                         {createFormData.status === 'consultor' ? 'Selecione um gerente...' : 'Sem superior (opcional)'}
                       </option>
                       {getPotentialEnrollers(createFormData.status).map(u => (
-                        <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
+                        <option key={u.id} value={u.id}>
+                          {createFormData.status === 'gestor'
+                            ? [
+                                u.full_name || u.email,
+                                u.status === 'super_admin'
+                                  ? '(Super Admin)'
+                                  : u.status === 'admin'
+                                    ? '(Admin)'
+                                    : u.status === 'dono_banca'
+                                      ? '(Dono da banca)'
+                                      : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')
+                            : u.full_name || u.email}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -3043,7 +3058,20 @@ const UsersSection = ({
                             >
                               <option value="">Sem superior (opcional)</option>
                               {getPotentialEnrollers('gestor').map(pe => (
-                                <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
+                                <option key={pe.id} value={pe.id}>
+                                  {[
+                                    pe.full_name || pe.email,
+                                    pe.status === 'super_admin'
+                                      ? '(Super Admin)'
+                                      : pe.status === 'admin'
+                                        ? '(Admin)'
+                                        : pe.status === 'dono_banca'
+                                          ? '(Dono da banca)'
+                                          : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' ')}
+                                </option>
                               ))}
                             </select>
                           )}

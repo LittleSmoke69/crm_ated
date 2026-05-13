@@ -9,10 +9,20 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LOG_PREFIX = '[lead-transfer][core]';
 
+/** Normaliza e-mail do lead para persistir em admin_lead_transfer_entries.lead_email (busca no histórico). */
+export function normalizeLeadEmailForDb(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (!s.includes('@') || s.length < 5) return null;
+  return s;
+}
+
 export type TransferKind = 'standard' | 'admin_to_gerente_stock' | 'gerente_stock_to_consultant';
 
 export type LeadSnapshotInput = {
   lead_id: number | string;
+  /** E-mail do lead (CRM/listagem); gravado em entries.lead_email para busca no histórico. */
+  email?: string | null;
   name?: string | null;
   phone?: string | null;
   balance?: number | null;
@@ -308,6 +318,7 @@ export async function executeLeadRedistributionCore(
   const refLogId = (fs?.log_origem_id ?? fs?.log_devolucao_id) != null ? String(fs?.log_origem_id ?? fs?.log_devolucao_id).trim() : null;
   type SnapshotRow = {
     lead_id: string;
+    lead_email?: string | null;
     lead_name?: string | null;
     lead_phone?: string | null;
     saldo_snapshot?: number | null;
@@ -325,6 +336,7 @@ export async function executeLeadRedistributionCore(
       const id = String(s.lead_id);
       snapshotByLeadId.set(id, {
         lead_id: id,
+        lead_email: normalizeLeadEmailForDb(s.email),
         lead_name: s.name ?? null,
         lead_phone: s.phone ?? null,
         saldo_snapshot: s.balance ?? null,
@@ -343,12 +355,16 @@ export async function executeLeadRedistributionCore(
     }
   } else if (source_transfer_log_id && ctx.bancaId) {
     const selectFullSnap =
-      'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      'lead_id, lead_email, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
     const selectBasicSnap =
       'lead_id, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
     let srcResult: { data: Record<string, unknown>[] | null; error: { code?: string; message?: string } | null } =
       await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectFullSnap).eq('transfer_log_id', source_transfer_log_id).eq('banca_id', ctx.bancaId);
-    if (srcResult.error?.code === 'PGRST204' || srcResult.error?.message?.includes('lead_name')) {
+    if (
+      srcResult.error?.code === 'PGRST204' ||
+      srcResult.error?.message?.includes('lead_name') ||
+      srcResult.error?.message?.includes('lead_email')
+    ) {
       srcResult = await supabaseServiceRole
         .from('admin_lead_transfer_entries')
         .select(selectBasicSnap)
@@ -362,12 +378,16 @@ export async function executeLeadRedistributionCore(
     }
   } else if (refLogId && ctx.bancaId && (isDevolucao || isReverse)) {
     const selectFullSnap =
-      'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
+      'lead_id, lead_email, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
     const selectBasicSnap =
       'lead_id, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
     let refResult: { data: Record<string, unknown>[] | null; error: { code?: string; message?: string } | null } =
       await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectFullSnap).eq('transfer_log_id', refLogId).eq('banca_id', ctx.bancaId);
-    if (refResult.error?.code === 'PGRST204' || refResult.error?.message?.includes('lead_name')) {
+    if (
+      refResult.error?.code === 'PGRST204' ||
+      refResult.error?.message?.includes('lead_name') ||
+      refResult.error?.message?.includes('lead_email')
+    ) {
       refResult = await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectBasicSnap).eq('transfer_log_id', refLogId).eq('banca_id', ctx.bancaId);
     }
     if (Array.isArray(refResult.data)) {
@@ -419,6 +439,7 @@ export async function executeLeadRedistributionCore(
         source_consultant_email,
         target_consultant_email,
         transfer_type,
+        lead_email: normalizeLeadEmailForDb(snap?.lead_email),
         lead_name: snap?.lead_name ?? null,
         lead_phone: snap?.lead_phone ?? null,
         saldo_snapshot: balance,
@@ -432,6 +453,11 @@ export async function executeLeadRedistributionCore(
       };
     });
     let { error: entriesError } = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entries);
+    if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_email')) {
+      const entriesNoEmail = entries.map(({ lead_email: _e, ...rest }) => rest);
+      const retryEmail = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entriesNoEmail);
+      entriesError = retryEmail.error;
+    }
     if (entriesError?.code === 'PGRST204' && entriesError.message?.includes('lead_name')) {
       const entriesWithoutNamePhone = entries.map(({ lead_name: _n, lead_phone: _p, ...rest }) => rest);
       const retry = await supabaseServiceRole.from('admin_lead_transfer_entries').insert(entriesWithoutNamePhone);

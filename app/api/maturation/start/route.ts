@@ -1,8 +1,8 @@
 /**
  * POST /api/maturation/start
  *
- * Inicia um job de maturação (mesma lógica da Netlify Function maturation-start).
- * Usado em desenvolvimento local quando a função Netlify não está disponível.
+ * Inicia job(s) de maturação (núcleo compartilhado com POST /api/maturation/jobs).
+ * Em produção na VPS, o processamento contínuo costuma vir do cron Linux (ex.: maturation-tick via scripts/linux).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -21,12 +21,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const result = await runMaturationStart(supabaseServiceRole, {
       userId,
+      visibilityRequest: req,
       body: {
         plan_id: body.plan_id,
         target_chat_id: body.target_chat_id,
         use_virgin_messages: body.use_virgin_messages,
         preferred_evolution_instance_ids: body.preferred_evolution_instance_ids,
+        outbound_target_chat_ids: Array.isArray(body.outbound_target_chat_ids) ? body.outbound_target_chat_ids : undefined,
         delay_seconds_override: body.delay_seconds_override != null ? Number(body.delay_seconds_override) : undefined,
+        use_tenant_default_mutual_plan: body.use_tenant_default_mutual_plan === true,
       },
     });
 

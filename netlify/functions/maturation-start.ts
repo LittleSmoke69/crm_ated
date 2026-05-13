@@ -7,6 +7,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { NextRequest } from 'next/server';
 import { runMaturationStart } from '../../lib/services/maturation/start-job';
 
 interface HandlerEvent {
@@ -40,6 +41,21 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 const supabaseServiceRole = createClient(supabaseUrl, supabaseServiceRoleKey, {
   auth: { persistSession: false },
 });
+
+function maturationStartRequestFromNetlifyEvent(event: HandlerEvent): NextRequest {
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(event.headers || {})) {
+    if (v) headers.set(k, v);
+  }
+  const qs = event.queryStringParameters || {};
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(qs)) {
+    if (v != null) sp.set(k, String(v));
+  }
+  const q = sp.toString();
+  const url = `https://maturation-start.internal/${q ? `?${q}` : ''}`;
+  return new NextRequest(url, { method: event.httpMethod || 'POST', headers });
+}
 
 function getUserIdFromHeaders(headers: Record<string, string>): string | null {
   const userIdHeader = headers['x-user-id'] || headers['X-User-Id'];
@@ -88,10 +104,15 @@ export const handler: Handler = async (event) => {
     use_virgin_messages,
     preferred_evolution_instance_ids,
     delay_seconds_override,
+    use_tenant_default_mutual_plan,
+    outbound_target_chat_ids,
   } = body;
+
+  const visibilityRequest = maturationStartRequestFromNetlifyEvent(event);
 
   const result = await runMaturationStart(supabaseServiceRole, {
     userId,
+    visibilityRequest,
     body: {
       plan_id: typeof plan_id === 'string' ? plan_id : undefined,
       target_chat_id: typeof target_chat_id === 'string' ? target_chat_id : undefined,
@@ -99,8 +120,12 @@ export const handler: Handler = async (event) => {
       preferred_evolution_instance_ids: Array.isArray(preferred_evolution_instance_ids)
         ? (preferred_evolution_instance_ids as string[])
         : undefined,
+      outbound_target_chat_ids: Array.isArray(outbound_target_chat_ids)
+        ? (outbound_target_chat_ids as string[])
+        : undefined,
       delay_seconds_override:
         delay_seconds_override != null ? Number(delay_seconds_override) : undefined,
+      use_tenant_default_mutual_plan: use_tenant_default_mutual_plan === true,
     },
   });
 

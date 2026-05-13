@@ -1,47 +1,37 @@
 /**
- * GET /api/admin/maturation/virgin-messages - Lista mensagens da auto maturação virgem
- * PUT /api/admin/maturation/virgin-messages - Atualiza mensagens (body: { messages: VirginMessage[] })
+ * GET /api/admin/maturation/virgin-messages - Lista mensagens (e planos, se houver rotação)
+ * PUT /api/admin/maturation/virgin-messages - Atualiza: `messages` (um plano, legado) ou `message_plans` (vários planos)
  *
- * VirginMessage: { type: 'text'|'video'|'image'|'audio', text?: string, media_path?: string, caption?: string }
- * Legado: array de strings é normalizado para { type: 'text', text: string }
+ * Multi-plano no storage: `value_json` = `{ "plans": [ [...], [...] ] }` — a malha alterna a cada ciclo.
  */
 
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  normalizeVirginMessage,
+  parseVirginMessagePlansFromConfig,
+  type VirginMessageItem,
+} from '@/lib/maturation/virgin-message-plans';
 
 const KEY_MESSAGES = 'messages';
+const KEY_DEFAULT_MUTUAL_PLAN = 'default_mutual_maturation_plan_id';
 
-export type VirginMessageItem = {
-  type: 'text' | 'video' | 'image' | 'audio';
-  text?: string;
-  media_path?: string;
-  caption?: string;
-};
-
-function normalizeMessage(m: unknown): VirginMessageItem | null {
-  if (typeof m === 'string') {
-    const t = m.trim();
-    return t ? { type: 'text', text: t } : null;
-  }
-  if (m && typeof m === 'object' && 'type' in m && typeof (m as any).type === 'string') {
-    const o = m as Record<string, unknown>;
-    const type = (o.type as string).toLowerCase();
-    if (!['text', 'video', 'image', 'audio'].includes(type)) return null;
-    if (type === 'text') {
-      const text = typeof o.text === 'string' ? o.text.trim() : '';
-      return text ? { type: 'text', text } : null;
-    }
-    const media_path = typeof o.media_path === 'string' ? o.media_path.trim() : '';
-    if (!media_path) return null;
-    return {
-      type: type as 'video' | 'image' | 'audio',
-      media_path,
-      caption: typeof o.caption === 'string' ? o.caption.trim() : undefined,
-    };
+function parseDefaultMutualPlanId(valueJson: unknown): string | null {
+  if (valueJson == null) return null;
+  if (typeof valueJson === 'object' && valueJson !== null && 'plan_id' in valueJson) {
+    const id = (valueJson as { plan_id?: unknown }).plan_id;
+    if (typeof id === 'string' && id.trim()) return id.trim();
+    return null;
   }
   return null;
+}
+
+export type { VirginMessageItem };
+
+function normalizeMessage(m: unknown): VirginMessageItem | null {
+  return normalizeVirginMessage(m);
 }
 
 async function requireAdmin(userId: string) {
@@ -93,13 +83,28 @@ export async function GET(req: NextRequest) {
       break;
     }
 
-    if (error && error.code !== 'PGRST116') {
-      return successResponse({ messages: [] });
+    let defaultMutualPlanId: string | null = null;
+    const { data: defRow } = await supabaseServiceRole
+      .from('virgin_maturation_config')
+      .select('value_json')
+      .eq('key', KEY_DEFAULT_MUTUAL_PLAN)
+      .maybeSingle();
+    if (defRow?.value_json != null) {
+      defaultMutualPlanId = parseDefaultMutualPlanId(defRow.value_json);
     }
 
-    const raw = Array.isArray(data?.value_json) ? data.value_json : [];
-    const messages: VirginMessageItem[] = raw.map(normalizeMessage).filter((x: VirginMessageItem | null): x is VirginMessageItem => x != null);
-    return successResponse({ messages });
+    if (error && error.code !== 'PGRST116') {
+      return successResponse({ messages: [], message_plans: [], plan_count: 0, defaultMutualPlanId });
+    }
+
+    const plans = parseVirginMessagePlansFromConfig(data?.value_json);
+    const messages = plans[0] ?? [];
+    return successResponse({
+      messages,
+      message_plans: plans,
+      plan_count: plans.length,
+      defaultMutualPlanId,
+    });
   } catch (e: any) {
     if (e.message === 'Acesso negado. Apenas administradores.') {
       return errorResponse(e.message, 403);
@@ -118,26 +123,114 @@ export async function PUT(req: NextRequest) {
 
     const body = await req.json();
     const messages = body?.messages;
-    if (!Array.isArray(messages)) {
-      return errorResponse('Body deve conter messages (array de objetos com type, text ou media_path)', 400);
-    }
-    const sanitized: VirginMessageItem[] = messages.map(normalizeMessage).filter((x): x is VirginMessageItem => x != null);
+    const messagePlansRaw = body?.message_plans;
+    const defaultMutualRaw = body?.default_mutual_maturation_plan_id;
 
-    const { error } = await supabaseServiceRole
-      .from('virgin_maturation_config')
-      .upsert(
+    if (defaultMutualRaw !== undefined && defaultMutualRaw !== null && typeof defaultMutualRaw !== 'string') {
+      return errorResponse('default_mutual_maturation_plan_id deve ser string UUID ou vazio', 400);
+    }
+
+    if (messages === undefined && messagePlansRaw === undefined && defaultMutualRaw === undefined) {
+      return errorResponse('Envie messages, message_plans e/ou default_mutual_maturation_plan_id', 400);
+    }
+
+    let savedPlans: VirginMessageItem[][] | null = null;
+
+    if (messagePlansRaw !== undefined) {
+      if (!Array.isArray(messagePlansRaw)) {
+        return errorResponse('message_plans deve ser array de arrays de mensagens', 400);
+      }
+      const sanitizedPlans: VirginMessageItem[][] = [];
+      for (const plan of messagePlansRaw) {
+        if (!Array.isArray(plan)) continue;
+        const s = plan.map(normalizeMessage).filter((x): x is VirginMessageItem => x != null);
+        if (s.length > 0) sanitizedPlans.push(s);
+      }
+      if (sanitizedPlans.length === 0) {
+        return errorResponse('message_plans: informe ao menos um plano com uma mensagem válida', 400);
+      }
+      const valueJson =
+        sanitizedPlans.length === 1 ? sanitizedPlans[0] : { plans: sanitizedPlans };
+      const { error } = await supabaseServiceRole
+        .from('virgin_maturation_config')
+        .upsert(
+          {
+            key: KEY_MESSAGES,
+            value_json: valueJson,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'key' }
+        );
+      if (error) {
+        return errorResponse(`Erro ao salvar planos de mensagens: ${error.message}`, 500);
+      }
+      savedPlans = sanitizedPlans;
+    } else if (messages !== undefined) {
+      if (!Array.isArray(messages)) {
+        return errorResponse('Body deve conter messages (array de objetos com type, text ou media_path)', 400);
+      }
+      const sanitized: VirginMessageItem[] = messages.map(normalizeMessage).filter((x): x is VirginMessageItem => x != null);
+
+      const { error } = await supabaseServiceRole
+        .from('virgin_maturation_config')
+        .upsert(
+          {
+            key: KEY_MESSAGES,
+            value_json: sanitized,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'key' }
+        );
+
+      if (error) {
+        return errorResponse(`Erro ao salvar mensagens: ${error.message}`, 500);
+      }
+      savedPlans = [sanitized];
+    }
+
+    if (defaultMutualRaw !== undefined) {
+      const planIdStr = typeof defaultMutualRaw === 'string' ? defaultMutualRaw.trim() : '';
+      const { error: defErr } = await supabaseServiceRole.from('virgin_maturation_config').upsert(
         {
-          key: KEY_MESSAGES,
-          value_json: sanitized,
+          key: KEY_DEFAULT_MUTUAL_PLAN,
+          value_json: { plan_id: planIdStr.length > 0 ? planIdStr : null },
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'key' }
       );
-
-    if (error) {
-      return errorResponse(`Erro ao salvar mensagens: ${error.message}`, 500);
+      if (defErr) {
+        return errorResponse(`Erro ao salvar plano da rede mútua: ${defErr.message}`, 500);
+      }
     }
-    return successResponse({ messages: sanitized }, 'Mensagens salvas');
+
+    const responsePayload: {
+      messages?: VirginMessageItem[];
+      message_plans?: VirginMessageItem[][];
+      plan_count?: number;
+      defaultMutualPlanId?: string | null;
+    } = {};
+    if (savedPlans) {
+      responsePayload.message_plans = savedPlans;
+      responsePayload.messages = savedPlans[0] ?? [];
+      responsePayload.plan_count = savedPlans.length;
+    }
+    if (defaultMutualRaw !== undefined) {
+      const planIdStr = typeof defaultMutualRaw === 'string' ? defaultMutualRaw.trim() : '';
+      responsePayload.defaultMutualPlanId = planIdStr.length > 0 ? planIdStr : null;
+    }
+
+    const msg =
+      messagePlansRaw !== undefined && defaultMutualRaw !== undefined
+        ? 'Planos de mensagens e plano da rede mútua salvos'
+        : messagePlansRaw !== undefined
+          ? 'Planos de mensagens salvos'
+          : messages !== undefined && defaultMutualRaw !== undefined
+            ? 'Mensagens e plano da rede mútua salvos'
+            : messages !== undefined
+              ? 'Mensagens salvas'
+              : 'Plano da rede mútua salvo';
+
+    return successResponse(responsePayload, msg);
   } catch (e: any) {
     if (e.message === 'Acesso negado. Apenas administradores.') {
       return errorResponse(e.message, 403);

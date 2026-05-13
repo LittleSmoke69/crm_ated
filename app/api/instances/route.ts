@@ -348,7 +348,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('instanceName é obrigatório', 400);
     }
 
-    // Tipo de maturação: virgem = auto maturação 5 dias; maturado = fluxo normal (obrigatório)
+    // Tipo de maturação: virgem = fluxo rede mútua no Maturador (sem trava de dias ao conectar); maturado = fluxo normal
     const maturationTypeValue = maturationType === 'virgem' ? 'virgem' : 'maturado';
 
     // Número de instâncias mestres por usuário é ilimitado (trava removida).
@@ -787,7 +787,7 @@ export async function POST(req: NextRequest) {
           zaploto_id: instancesZaplotoScopeId,
           apikey: instanceHash, // CRÍTICO: Salva o hash da instância (que é usado como apikey nos requests)
           is_master: isMaster === true, // Marca como instância mestre se solicitado
-          maturation_type: maturationTypeValue, // virgem = auto maturação 5 dias; maturado = fluxo normal
+          maturation_type: maturationTypeValue, // virgem = maturador/rede mútua; maturado = fluxo normal
           webhook_configured: !!(isMaster === true && shouldConfigureChatWebhook && masterChatWebhookUrl),
         })
         .select()

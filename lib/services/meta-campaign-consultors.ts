@@ -1,9 +1,39 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getUserIdsLinkedToCrmBancaViaUserBancas } from '@/lib/utils/user-bancas';
+import {
+  buildGestorUserIdsByCrmBancaIdMap,
+  normalizeBancaNameForMatch,
+  normalizeBancaUrlForCrmMatch,
+  type CrmBancaLite,
+} from '@/lib/services/gestor-names-by-crm-banca';
 import {
   listRedirectCampaignConsultorAssignments,
   mergeCampaignConsultorAssignments,
   type RedirectConsultorGroup,
 } from '@/lib/services/meta-redirect-consultor-attribution';
+/**
+ * Perfis que podem receber spend no card Ads (alinhado ao escopo de Meu Desempenho por banca:
+ * consultor, gerente, admin, gestor, super_admin, dono_banca vinculados em user_bancas / rede enroller).
+ * dono_banca incluso para que o dono possa receber atribuição quando não há gestores vinculados.
+ */
+const ADS_ATTRIBUTION_PROFILE_STATUSES = [
+  'consultor',
+  'gerente',
+  'admin',
+  'gestor',
+  'super_admin',
+  'dono_banca',
+] as const;
+const ADS_ATTRIBUTION_STATUS_SET = new Set<string>(ADS_ATTRIBUTION_PROFILE_STATUSES);
+
+/** Logs detalhados da montagem do dropdown Ads (user_bancas + raízes + BFS enroller). Defina LOG_META_ADS_HIERARCHY=1 no .env */
+const LOG_META_ADS_HIERARCHY = process.env.LOG_META_ADS_HIERARCHY === '1';
+
+function logAdsHierarchy(event: string, payload: Record<string, unknown>) {
+  if (!LOG_META_ADS_HIERARCHY) return;
+  console.info(`[meta-ads-hierarchy] ${event}`, JSON.stringify(payload));
+}
+
 interface ConsultantAggregatedMetrics {
   total_leads: number;
   total_deposited: number;
@@ -112,29 +142,309 @@ function aggregateIndicatedsByConsultant(
 
 export async function listConsultorsByBancaId(bancaId: string): Promise<Array<{ id: string; email: string; full_name: string | null }>> {
   if (!bancaId) return [];
-  const { data: userBancasRows } = await supabaseServiceRole
-    .from('user_bancas')
-    .select('user_id')
-    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
+  return listConsultorProfilesForAdsFromUserIds(await getUserIdsLinkedToCrmBancaViaUserBancas(bancaId));
+}
 
-  const userIds = (userBancasRows || [])
-    .map((row: { user_id?: string | null }) => row.user_id)
-    .filter((id): id is string => Boolean(id));
+async function listConsultorProfilesForAdsFromUserIds(
+  userIds: string[]
+): Promise<Array<{ id: string; email: string; full_name: string | null }>> {
   if (!userIds.length) return [];
 
-  const { data: consultors } = await supabaseServiceRole
+  const { data: consultors, error } = await supabaseServiceRole
     .from('profiles')
-    .select('id, email, full_name')
+    .select('id, email, full_name, status')
     .in('id', userIds)
-    .eq('status', 'consultor');
+    .in('status', [...ADS_ATTRIBUTION_PROFILE_STATUSES]);
 
-  return (consultors || [])
-    .filter((c: { id?: string; email?: string | null }) => Boolean(c.id) && Boolean(c.email))
-    .map((c: { id: string; email: string; full_name: string | null }) => ({
+  if (error) {
+    logAdsHierarchy('profiles_from_user_bancas_error', { message: error.message, input_ids: userIds.length });
+    throw new Error(error.message);
+  }
+
+  const rows = consultors ?? [];
+  if (LOG_META_ADS_HIERARCHY && userIds.length > 0) {
+    const statusCounts: Record<string, number> = {};
+    for (const r of rows as Array<{ status?: string | null }>) {
+      const s = String(r.status ?? 'unknown').toLowerCase();
+      statusCounts[s] = (statusCounts[s] ?? 0) + 1;
+    }
+    logAdsHierarchy('profiles_from_user_bancas', {
+      input_user_ids: userIds.length,
+      profiles_returned: rows.length,
+      skipped_no_ads_eligible_status: userIds.length - rows.length,
+      status_breakdown: statusCounts,
+      sample_ids: rows.slice(0, 6).map((p: { id?: string }) => p.id),
+    });
+  }
+
+  return (rows as Array<{ id: string; email: string | null; full_name: string | null }>)
+    .filter((c: { id?: string; email?: string | null; full_name?: string | null }) => Boolean(c.id))
+    .map((c: { id: string; email: string | null; full_name: string | null }) => ({
       id: c.id,
-      email: c.email,
+      email: c.email ?? '',
       full_name: c.full_name,
     }));
+}
+
+/** Dono da banca (CRM) pelo mesmo critério de {@link gestor-names-by-crm-banca} / HierarchySection. */
+async function resolveDonoBancaIdForCrmBanca(bancaId: string): Promise<string | null> {
+  const { data: banca } = await supabaseServiceRole
+    .from('crm_bancas')
+    .select('id,name,url')
+    .eq('id', bancaId)
+    .maybeSingle();
+  if (!banca) return null;
+  const lite: CrmBancaLite = {
+    id: String((banca as { id: string }).id),
+    name: (banca as { name?: string | null }).name ?? null,
+    url: (banca as { url?: string | null }).url ?? null,
+  };
+  const bancaNameNorm = normalizeBancaNameForMatch(lite.name ?? '');
+  const bancaUrlNorm = normalizeBancaUrlForCrmMatch(lite.url ?? '');
+  const { data: ownersRows, error } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, banca_name, banca_url, status')
+    .eq('status', 'dono_banca');
+  if (error) return null;
+  const owner = (ownersRows ?? []).find((o: { banca_name?: string | null; banca_url?: string | null; id?: string }) => {
+    const ownerNameNorm = normalizeBancaNameForMatch(o?.banca_name);
+    const ownerUrlNorm = normalizeBancaUrlForCrmMatch(o?.banca_url);
+    return (
+      (bancaUrlNorm.length > 0 && ownerUrlNorm.length > 0 && ownerUrlNorm === bancaUrlNorm) ||
+      (bancaNameNorm.length > 0 && ownerNameNorm.length > 0 && ownerNameNorm === bancaNameNorm)
+    );
+  });
+  return owner?.id ? String(owner.id) : null;
+}
+
+/** Todos os `profiles.id` com esta banca em `user_bancas` (qualquer papel: inclui gerentes e consultores diretos como raiz da BFS). */
+async function getAllUserIdsLinkedViaUserBancasForBanca(bancaId: string): Promise<string[]> {
+  if (!bancaId) return [];
+  return getUserIdsLinkedToCrmBancaViaUserBancas(bancaId);
+}
+
+/** Mesmas raízes que alimentam a coluna Gestor + dono + todos os vínculos em `user_bancas`. */
+async function collectRootProfileIdsForAdsAttributionDropdown(
+  bancaId: string,
+  userIdsFromUserBancas?: string[],
+  resolvedOwnerId?: string | null
+): Promise<string[]> {
+  const rootIdSet = new Set<string>();
+  const ownerId = resolvedOwnerId !== undefined ? resolvedOwnerId : await resolveDonoBancaIdForCrmBanca(bancaId);
+  if (ownerId) rootIdSet.add(ownerId);
+
+  let fromUb: string[] = [];
+  try {
+    fromUb =
+      userIdsFromUserBancas ?? (await getAllUserIdsLinkedViaUserBancasForBanca(bancaId));
+    for (const uid of fromUb) {
+      rootIdSet.add(uid);
+    }
+  } catch (e: unknown) {
+    const err = e as { message?: string };
+    console.warn('[meta-campaign-consultors] getAllUserIdsLinkedViaUserBancasForBanca:', err?.message);
+  }
+
+  let gestorRootIds: string[] = [];
+  try {
+    const { data: bancaRow } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('id, name, url')
+      .eq('id', bancaId)
+      .maybeSingle();
+    if (bancaRow) {
+      const bancaById = new Map<string, CrmBancaLite>();
+      bancaById.set(bancaId, {
+        id: String((bancaRow as { id: string }).id),
+        name: (bancaRow as { name?: string | null }).name ?? null,
+        url: (bancaRow as { url?: string | null }).url ?? null,
+      });
+      const gestorMap = await buildGestorUserIdsByCrmBancaIdMap([bancaId], bancaById);
+      gestorRootIds = [...(gestorMap.get(bancaId) ?? [])];
+      for (const gid of gestorRootIds) {
+        rootIdSet.add(gid);
+      }
+    }
+  } catch (e: unknown) {
+    const err = e as { message?: string };
+    console.warn('[meta-campaign-consultors] buildGestorUserIdsByCrmBancaIdMap:', err?.message);
+  }
+
+  const roots = [...rootIdSet];
+  const ubSet = new Set(fromUb.map((x) => String(x).trim().toLowerCase()));
+  logAdsHierarchy('enroller_roots', {
+    banca_id: bancaId,
+    dono_banca_id: ownerId,
+    user_bancas_ids_for_banca: fromUb.length,
+    gestor_column_ids: gestorRootIds.length,
+    only_in_gestor_not_in_ub: gestorRootIds.filter((id) => !ubSet.has(String(id).trim().toLowerCase())).length,
+    unique_roots_total: roots.length,
+    sample_roots: roots.slice(0, 12),
+  });
+
+  return roots;
+}
+
+/**
+ * Consultores na subárvore de `enroller` a partir de uma ou mais raízes (dono, gestores da coluna Gestor, gerentes/consultores em `user_bancas`, etc.).
+ */
+async function listConsultorProfilesBeneathEnrollerRoots(
+  rootIds: string[]
+): Promise<Array<{ id: string; email: string; full_name: string | null }>> {
+  const out: Array<{ id: string; email: string; full_name: string | null }> = [];
+  const seen = new Set<string>();
+  let frontier = Array.from(
+    new Set(rootIds.map((id) => String(id ?? '').trim()).filter(Boolean))
+  );
+  const CHUNK = 80;
+  let bfsDepthUsed = 0;
+  let profilesFetchedTotal = 0;
+  const eligibleByStatus: Record<string, number> = {};
+
+  async function fetchChildrenByEnrollers(enrollerIds: string[]) {
+    const rows: Array<{
+      id: string;
+      full_name?: string | null;
+      email?: string | null;
+      status?: string | null;
+    }> = [];
+    for (let i = 0; i < enrollerIds.length; i += CHUNK) {
+      const slice = enrollerIds.slice(i, i + CHUNK);
+      if (slice.length === 0) continue;
+      const { data, error } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, full_name, email, status, enroller')
+        .in('enroller', slice);
+      if (error) throw new Error(error.message);
+      rows.push(...((data ?? []) as typeof rows));
+    }
+    return rows;
+  }
+
+  for (let depth = 0; depth < 28 && frontier.length > 0; depth += 1) {
+    const rows = await fetchChildrenByEnrollers(frontier);
+    if (rows.length === 0) break;
+    profilesFetchedTotal += rows.length;
+    bfsDepthUsed = depth + 1;
+    const next: string[] = [];
+    for (const p of rows) {
+      const id = String(p.id ?? '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const st = String(p.status ?? '').trim().toLowerCase();
+      if (ADS_ATTRIBUTION_STATUS_SET.has(st)) {
+        eligibleByStatus[st] = (eligibleByStatus[st] ?? 0) + 1;
+        out.push({
+          id,
+          email: String(p.email ?? '').trim(),
+          full_name: p.full_name ?? null,
+        });
+      }
+      next.push(id);
+    }
+    frontier = next;
+  }
+
+  logAdsHierarchy('enroller_bfs', {
+    root_count: rootIds.length,
+    bfs_levels_walked: bfsDepthUsed,
+    profiles_fetched_cumulative: profilesFetchedTotal,
+    unique_nodes_in_tree: seen.size,
+    ads_eligible_in_subtree: out.length,
+    eligible_status_breakdown: eligibleByStatus,
+    sample_eligible_ids: out.slice(0, 8).map((x) => x.id),
+  });
+
+  return out;
+}
+
+/**
+ * Perfis elegíveis para atribuição do spend Ads no Meu Desempenho:
+ * Consultor, gerente, admin, gestor e super_admin com esta banca em `user_bancas` + descendentes `enroller` a partir do dono, dos gestores
+ * (mesmo conjunto da coluna Gestor) e de **qualquer** usuário vinculado à banca em `user_bancas` (ex.: gerente com rede abaixo).
+ */
+export async function listConsultoresForAdsAttributionDropdown(
+  bancaId: string
+): Promise<Array<{ id: string; email: string; full_name: string | null }>> {
+  if (!bancaId) return [];
+  const byId = new Map<string, { id: string; email: string; full_name: string | null }>();
+
+  const linkedViaUserBancas = await getUserIdsLinkedToCrmBancaViaUserBancas(bancaId);
+  for (const c of await listConsultorProfilesForAdsFromUserIds(linkedViaUserBancas)) {
+    byId.set(c.id, c);
+  }
+  const afterDirectUb = byId.size;
+
+  // Always include the banca owner directly (any status), since dono_banca is a valid attribution target.
+  const donoBancaId = await resolveDonoBancaIdForCrmBanca(bancaId);
+  if (donoBancaId && !byId.has(donoBancaId)) {
+    try {
+      const { data: ownerRow } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name, status')
+        .eq('id', donoBancaId)
+        .maybeSingle();
+      if (ownerRow) {
+        const id = String((ownerRow as { id: string }).id ?? '').trim();
+        if (id) {
+          byId.set(id, {
+            id,
+            email: String((ownerRow as { email?: string | null }).email ?? '').trim(),
+            full_name: (ownerRow as { full_name?: string | null }).full_name ?? null,
+          });
+          logAdsHierarchy('dono_banca_included', { banca_id: bancaId, dono_id: id, status: (ownerRow as { status?: string | null }).status });
+        }
+      }
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      console.warn('[meta-campaign-consultors] owner direct fetch:', err?.message);
+    }
+  }
+
+  const rootIds = await collectRootProfileIdsForAdsAttributionDropdown(bancaId, linkedViaUserBancas, donoBancaId);
+  if (rootIds.length > 0) {
+    // Include root profiles themselves (e.g. gestores found via enroller subtree of dono but not in user_bancas)
+    try {
+      for (const c of await listConsultorProfilesForAdsFromUserIds(rootIds)) {
+        if (!byId.has(c.id)) byId.set(c.id, c);
+      }
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      console.warn('[meta-campaign-consultors] listConsultorProfilesForAdsFromUserIds(roots):', err?.message);
+    }
+    try {
+      for (const c of await listConsultorProfilesBeneathEnrollerRoots(rootIds)) {
+        if (!byId.has(c.id)) byId.set(c.id, c);
+      }
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      console.warn('[meta-campaign-consultors] listConsultorProfilesBeneathEnrollerRoots:', err?.message);
+    }
+  }
+
+  const addedViaEnroller = Math.max(0, byId.size - afterDirectUb);
+  logAdsHierarchy('dropdown_summary', {
+    banca_id: bancaId,
+    user_bancas_linked_ids: linkedViaUserBancas.length,
+    options_from_user_bancas_profiles: afterDirectUb,
+    enroller_subtree_new_ids: addedViaEnroller,
+    options_total: byId.size,
+    allowed_statuses: [...ADS_ATTRIBUTION_PROFILE_STATUSES],
+  });
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const la = String(a.full_name || a.email || a.id || '').toLowerCase();
+    const lb = String(b.full_name || b.email || b.id || '').toLowerCase();
+    return la.localeCompare(lb, 'pt-BR');
+  });
+}
+
+/** Permite validar POST de ads attribution para consultores só na hierarquia (sem user_bancas). */
+export async function isConsultorAllowedForAdsAttribution(bancaId: string, consultorId: string): Promise<boolean> {
+  const id = String(consultorId ?? '').trim();
+  if (!id) return false;
+  const list = await listConsultoresForAdsAttributionDropdown(bancaId);
+  return list.some((c) => c.id === id);
 }
 
 export async function listCampaignConsultorAssignments(
@@ -199,7 +509,7 @@ async function getConsultantMetricsById(
     .from('profiles')
     .select('id, email')
     .in('id', consultorIds)
-    .eq('status', 'consultor');
+    .in('status', [...ADS_ATTRIBUTION_PROFILE_STATUSES]);
 
   const idByEmail = new Map<string, string>();
   const emails: string[] = [];
@@ -258,7 +568,7 @@ export async function buildCampaignConsultorSummary(
       .from('profiles')
       .select('id, email, full_name')
       .in('id', consultorIds)
-      .eq('status', 'consultor'),
+      .in('status', [...ADS_ATTRIBUTION_PROFILE_STATUSES]),
   ]);
 
   const profileById = new Map<string, { email: string; full_name: string | null }>();
