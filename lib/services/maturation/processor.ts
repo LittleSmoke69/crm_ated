@@ -2293,10 +2293,10 @@ async function runMeshCycle(
     return false;
   }
 
-  // Nova instância: recebe mensagens imediatamente (RECV_DELAY_MS=0), só envia depois de 5 min.
-  // Garante que toda instância nova recebe antes de enviar, nunca o contrário.
+  // Nova instância: recebe desde o 1º ciclo (RECV_DELAY_MS=0), só envia após 5 min (SEND_DELAY_MS).
+  // Instância sem started_at é tratada como nova (não envia até completar o warmup).
   const SEND_DELAY_MS = 5 * 60 * 1000;  // 5 min: instância começa a enviar
-  const RECV_DELAY_MS = 0;              // 0 min: instância recebe desde o primeiro ciclo
+  const RECV_DELAY_MS = 0;              // recebe desde o primeiro ciclo
 
   const eligible: MeshParticipant[] = [];
   for (const j of participantJobs as any[]) {
@@ -2348,21 +2348,18 @@ async function runMeshCycle(
     controller.id
   );
 
-  // Warmup: instâncias novas aguardam 5 min antes de enviar
   const nowMs = now.getTime();
-  const eligibleSenders = eligible.filter((p) => {
-    if (!p.startedAt) return true;
+
+  // Instância sem started_at é tratada como nova (não pode enviar ainda).
+  // Somente instâncias com started_at há pelo menos SEND_DELAY_MS são senders.
+  // Sem fallback: se não há senders maduros, o ciclo não envia nada e tenta no próximo intervalo.
+  const activeSenders = eligible.filter((p) => {
+    if (!p.startedAt) return false; // sem started_at → nova, não envia
     return nowMs - new Date(p.startedAt).getTime() >= SEND_DELAY_MS;
   });
-  // Instâncias novas aguardam 15 min antes de receber (mas não bloqueiam o ciclo)
-  const eligibleRecipients = eligible.filter((p) => {
-    if (!p.startedAt) return true;
-    return nowMs - new Date(p.startedAt).getTime() >= RECV_DELAY_MS;
-  });
 
-  // Se não há senders maduros, usa todos (ciclo não pode parar por warmup)
-  const activeSenders = eligibleSenders.length >= 1 ? eligibleSenders : eligible;
-  const activeRecipients = eligibleRecipients.length >= 1 ? eligibleRecipients : eligible;
+  // Todas as instâncias recebem desde o primeiro ciclo (RECV_DELAY_MS=0).
+  const activeRecipients = eligible; // RECV_DELAY_MS = 0: todas recebem sempre
 
   // Equidade: prioriza quem NÃO foi sender no ciclo anterior
   const lastSenders = new Set<string>(controller.mesh_last_sender_master_ids || []);
@@ -2390,6 +2387,9 @@ async function runMeshCycle(
       .from('maturation_jobs')
       .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
       .eq('id', controller.id);
+    logVerbose(
+      `${LOG_MESH} campaign=${controller.campaign_id}: nenhum sender maduro ainda (${eligible.length} instância(s) em warmup < 5 min) — aguardando próximo ciclo`
+    );
     return false;
   }
 
