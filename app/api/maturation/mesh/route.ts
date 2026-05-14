@@ -120,8 +120,9 @@ export async function GET(req: NextRequest) {
     const { data: allJobs } = await supabaseServiceRole
       .from('maturation_jobs')
       .select(
-        `id, campaign_id, master_instance_id, progress_total, progress_done, status,
+        `id, campaign_id, master_instance_id, progress_total, progress_done, status, started_at, mesh_is_controller,
          master_instances:master_instance_id (
+           group_msg_next_at,
            evolution_instances:evolution_instance_id ( id, instance_name, phone_number, status )
          )`
       )
@@ -151,8 +152,12 @@ export async function GET(req: NextRequest) {
           instance_name: ei?.instance_name ?? null,
           phone_number: ei?.phone_number ?? null,
           status: ei?.status ?? null,
+          job_status: j.status ?? 'running',
+          started_at: j.started_at ?? null,
+          is_controller: !!j.mesh_is_controller,
           progress_done: j.progress_done || 0,
           progress_total: j.progress_total || 0,
+          group_msg_next_at: mi?.group_msg_next_at ?? null,
         };
       });
       const ownerId = c.owner_user_id ? String(c.owner_user_id) : '';

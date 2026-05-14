@@ -18,8 +18,12 @@ type MeshParticipant = {
   instance_name: string | null;
   phone_number: string | null;
   status: string | null;
+  job_status: string;
+  started_at: string | null;
+  is_controller: boolean;
   progress_done: number;
   progress_total: number;
+  group_msg_next_at: string | null;
 };
 
 type MeshCampaign = {
@@ -225,6 +229,21 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
     await loadCampaigns();
   }
 
+  async function handleToggleParticipant(c: MeshCampaign, p: MeshParticipant) {
+    const newStatus = p.job_status === 'running' ? 'paused' : 'running';
+    const res = await fetch(`/api/maturation/mesh/${c.controller_job_id}/participant`, {
+      method: 'PATCH',
+      headers: headersJson,
+      body: JSON.stringify({ job_id: p.job_id, status: newStatus }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data?.error || 'Falha ao alterar participação');
+      return;
+    }
+    await loadCampaigns();
+  }
+
   async function handleIntervalChange(c: MeshCampaign, newInterval: number) {
     const clamped = Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, Math.round(newInterval)));
     if (clamped === c.cycle_interval_sec) return;
@@ -260,6 +279,16 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
     const ms = new Date(c.next_cycle_at).getTime() - now;
     if (ms <= 0) return 'agora (próximo tick)';
     return `em ${Math.ceil(ms / 1000)}s`;
+  }
+
+  function formatGroupMsgCountdown(nextAt: string | null): string {
+    if (!nextAt) return '—';
+    const ms = new Date(nextAt).getTime() - now;
+    if (ms <= 0) return 'agora';
+    const totalSec = Math.ceil(ms / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
   }
 
   return (
@@ -352,12 +381,14 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
                     key={c.controller_job_id}
                     campaign={c}
                     nextCycleLabel={formatNextCycle(c)}
+                    formatGroupMsgCountdown={formatGroupMsgCountdown}
                     canControlLifecycle={canControlMeshLifecycle}
                     canDelete={meshCampaignViewerCanDelete(c, viewerProfileStatus)}
                     onToggle={() => handleToggle(c)}
                     onAbort={() => handleAbort(c)}
                     onDelete={() => handleDelete(c)}
                     onIntervalChange={(v) => handleIntervalChange(c, v)}
+                    onToggleParticipant={(p) => handleToggleParticipant(c, p)}
                   />
                 ))}
               </div>
@@ -684,21 +715,25 @@ function NetworkAnimation({
 function CampaignRow({
   campaign,
   nextCycleLabel,
+  formatGroupMsgCountdown,
   canControlLifecycle,
   canDelete,
   onToggle,
   onAbort,
   onDelete,
   onIntervalChange,
+  onToggleParticipant,
 }: {
   campaign: MeshCampaign;
   nextCycleLabel: string;
+  formatGroupMsgCountdown: (nextAt: string | null) => string;
   canControlLifecycle: boolean;
   canDelete: boolean;
   onToggle: () => void;
   onAbort: () => void;
   onDelete: () => void;
   onIntervalChange: (v: number) => void;
+  onToggleParticipant: (p: MeshParticipant) => void;
 }) {
   const c = campaign;
   const lastSenderNames =
@@ -820,6 +855,79 @@ function CampaignRow({
         </div>
         )}
       </div>
+
+      {/* Lista de participantes com start/stop individual */}
+      {c.participants.filter((p) => !p.is_controller).length > 0 && (
+        <div className="mt-3 border-t border-slate-100 dark:border-[#333] pt-2">
+          <div className="flex flex-col gap-1">
+            {c.participants
+              .filter((p) => !p.is_controller)
+              .map((p) => {
+                const active = p.job_status === 'running';
+                const warmingUp = active && p.started_at
+                  ? Date.now() - new Date(p.started_at).getTime() < 15 * 60 * 1000
+                  : false;
+                return (
+                  <div
+                    key={p.job_id}
+                    className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg hover:bg-slate-50 dark:hover:bg-[#2a2a2a]"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          active ? 'bg-emerald-400' : 'bg-slate-300 dark:bg-[#555]'
+                        }`}
+                      />
+                      <span className="text-xs text-slate-700 dark:text-[#ccc] truncate">
+                        {p.instance_name || p.master_instance_id.slice(0, 8)}
+                      </span>
+                      {warmingUp && (
+                        <span className="text-xs text-amber-500 dark:text-amber-400 shrink-0">
+                          aquecendo…
+                        </span>
+                      )}
+                    </div>
+                    {!p.is_controller && (
+                      <span
+                        className="text-[10px] font-mono tabular-nums shrink-0 text-slate-400 dark:text-[#666]"
+                        title="Próximo envio ao grupo de maturação"
+                      >
+                        {(() => {
+                          const label = formatGroupMsgCountdown(p.group_msg_next_at);
+                          if (label === '—') return null;
+                          return (
+                            <span
+                              className={
+                                label === 'agora'
+                                  ? 'text-[#8CD955]'
+                                  : 'text-slate-400 dark:text-[#666]'
+                              }
+                            >
+                              grupo {label}
+                            </span>
+                          );
+                        })()}
+                      </span>
+                    )}
+                    {canControlLifecycle && (
+                      <button
+                        onClick={() => onToggleParticipant(p)}
+                        title={active ? 'Pausar esta instância' : 'Retomar esta instância'}
+                        className={`p-1 rounded-md transition-colors shrink-0 ${
+                          active
+                            ? 'text-slate-500 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:text-amber-600'
+                            : 'text-slate-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:text-emerald-600'
+                        }`}
+                      >
+                        {active ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

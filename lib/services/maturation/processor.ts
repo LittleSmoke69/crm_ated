@@ -1814,6 +1814,7 @@ type MeshParticipant = {
   masterInstanceId: string;
   instanceName: string;
   jid: string;
+  startedAt: string | null; // quando o job entrou no ciclo
 };
 
 const GRUPO_MATURACAO_ID = '120363428157075135@g.us';
@@ -2004,6 +2005,7 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       group_msg_next_at,
       group_msg_strophe_idx,
       evolution_instances:evolution_instance_id (
+        id,
         instance_name,
         status,
         evolution_apis:evolution_api_id ( base_url, api_key_global )
@@ -2042,26 +2044,29 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
 
     if (!instanceName || !baseUrl || !apiKey) continue;
 
-    // Desconectada: reagenda em 1 min sem enviar
+    // Desconectada: reagenda em 1 min sem enviar — continua para a próxima instância do ciclo
     if (!evolutionMaturationDbStatusIsConnected(instanceStatus)) {
       await supabase.from('master_instances')
         .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
         .eq('id', row.id);
+      logVerbose(`${LOG_GRUPO} ⏭ ${instanceName} desconectada (status=${instanceStatus}) — próxima tentativa em 60s`);
       continue;
     }
 
-    // Escolhe 1-5 linhas de partes diferentes do texto
-    const count = Math.floor(Math.random() * 5) + 1;
+    // Escolhe aleatoriamente 1-6 linhas de partes diferentes do texto
+    const count = Math.floor(Math.random() * 6) + 1;
     const total = GRUPO_LINES.length;
-    const sectionSize = Math.floor(total / count);
+    const sectionSize = Math.max(1, Math.floor(total / count));
     const selectedIndices: number[] = [];
     for (let s = 0; s < count; s++) {
       const sectionStart = s * sectionSize;
-      const sectionEnd = s === count - 1 ? total : (s + 1) * sectionSize;
+      const sectionEnd = s === count - 1 ? total : Math.min((s + 1) * sectionSize, total);
       selectedIndices.push(sectionStart + Math.floor(Math.random() * (sectionEnd - sectionStart)));
     }
 
-    // Envia as linhas selecionadas; para na primeira falha 400 (instância fora do grupo)
+    const evoId = ei?.id as string | undefined;
+
+    // Envia as linhas selecionadas; para na primeira falha 400 (instância fora do grupo ou desconectada)
     let sentCount = 0;
     let notInGroup = false;
     for (let i = 0; i < selectedIndices.length; i++) {
@@ -2073,22 +2078,33 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       if (result.success) {
         sentCount++;
       } else if (result.httpStatus === 400) {
+        // Connection Closed = instância desconectou → marca no banco e sai
+        if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
+          if (evoId) {
+            await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'group-messaging');
+          }
+          await supabase.from('master_instances')
+            .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
+            .eq('id', row.id);
+          console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} desconectada (Connection Closed) — marcada no banco`);
+          return 0;
+        }
         notInGroup = true;
-        break; // instância não está no grupo — para de tentar
+        break;
       }
     }
 
     if (notInGroup && sentCount === 0) {
-      // Reagenda daqui 10 min sem logar spam — instância provavelmente fora do grupo
       await supabase.from('master_instances')
         .update({ group_msg_next_at: new Date(Date.now() + 600_000).toISOString() })
         .eq('id', row.id);
       console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} fora do grupo (HTTP 400) — próxima tentativa em 10min`);
-      continue;
+      // Processa apenas 1 instância por ciclo — sai do loop
+      return 0;
     }
 
     const nextIdx = (typeof row.group_msg_strophe_idx === 'number' ? row.group_msg_strophe_idx + count : count) % total;
-    const delayMs = (30 + Math.random() * 90) * 1000;
+    const delayMs = (60 + Math.random() * 240) * 1000; // 1-5 minutos por instância
 
     console.log(`${LOG_GRUPO} ✅ ${instanceName} ${sentCount}/${count} linha(s) → grupo (próximo ${Math.round(delayMs / 1000)}s)`);
 
@@ -2097,7 +2113,8 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       group_msg_strophe_idx: nextIdx,
     }).eq('id', row.id);
 
-    totalSent += sentCount;
+    // 1 instância por ciclo de 30s — evita flood no grupo
+    return sentCount;
   }
 
   return totalSent;
@@ -2258,7 +2275,7 @@ async function runMeshCycle(
   const { data: participantJobs, error: pErr } = await supabase
     .from('maturation_jobs')
     .select(
-      `id, master_instance_id,
+      `id, master_instance_id, started_at,
        master_instances!inner (
          id, is_active,
          evolution_instances!inner ( id, instance_name, phone_number, status )
@@ -2276,6 +2293,9 @@ async function runMeshCycle(
     return false;
   }
 
+  const SEND_DELAY_MS = 5 * 60 * 1000;   // 5 min: instância começa a enviar
+  const RECV_DELAY_MS = 15 * 60 * 1000;  // 15 min: instância começa a receber
+
   const eligible: MeshParticipant[] = [];
   for (const j of participantJobs as any[]) {
     const mi = Array.isArray(j.master_instances) ? j.master_instances[0] : j.master_instances;
@@ -2290,6 +2310,7 @@ async function runMeshCycle(
       masterInstanceId: j.master_instance_id,
       instanceName: String(ei.instance_name ?? ''),
       jid,
+      startedAt: j.started_at ?? null,
     });
   }
 
@@ -2323,14 +2344,30 @@ async function runMeshCycle(
     controller.id
   );
 
+  // Warmup: instâncias novas aguardam 5 min antes de enviar
+  const nowMs = now.getTime();
+  const eligibleSenders = eligible.filter((p) => {
+    if (!p.startedAt) return true;
+    return nowMs - new Date(p.startedAt).getTime() >= SEND_DELAY_MS;
+  });
+  // Instâncias novas aguardam 15 min antes de receber (mas não bloqueiam o ciclo)
+  const eligibleRecipients = eligible.filter((p) => {
+    if (!p.startedAt) return true;
+    return nowMs - new Date(p.startedAt).getTime() >= RECV_DELAY_MS;
+  });
+
+  // Se não há senders maduros, usa todos (ciclo não pode parar por warmup)
+  const activeSenders = eligibleSenders.length >= 1 ? eligibleSenders : eligible;
+  const activeRecipients = eligibleRecipients.length >= 1 ? eligibleRecipients : eligible;
+
   // Equidade: prioriza quem NÃO foi sender no ciclo anterior
   const lastSenders = new Set<string>(controller.mesh_last_sender_master_ids || []);
-  const notLast = eligible.filter((p) => !lastSenders.has(p.masterInstanceId));
-  const wereLast = eligible.filter((p) => lastSenders.has(p.masterInstanceId));
+  const notLast = activeSenders.filter((p) => !lastSenders.has(p.masterInstanceId));
+  const wereLast = activeSenders.filter((p) => lastSenders.has(p.masterInstanceId));
 
   const desiredCount =
     MESH_MIN_SENDERS_PER_CYCLE + Math.floor(Math.random() * MESH_MAX_SENDERS_PER_CYCLE);
-  const targetCount = Math.min(MESH_MAX_SENDERS_PER_CYCLE, eligible.length, desiredCount);
+  const targetCount = Math.min(MESH_MAX_SENDERS_PER_CYCLE, activeSenders.length, desiredCount);
 
   const senders: MeshParticipant[] = [];
   for (const p of shuffleArray(notLast)) {
@@ -2377,7 +2414,7 @@ async function runMeshCycle(
   }> = [];
 
   for (const sender of senders) {
-    const recipients = eligible.filter((p) => p.masterInstanceId !== sender.masterInstanceId);
+    const recipients = activeRecipients.filter((p) => p.masterInstanceId !== sender.masterInstanceId);
     let nextIdx = (maxIndices.get(sender.jobId) ?? -1) + 1;
     for (const r of recipients) {
       if (meshInvalidDestKeys.has(normalizeMaturationDestKey(r.jid))) continue;
@@ -2404,24 +2441,20 @@ async function runMeshCycle(
   }
 
   console.log(
-    `${LOG_MESH} ciclo: ${senders.length} remetente(s) [${senders.map((s) => s.instanceName).join(', ')}] → ${eligible.length - 1} destinatário(s) = ${stepsToInsert.length} step(s)`
+    `${LOG_MESH} ciclo: ${senders.length} remetente(s) [${senders.map((s) => s.instanceName).join(', ')}] → ${activeRecipients.length} destinatário(s) = ${stepsToInsert.length} step(s)`
   );
-  // ON CONFLICT DO NOTHING: se outro processo (PM2 cluster) já inseriu este ciclo, ignora silenciosamente
-  const { data: inserted, error: insErr } = await supabase
-    .from('maturation_steps')
-    .upsert(stepsToInsert, { onConflict: 'job_id,step_index', ignoreDuplicates: true })
-    .select('id');
+  const { error: insErr } = await supabase.from('maturation_steps').insert(stepsToInsert);
   if (insErr) {
-    console.warn(`${LOG_MESH} Erro inserindo steps campaign=${controller.campaign_id}: ${insErr.message}`);
-    return false;
-  }
-  if (!inserted || inserted.length === 0) {
-    // Outro processo já inseriu este ciclo — nada a fazer
-    return false;
+    // Duplicate key = outro processo já inseriu este ciclo (PM2 cluster) — avança o controller normalmente
+    if (!insErr.message?.includes('duplicate key')) {
+      console.warn(`${LOG_MESH} Erro inserindo steps campaign=${controller.campaign_id}: ${insErr.message}`);
+      return false;
+    }
+    // duplicata: não reinsere, mas avança o ciclo para evitar loop infinito
   }
 
-  // Atualiza progress_total dos jobs senders (cada ganhou recipients.length steps)
-  const recipientsCount = eligible.length - 1;
+  // Atualiza progress_total dos jobs senders
+  const recipientsCount = activeRecipients.length;
   for (const sender of senders) {
     const { data: cur } = await supabase
       .from('maturation_jobs')

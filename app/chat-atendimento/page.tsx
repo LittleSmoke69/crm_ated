@@ -6,7 +6,11 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
 import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
-import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
+import {
+  BROADCAST_DEFAULT_RANDOM_MAX_SEC,
+  BROADCAST_DEFAULT_RANDOM_MIN_SEC,
+  computeNextDelaySeconds,
+} from '@/lib/chat/broadcast-delay';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
@@ -113,7 +117,11 @@ type ActiveView = 'chat' | 'contacts' | 'broadcast' | 'agent';
 
 /** Presets de intervalo aleatório (segundos entre envios). */
 const BROADCAST_DELAY_PRESETS = {
-  padrao: { min: 1, max: 120, label: 'Padrão 1–120 s' },
+  padrao: {
+    min: BROADCAST_DEFAULT_RANDOM_MIN_SEC,
+    max: BROADCAST_DEFAULT_RANDOM_MAX_SEC,
+    label: `Padrão ${BROADCAST_DEFAULT_RANDOM_MIN_SEC}–${BROADCAST_DEFAULT_RANDOM_MAX_SEC} s`,
+  },
   moderado: { min: 45, max: 400, label: 'Moderado 45–400 s' },
   conservador: { min: 180, max: 1200, label: 'Conservador 3–20 min' },
 } as const;
@@ -888,8 +896,8 @@ export default function ChatPage() {
   /** Instâncias Evolution em rotação (mínimo 1). */
   const [broadcastInstanceIds, setBroadcastInstanceIds] = useState<Set<string>>(new Set());
   const [broadcastDelayMode, setBroadcastDelayMode] = useState<'fixed' | 'random'>('random');
-  const [broadcastDelayMin, setBroadcastDelayMin] = useState(1);
-  const [broadcastDelayMax, setBroadcastDelayMax] = useState(120);
+  const [broadcastDelayMin, setBroadcastDelayMin] = useState(BROADCAST_DEFAULT_RANDOM_MIN_SEC);
+  const [broadcastDelayMax, setBroadcastDelayMax] = useState(BROADCAST_DEFAULT_RANDOM_MAX_SEC);
   const [broadcastCreating, setBroadcastCreating] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   // Templates de mensagem
@@ -1783,8 +1791,9 @@ export default function ChatPage() {
           ? data.next_delay_seconds
           : computeNextDelaySeconds(
               jobConfig ?? {
-                delay_mode: 'fixed',
-                delay_seconds: 120,
+                delay_mode: 'random',
+                delay_min_seconds: BROADCAST_DEFAULT_RANDOM_MIN_SEC,
+                delay_max_seconds: BROADCAST_DEFAULT_RANDOM_MAX_SEC,
               }
             );
 
@@ -4426,7 +4435,11 @@ export default function ChatPage() {
                                 min={1}
                                 max={7200}
                                 value={broadcastDelayMin}
-                                onChange={(e) => setBroadcastDelayMin(Math.min(7200, Math.max(1, Number(e.target.value) || 1)))}
+                                onChange={(e) =>
+                                  setBroadcastDelayMin(
+                                    Math.min(7200, Math.max(1, Number(e.target.value) || BROADCAST_DEFAULT_RANDOM_MIN_SEC))
+                                  )
+                                }
                                 className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-xs dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
                               />
                             </div>
@@ -4437,7 +4450,11 @@ export default function ChatPage() {
                                 min={1}
                                 max={7200}
                                 value={broadcastDelayMax}
-                                onChange={(e) => setBroadcastDelayMax(Math.min(7200, Math.max(1, Number(e.target.value) || 120)))}
+                                onChange={(e) =>
+                                  setBroadcastDelayMax(
+                                    Math.min(7200, Math.max(1, Number(e.target.value) || BROADCAST_DEFAULT_RANDOM_MAX_SEC))
+                                  )
+                                }
                                 className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-center text-xs dark:border-[#404040] dark:bg-[#333] dark:text-gray-100"
                               />
                             </div>
@@ -4655,7 +4672,7 @@ export default function ChatPage() {
                                 ) : null}
                                 <span className="text-gray-400 dark:text-gray-500"> · </span>
                                 {job.delay_mode === 'random'
-                                  ? `aleatório ${job.delay_min_seconds ?? 1}–${job.delay_max_seconds ?? 120}s`
+                                  ? `aleatório ${job.delay_min_seconds ?? BROADCAST_DEFAULT_RANDOM_MIN_SEC}–${job.delay_max_seconds ?? BROADCAST_DEFAULT_RANDOM_MAX_SEC}s`
                                   : `fixo ${job.delay_seconds}s`}
                               </p>
                               <div className="mb-2">

@@ -14,6 +14,10 @@ import {
   wrapMessageConfigForInsert,
   type BroadcastStepConfig,
 } from '@/lib/chat/broadcast-sequence';
+import {
+  BROADCAST_DEFAULT_RANDOM_MAX_SEC,
+  BROADCAST_DEFAULT_RANDOM_MIN_SEC,
+} from '@/lib/chat/broadcast-delay';
 
 export interface BroadcastContact {
   phone: string;
@@ -98,8 +102,8 @@ export async function POST(req: NextRequest) {
     let delayMax: number | null = null;
 
     if (delayMode === 'random') {
-      let lo = Math.max(1, Math.min(7200, Math.floor(Number(rawMin) || 1)));
-      let hi = Math.max(1, Math.min(7200, Math.floor(Number(rawMax) || 120)));
+      let lo = Math.max(1, Math.min(7200, Math.floor(Number(rawMin) || BROADCAST_DEFAULT_RANDOM_MIN_SEC)));
+      let hi = Math.max(1, Math.min(7200, Math.floor(Number(rawMax) || BROADCAST_DEFAULT_RANDOM_MAX_SEC)));
       if (lo > hi) [lo, hi] = [hi, lo];
       delayMin = lo;
       delayMax = hi;
