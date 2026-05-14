@@ -71,13 +71,9 @@ interface Props {
   viewerProfileStatus?: string | null;
 }
 
-const DEFAULT_INTERVAL = 30;
-const MIN_INTERVAL = 5;
-const MAX_INTERVAL = 3600;
 const ANIM_MAX_CHIPS = 14;
 
 export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileStatus }: Props) {
-  const [intervalSec, setIntervalSec] = useState<number>(DEFAULT_INTERVAL);
   const [starting, setStarting] = useState(false);
   const [campaigns, setCampaigns] = useState<MeshCampaign[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,7 +167,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
         body: JSON.stringify({
           // lista vazia = backend auto-seleciona toda a rede elegível
           participant_evolution_instance_ids: [],
-          cycle_interval_sec: intervalSec,
+          // intervalo definido pelo backend (aleatório 5–15 min por ciclo)
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -242,17 +238,6 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
       return;
     }
     await loadCampaigns();
-  }
-
-  async function handleIntervalChange(c: MeshCampaign, newInterval: number) {
-    const clamped = Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, Math.round(newInterval)));
-    if (clamped === c.cycle_interval_sec) return;
-    const res = await fetch(`/api/maturation/mesh/${c.controller_job_id}`, {
-      method: 'PATCH',
-      headers: headersJson,
-      body: JSON.stringify({ cycle_interval_sec: clamped }),
-    });
-    if (res.ok) await loadCampaigns();
   }
 
   const activeCampaigns = campaigns.filter(isMeshCampaignActive);
@@ -333,19 +318,6 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
       {/* Controles abaixo da animação (só aparece quando NÃO tem campanha ativa) */}
       {activeCampaigns.length === 0 && (
         <div className="mt-4 flex items-end gap-3 flex-wrap justify-center">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-[#bbb] mb-1">
-              Intervalo entre ciclos (segundos)
-            </label>
-            <input
-              type="number"
-              min={MIN_INTERVAL}
-              max={MAX_INTERVAL}
-              value={intervalSec}
-              onChange={(e) => setIntervalSec(Number(e.target.value) || DEFAULT_INTERVAL)}
-              className="w-28 px-3 py-2 rounded-lg border border-slate-300 dark:border-[#404040] bg-white dark:bg-[#1f1f1f] text-slate-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955]"
-            />
-          </div>
           <button
             type="button"
             onClick={handleStart}
@@ -387,7 +359,6 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
                     onToggle={() => handleToggle(c)}
                     onAbort={() => handleAbort(c)}
                     onDelete={() => handleDelete(c)}
-                    onIntervalChange={(v) => handleIntervalChange(c, v)}
                     onToggleParticipant={(p) => handleToggleParticipant(c, p)}
                   />
                 ))}
@@ -721,7 +692,6 @@ function CampaignRow({
   onToggle,
   onAbort,
   onDelete,
-  onIntervalChange,
   onToggleParticipant,
 }: {
   campaign: MeshCampaign;
@@ -732,7 +702,6 @@ function CampaignRow({
   onToggle: () => void;
   onAbort: () => void;
   onDelete: () => void;
-  onIntervalChange: (v: number) => void;
   onToggleParticipant: (p: MeshParticipant) => void;
 }) {
   const c = campaign;
@@ -742,9 +711,6 @@ function CampaignRow({
       .map((p) => p.instance_name)
       .filter(Boolean)
       .join(', ') || '—';
-
-  const [editingInterval, setEditingInterval] = useState(false);
-  const [intervalDraft, setIntervalDraft] = useState<number>(c.cycle_interval_sec ?? DEFAULT_INTERVAL);
 
   return (
     <div className="rounded-lg border border-slate-200 dark:border-[#404040] bg-white dark:bg-[#1f1f1f] p-3">
@@ -774,53 +740,8 @@ function CampaignRow({
           <div className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
             Último envio: {lastSenderNames}
           </div>
-          <div className="text-xs text-slate-500 dark:text-[#888] mt-0.5 flex items-center gap-1 flex-wrap">
-            Intervalo:{' '}
-            {canControlLifecycle ? (
-              editingInterval ? (
-                <>
-                  <input
-                    type="number"
-                    min={MIN_INTERVAL}
-                    max={MAX_INTERVAL}
-                    value={intervalDraft}
-                    onChange={(e) => setIntervalDraft(Number(e.target.value) || DEFAULT_INTERVAL)}
-                    className="w-20 px-2 py-0.5 rounded border border-slate-300 dark:border-[#404040] bg-white dark:bg-[#0f0f0f] text-xs"
-                  />
-                  s
-                  <button
-                    onClick={() => {
-                      onIntervalChange(intervalDraft);
-                      setEditingInterval(false);
-                    }}
-                    className="text-[#8CD955] hover:underline"
-                  >
-                    salvar
-                  </button>
-                  <button
-                    onClick={() => {
-                      setIntervalDraft(c.cycle_interval_sec ?? DEFAULT_INTERVAL);
-                      setEditingInterval(false);
-                    }}
-                    className="text-slate-500 hover:underline"
-                  >
-                    cancelar
-                  </button>
-                </>
-              ) : (
-                <>
-                  <strong>{c.cycle_interval_sec ?? DEFAULT_INTERVAL}s</strong>
-                  <button
-                    onClick={() => setEditingInterval(true)}
-                    className="text-[#8CD955] hover:underline ml-1"
-                  >
-                    editar
-                  </button>
-                </>
-              )
-            ) : (
-              <strong>{c.cycle_interval_sec ?? DEFAULT_INTERVAL}s</strong>
-            )}
+          <div className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
+            Intervalo: <strong>aleatório (5–15 min)</strong>
           </div>
         </div>
         {(canControlLifecycle || canDelete) && (
@@ -865,7 +786,7 @@ function CampaignRow({
               .map((p) => {
                 const active = p.job_status === 'running';
                 const warmingUp = active && p.started_at
-                  ? Date.now() - new Date(p.started_at).getTime() < 5 * 60 * 1000
+                  ? Date.now() - new Date(p.started_at).getTime() < 15 * 60 * 1000
                   : false;
                 return (
                   <div
@@ -884,7 +805,7 @@ function CampaignRow({
                       {warmingUp && (
                         <span
                           className="text-xs text-amber-500 dark:text-amber-400 shrink-0"
-                          title="Recebendo mensagens por 30 min antes de começar a enviar"
+                          title="Recebendo mensagens por 15 min antes de começar a enviar"
                         >
                           só recebe…
                         </span>

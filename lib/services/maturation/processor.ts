@@ -1748,7 +1748,9 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
 // ─── Mesh cycles ─────────────────────────────────────────────────────────────
 /** Logs do maturador mesh (campanhas contínuas auto-maturadas). */
 const LOG_MESH = '[MATURADOR-MESH]';
-const MESH_DEFAULT_INTERVAL_SEC = 30;
+// Intervalo aleatório entre ciclos mesh: 5–15 min (ignoramos o valor fixo do banco)
+const MESH_CYCLE_INTERVAL_MIN_SEC = 5 * 60;  // 5 min
+const MESH_CYCLE_INTERVAL_MAX_SEC = 15 * 60; // 15 min
 const MESH_MAX_SENDERS_PER_CYCLE = 5;
 const MESH_MIN_SENDERS_PER_CYCLE = 1;
 
@@ -2229,6 +2231,7 @@ async function autoEnrollMeshParticipants(
       masterInstanceId = ins.id;
     }
 
+    const enrolledAt = new Date().toISOString();
     const { error: jobErr } = await supabase.from('maturation_jobs').insert({
       owner_user_id: controller.owner_user_id, // herda do controller (background, sem usuário ativo)
       plan_id: VIRGIN_AUTO_MATURATION_PLAN_ID,
@@ -2238,7 +2241,9 @@ async function autoEnrollMeshParticipants(
       status: 'running',
       progress_total: 0,
       progress_done: 0,
-      started_at: new Date().toISOString(),
+      // started_at marca o início do warmup. Instância só poderá ENVIAR após 15 min.
+      // Até lá, participa apenas como recipient (recebe mensagens das demais) e envia no grupo.
+      started_at: enrolledAt,
       mesh_is_controller: false,
     });
     if (jobErr) {
@@ -2247,6 +2252,9 @@ async function autoEnrollMeshParticipants(
       );
       continue;
     }
+    console.log(
+      `${LOG_MESH} autoEnroll: ${r.instance_name} (evo=${evoId}) entrou no ciclo — só RECEBE mensagens por 15 min (warmup até ${new Date(new Date(enrolledAt).getTime() + 15 * 60 * 1000).toISOString()})`
+    );
   }
 
   await createMessage(supabase, {
@@ -2269,7 +2277,10 @@ async function runMeshCycle(
   controller: MeshController,
   now: Date
 ): Promise<boolean> {
-  const intervalSec = controller.mesh_cycle_interval_sec || MESH_DEFAULT_INTERVAL_SEC;
+  // Intervalo aleatório a cada ciclo: 5–15 min (independente do valor configurado no banco)
+  const intervalSec =
+    MESH_CYCLE_INTERVAL_MIN_SEC +
+    Math.floor(Math.random() * (MESH_CYCLE_INTERVAL_MAX_SEC - MESH_CYCLE_INTERVAL_MIN_SEC + 1));
   const nextCycleAt = new Date(now.getTime() + intervalSec * 1000).toISOString();
 
   const { data: participantJobs, error: pErr } = await supabase
@@ -2293,10 +2304,14 @@ async function runMeshCycle(
     return false;
   }
 
-  // Nova instância: recebe desde o 1º ciclo (RECV_DELAY_MS=0), só envia após 5 min (SEND_DELAY_MS).
-  // Instância sem started_at é tratada como nova (não envia até completar o warmup).
-  const SEND_DELAY_MS = 5 * 60 * 1000;  // 5 min: instância começa a enviar
-  const RECV_DELAY_MS = 0;              // recebe desde o primeiro ciclo
+  // ─── REGRAS DE PARTICIPAÇÃO NO CICLO MESH ────────────────────────────────
+  // 1. APENAS instâncias do tipo 'virgem' participam. Instâncias 'maturado' são EXCLUÍDAS.
+  // 2. Instâncias novas RECEBEM mensagens desde o 1º ciclo (activeRecipients = eligible).
+  // 3. Instâncias novas NÃO ENVIAM mensagens até completar 15 min de warmup (SEND_DELAY_MS).
+  //    Instância sem started_at é sempre tratada como nova — jamais envia.
+  // 4. Sem fallback: se não há senders maduros, o ciclo pula sem enviar nada.
+  // ─────────────────────────────────────────────────────────────────────────
+  const SEND_DELAY_MS = 15 * 60 * 1000; // 15 min de warmup antes de poder enviar
 
   const eligible: MeshParticipant[] = [];
   for (const j of participantJobs as any[]) {
@@ -2304,7 +2319,7 @@ async function runMeshCycle(
     if (!mi?.is_active) continue;
     const ei = Array.isArray(mi.evolution_instances) ? mi.evolution_instances[0] : mi.evolution_instances;
     if (!ei?.phone_number) continue;
-    // Apenas instâncias virgem participam do ciclo mesh
+    // REGRA 1: apenas instâncias virgem entram no pool. Maturadas são ignoradas.
     if (ei.maturation_type !== 'virgem') continue;
     if (!evolutionMaturationDbStatusIsConnected(ei.status)) continue;
     const jid = normalizePhoneToJid(String(ei.phone_number));
@@ -2350,16 +2365,22 @@ async function runMeshCycle(
 
   const nowMs = now.getTime();
 
-  // Instância sem started_at é tratada como nova (não pode enviar ainda).
-  // Somente instâncias com started_at há pelo menos SEND_DELAY_MS são senders.
-  // Sem fallback: se não há senders maduros, o ciclo não envia nada e tenta no próximo intervalo.
+  // REGRA 2 + 3: senders = apenas quem tem started_at E completou 15 min de warmup.
+  // Quem não tem started_at ou ainda está em warmup fica APENAS como recipient.
   const activeSenders = eligible.filter((p) => {
-    if (!p.startedAt) return false; // sem started_at → nova, não envia
+    if (!p.startedAt) return false; // nova (sem started_at) → só recebe, nunca envia
     return nowMs - new Date(p.startedAt).getTime() >= SEND_DELAY_MS;
   });
 
-  // Todas as instâncias recebem desde o primeiro ciclo (RECV_DELAY_MS=0).
-  const activeRecipients = eligible; // RECV_DELAY_MS = 0: todas recebem sempre
+  // REGRA 2: todos no pool recebem mensagens desde o 1º ciclo (sem espera).
+  const activeRecipients = eligible;
+
+  const warmingUp = eligible.length - activeSenders.length;
+  if (warmingUp > 0) {
+    logVerbose(
+      `${LOG_MESH} campaign=${controller.campaign_id}: ${activeSenders.length} sender(s) prontos, ${warmingUp} em warmup (só recebe por mais alguns min)`
+    );
+  }
 
   // Equidade: prioriza quem NÃO foi sender no ciclo anterior
   const lastSenders = new Set<string>(controller.mesh_last_sender_master_ids || []);
@@ -2388,7 +2409,7 @@ async function runMeshCycle(
       .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
       .eq('id', controller.id);
     logVerbose(
-      `${LOG_MESH} campaign=${controller.campaign_id}: nenhum sender maduro ainda (${eligible.length} instância(s) em warmup < 5 min) — aguardando próximo ciclo`
+      `${LOG_MESH} campaign=${controller.campaign_id}: nenhum sender maduro ainda (${eligible.length} instância(s) em warmup < 15 min) — aguardando próximo ciclo`
     );
     return false;
   }
@@ -2420,15 +2441,20 @@ async function runMeshCycle(
   for (const sender of senders) {
     const recipients = activeRecipients.filter((p) => p.masterInstanceId !== sender.masterInstanceId);
     let nextIdx = (maxIndices.get(sender.jobId) ?? -1) + 1;
+    // Cada mensagem do mesmo sender é espaçada 30s–5min em relação à anterior.
+    // Acumulado por sender: as mensagens saem em fila, não em rajada.
+    let senderOffsetMs = 0;
     for (const r of recipients) {
       if (meshInvalidDestKeys.has(normalizeMaturationDestKey(r.jid))) continue;
+      senderOffsetMs += 60_000 + Math.floor(Math.random() * 240_001); // 1min a 5min
+      const scheduledAt = new Date(now.getTime() + senderOffsetMs).toISOString();
       const msg = pool[Math.floor(Math.random() * pool.length)];
       stepsToInsert.push({
         job_id: sender.jobId,
         step_index: nextIdx++,
         type: msg.type,
         payload_json: msg.payload,
-        scheduled_at: now.toISOString(),
+        scheduled_at: scheduledAt,
         status: 'pending',
         target_chat_id: r.jid,
         sender_master_instance_id: sender.masterInstanceId,

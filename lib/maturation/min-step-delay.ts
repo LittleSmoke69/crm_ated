@@ -3,7 +3,7 @@
  * Aplicado ao agendar steps (scheduled_at cumulativo).
  */
 
-export const MATURATION_MIN_STEP_DELAY_SEC = 30;
+export const MATURATION_MIN_STEP_DELAY_SEC = 60;
 
 export function clampMaturationStepDelaySec(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : Number(raw);

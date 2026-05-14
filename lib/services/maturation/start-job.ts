@@ -88,9 +88,10 @@ async function ensureMasterInstanceForEvolution(
 } | null> {
   let evoQ = supabase
     .from('evolution_instances')
-    .select('id, instance_name, phone_number, blocked_from_maturation, is_active, user_id')
+    .select('id, instance_name, phone_number, blocked_from_maturation, is_active, user_id, maturation_type')
     .eq('id', evolutionInstanceId)
-    .eq('is_active', true);
+    .eq('is_active', true)
+    .eq('maturation_type', 'virgem'); // apenas instâncias virgem participam do mesh
   if (scope) {
     evoQ = applyEvolutionInstancesVisibilityFilters(evoQ, scope);
   } else {
@@ -413,8 +414,8 @@ function buildMeshStepsToInsert(
 }
 
 // ─── Mesh campaign start ─────────────────────────────────────────────────────
-const MESH_DEFAULT_INTERVAL_SEC = 30;
-const MESH_MIN_INTERVAL_SEC = 5;
+const MESH_DEFAULT_INTERVAL_SEC = 300; // 5 min entre ciclos mesh
+const MESH_MIN_INTERVAL_SEC = 60;     // mínimo 1 min
 const MESH_MAX_INTERVAL_SEC = 3600;
 const MESH_INITIAL_FIRE_MIN_TARGETS = 1;
 const MESH_INITIAL_FIRE_MAX_TARGETS = 5;
