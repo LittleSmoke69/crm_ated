@@ -7,8 +7,8 @@
  *
  * Retorna { done, contact, success, error, current_index, total_count, next_delay_seconds, ... }
  *
- * Se a instância Evolution estiver offline, retorna { instanceDown: true }
- * sem avançar índice nem passo — o cliente deve pausar e tentar novamente depois.
+ * Se todas as instâncias da rotação estiverem offline, retorna { instanceDown: true }
+ * sem avançar índice nem passo. Com várias instâncias, tenta as demais antes de pausar.
  */
 
 import { NextRequest } from 'next/server';
@@ -16,9 +16,13 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
-import { messageIndicatesEvolutionSessionDropped, maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
 import { getSequenceDelaySeconds, parseBroadcastSteps } from '@/lib/chat/broadcast-sequence';
+import {
+  broadcastSendErrorIsInstanceUnreachable,
+  orderedBroadcastInstanceIds,
+} from '@/lib/chat/broadcast-instance-failover';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -112,22 +116,6 @@ export async function POST(
       );
     }
 
-    const { data: instance } = await supabaseServiceRole
-      .from('evolution_instances')
-      .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
-      .eq('id', instanceUuid)
-      .single();
-
-    if (!instance) return errorResponse('Instância não encontrada', 404);
-
-    const evolutionApi = Array.isArray(instance.evolution_apis)
-      ? instance.evolution_apis[0]
-      : instance.evolution_apis;
-
-    if (!evolutionApi?.base_url || !instance.apikey) {
-      return errorResponse('Configuração incompleta da Evolution API', 400);
-    }
-
     if (job.status === 'pending') {
       await supabaseServiceRole
         .from('chat_broadcasts')
@@ -137,39 +125,103 @@ export async function POST(
 
     const msgConfig = steps[stepIdx];
 
-    let evolutionRes: Record<string, unknown> | null = null;
-    let sendError: string | null = null;
-    let instanceDown = false;
+    const orderedIds = orderedBroadcastInstanceIds(rotation, idx);
+    const tryInstanceIds = orderedIds.length > 0 ? orderedIds : [String(instanceUuid)].filter(Boolean);
 
-    try {
-      evolutionRes = await chatService.sendMessage(
-        {
-          instance_name: instance.instance_name,
-          apikey: instance.apikey,
-          base_url: evolutionApi.base_url,
-        },
-        {
-          remoteJid,
-          type: msgConfig.type as 'text' | 'media',
-          text: msgConfig.content,
-          media: msgConfig.attachment_url,
-          mimetype: msgConfig.mimetype,
-          mediatype: msgConfig.type !== 'text' ? msgConfig.type : undefined,
-          caption: msgConfig.caption,
-          fileName: msgConfig.fileName,
+    type InstanceRow = {
+      id: string;
+      instance_name: string;
+      apikey: string;
+      phone_number: string | null;
+      workspace_id: string | null;
+      user_id: string | null;
+      evolution_apis: { base_url: string } | { base_url: string }[] | null;
+    };
+
+    let evolutionRes: Record<string, unknown> | null = null;
+    let instance: InstanceRow | null = null;
+    let lastError: string | null = null;
+    let sawNonUnreachableError = false;
+
+    for (const tryId of tryInstanceIds) {
+      const { data: inst } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
+        .eq('id', tryId)
+        .single();
+
+      if (!inst) {
+        if (tryInstanceIds.length === 1) return errorResponse('Instância não encontrada', 404);
+        continue;
+      }
+
+      const evolutionApi = Array.isArray(inst.evolution_apis) ? inst.evolution_apis[0] : inst.evolution_apis;
+
+      if (!evolutionApi?.base_url || !inst.apikey) {
+        if (tryInstanceIds.length === 1) return errorResponse('Configuração incompleta da Evolution API', 400);
+        continue;
+      }
+
+      try {
+        evolutionRes = await chatService.sendMessage(
+          {
+            instance_name: inst.instance_name,
+            apikey: inst.apikey,
+            base_url: evolutionApi.base_url,
+          },
+          {
+            remoteJid,
+            type: msgConfig.type as 'text' | 'media',
+            text: msgConfig.content,
+            media: msgConfig.attachment_url,
+            mimetype: msgConfig.mimetype,
+            mediatype: msgConfig.type !== 'text' ? msgConfig.type : undefined,
+            caption: msgConfig.caption,
+            fileName: msgConfig.fileName,
+          }
+        );
+        instance = inst as InstanceRow;
+        lastError = null;
+        break;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastError = msg;
+        await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, inst.id, msg, 'chat/broadcast');
+        if (!broadcastSendErrorIsInstanceUnreachable(msg)) {
+          sawNonUnreachableError = true;
+          instance = inst as InstanceRow;
+          break;
         }
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sendError = msg;
-      await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, instance.id, msg, 'chat/broadcast');
-      instanceDown =
-        messageIndicatesEvolutionSessionDropped(msg) ||
-        /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
+        if (tryInstanceIds.length === 1) break;
+      }
     }
 
-    if (sendError) {
-      if (instanceDown) {
+    const sendError = lastError;
+
+    if (!evolutionRes || !instance) {
+      if (sawNonUnreachableError && sendError) {
+        await supabaseServiceRole
+          .from('chat_broadcasts')
+          .update({
+            current_index: idx + 1,
+            message_step_index: 0,
+            last_error: sendError,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', jobId);
+        return successResponse({
+          done: false,
+          skipped: true,
+          current_index: idx + 1,
+          total_count: job.total_count,
+          message_step_index: 0,
+          message_steps_total: steps.length,
+          error: sendError,
+          ...delayBetweenContacts(),
+        });
+      }
+
+      if (sendError && broadcastSendErrorIsInstanceUnreachable(sendError)) {
         await supabaseServiceRole
           .from('chat_broadcasts')
           .update({ last_error: sendError, updated_at: new Date().toISOString() })
@@ -182,7 +234,15 @@ export async function POST(
           message_step_index: stepIdx,
           message_steps_total: steps.length,
           error: sendError,
-        }, 'Instância offline — disparo pausado no mesmo número');
+        }, 'Todas as instâncias da rotação indisponíveis — disparo pausado no mesmo número');
+      }
+
+      if (!sendError && tryInstanceIds.length > 1) {
+        return errorResponse('Nenhuma instância válida na rotação', 400);
+      }
+
+      if (!sendError) {
+        return errorResponse('Instância não encontrada', 404);
       }
 
       await supabaseServiceRole

@@ -5,6 +5,8 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+# Produção atual: agendamentos na VPS (crontab) via `npm run cron:install` + `npm run cron:run -- <job>`.
+# O bloco [functions].schedule abaixo permanece como referência legada Netlify / deploys que ainda usem.
 # Timeout fetch Next → Evolution (sendMedia/vídeo): ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS (padrão 180000).
 # Rotas app/api/crm/activations/send e mass-send/process usam maxDuration = 300 onde suportado.
 # Scheduled Functions: process-campaign-queue, process-message-queue, check-instances-status

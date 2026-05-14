@@ -438,8 +438,10 @@ async function sendText(params: {
   const numberNorm = normalizeNumberForEvolution(number);
   const url = `${normalizeBaseUrl(baseUrl)}/message/sendText/${instanceName}`;
   const body = { number: numberNorm, text };
-  console.log(`${LOG_PREFIX} [Evolution] POST ${url}`);
-  console.log(`${LOG_PREFIX} [Evolution] body: number=${numberNorm} text="${text?.substring(0, 80)}${(text?.length ?? 0) > 80 ? '…' : ''}"`);
+  if (VERBOSE_EVOLUTION_LOGS) {
+    console.log(`${LOG_PREFIX} [Evolution] POST ${url}`);
+    console.log(`${LOG_PREFIX} [Evolution] body: number=${numberNorm} text="${text?.substring(0, 80)}${(text?.length ?? 0) > 80 ? '…' : ''}"`);
+  }
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -455,21 +457,23 @@ async function sendText(params: {
     const responseText = await response.text();
     const rateLimited = !response.ok && evolutionErrorIsRateLimit(responseText, response.status);
     if (response.ok) {
-      console.log(`${LOG_PREFIX} [Evolution] ✅ sendText HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm}`);
+      if (VERBOSE_EVOLUTION_LOGS) {
+        console.log(`${LOG_PREFIX} [Evolution] ✅ sendText HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm}`);
+      }
       return { success: true, latencyMs, httpStatus: response.status };
     }
     if (rateLimited) {
-      console.warn(`${LOG_PREFIX} [Evolution] ⚠️ sendText HTTP ${response.status} RATE-LIMIT (${latencyMs}ms) → ${instanceName}`);
+      console.warn(`${LOG_PREFIX} [Evolution] ⚠️ RATE-LIMIT HTTP ${response.status} (${latencyMs}ms) → ${instanceName}`);
     } else {
-      console.warn(`${LOG_PREFIX} [Evolution] ❌ sendText HTTP ${response.status} (${latencyMs}ms) → ${instanceName} → ${numberNorm}`);
-      console.warn(`${LOG_PREFIX} [Evolution] body resposta: ${responseText?.substring(0, 400)}`);
+      const errSnippet = responseText?.substring(0, 120);
+      console.warn(`${LOG_PREFIX} [Evolution] ❌ HTTP ${response.status} (${latencyMs}ms) → ${instanceName}: ${errSnippet}`);
     }
     const errorMsg = extractErrorMessage(responseText, `HTTP ${response.status}`);
     return { success: false, latencyMs, httpStatus: response.status, error: errorMsg };
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
     const msg = error.name === 'AbortError' ? `Timeout (>${FETCH_TIMEOUT_MS}ms)` : error.message;
-    console.warn(`${LOG_PREFIX} [Evolution] ❌ sendText EXCEPTION (${latencyMs}ms) → ${instanceName}: ${msg}`);
+    console.warn(`${LOG_PREFIX} [Evolution] ❌ EXCEPTION (${latencyMs}ms) → ${instanceName}: ${msg}`);
     return { success: false, latencyMs, error: msg };
   }
 }
@@ -1812,6 +1816,293 @@ type MeshParticipant = {
   jid: string;
 };
 
+const GRUPO_MATURACAO_ID = '120363428157075135@g.us';
+const LOG_GRUPO = '[GRUPO-MAT]';
+
+/** Linhas individuais de "João de Santo Cristo" — Legião Urbana. Cada linha = 1 mensagem. */
+const GRUPO_LINES: string[] = [
+  'Não tinha medo o tal João de Santo Cristo',
+  'Era o que todos diziam quando ele se perdeu',
+  'Deixou pra trás todo o marasmo da fazenda',
+  'Só pra sentir no seu sangue o ódio que Jesus lhe deu',
+  'Quando criança só pensava em ser bandido',
+  'Ainda mais quando com um tiro de soldado o pai morreu',
+  'Era o terror da cercania onde morava',
+  'E na escola até o professor com ele aprendeu',
+  'Ia pra igreja só pra roubar o dinheiro',
+  'Que as velhinhas colocavam na caixinha do altar',
+  'Sentia mesmo que era mesmo diferente',
+  'Sentia que aquilo ali não era o seu lugar',
+  'Ele queria sair para ver o mar',
+  'E as coisas que ele via na televisão',
+  'Juntou dinheiro para poder viajar',
+  'De escolha própria, escolheu a solidão',
+  'Comia todas as menininhas da cidade',
+  'De tanto brincar de médico, aos doze era professor',
+  'Aos quinze, foi mandado pro reformatório',
+  'Onde aumentou seu ódio diante de tanto terror',
+  'Não entendia como a vida funcionava',
+  'Discriminação por causa da sua classe e sua cor',
+  'Ficou cansado de tentar achar resposta',
+  'E comprou uma passagem, foi direto a Salvador',
+  'E lá chegando foi tomar um cafezinho',
+  'E encontrou um boiadeiro com quem foi falar',
+  'E o boiadeiro tinha uma passagem e ia perder a viagem',
+  'Mas João foi lhe salvar',
+  'Dizia ele, estou indo pra Brasília',
+  'Neste país, lugar melhor não há',
+  'To precisando visitar a minha filha',
+  'Eu fico aqui e você vai no meu lugar',
+  'E João aceitou sua proposta',
+  'E num ônibus entrou no Planalto Central',
+  'Ele ficou bestificado com a cidade',
+  'Saindo da rodoviária, viu as luzes de Natal',
+  'Meu Deus, mais que cidade linda',
+  'No Ano Novo eu começo a trabalhar',
+  'Cortar madeira, aprendiz de carpinteiro',
+  'Ganhava cem mil por mês em Taguatinga',
+  'Na sexta-feira ia pra zona da cidade',
+  'Gastar todo o seu dinheiro de rapaz trabalhador',
+  'E conhecia muita gente interessante',
+  'Até um neto bastardo do seu bisavô',
+  'Um peruano que vivia na Bolívia',
+  'E muitas coisas trazia de lá',
+  'Seu nome era Pablo e ele dizia',
+  'Que um negócio ele ia começar',
+  'E o Santo Cristo até a morte trabalhava',
+  'Mas o dinheiro não dava pra ele se alimentar',
+  'E ouvia às sete horas o noticiário',
+  'Que sempre dizia que o Seu ministro ia ajudar',
+  'Mas ele não queria mais conversa',
+  'E decidiu que, como Pablo, ele ia se virar',
+  'Elaborou mais uma vez seu plano santo',
+  'E sem ser crucificado, a plantação foi começar',
+  'Logo logo os maluco da cidade souberam da novidade',
+  'Tem bagulho bom aí!',
+  'E João de Santo Cristo ficou rico',
+  'E acabou com todos os traficantes dali',
+  'Fez amigos, frequentava a Asa Norte',
+  'E ia pra festa de rock, pra se libertar',
+  'De repente sob uma má influência dos boyzinho da cidade começou a roubar',
+  'Já no primeiro roubo, ele dançou',
+  'E pro inferno ele foi pela primeira vez',
+  'Violência e estupro do seu corpo',
+  'Vocês vão ver, eu vou pegar vocês',
+  'Agora o Santo Cristo era bandido',
+  'Destemido e temido no Distrito Federal',
+  'Não tinha nenhum medo de polícia',
+  'Capitão ou traficante, playboy ou general',
+  'Foi quando conheceu uma menina',
+  'E de todos os seus pecados ele se arrependeu',
+  'Maria Lúcia era uma menina linda',
+  'E o coração dele pra ela, o Santo Cristo prometeu',
+  'Ele dizia que queria se casar',
+  'E carpinteiro ele voltou a ser',
+  'Maria Lúcia, pra sempre vou te amar',
+  'E um filho com você eu quero ter',
+  'O tempo passa e um dia vem na porta',
+  'Um senhor de alta classe com dinheiro na mão',
+  'E ele faz uma proposta indecorosa',
+  'E diz que espera uma resposta, uma resposta do João',
+  'Não boto bomba em banca de jornal',
+  'Nem em colégio de criança, isso eu não faço não',
+  'E não protejo general de dez estrelas',
+  'Que fica atrás da mesa com o cu na mão',
+  'E é melhor o senhor sair da minha casa',
+  'Nunca brinque com um Peixes de ascendente em Escorpião',
+  'Mas antes de sair, com ódio no olhar, o velho disse',
+  'Você perdeu sua vida, meu irmão',
+  'Você perdeu a sua vida, meu irmão',
+  'Essas palavras vão entrar no coração',
+  'Eu vou sofrer as consequências como um cão',
+  'Não é que o Santo Cristo estava certo',
+  'Seu futuro era incerto e ele não foi trabalhar',
+  'Se embebedou e no meio da bebedeira',
+  'Descobriu que tinha outro trabalhando em seu lugar',
+  'Falou com Pablo que queria um parceiro',
+  'E também tinha dinheiro e queria se armar',
+  'Pablo trazia o contrabando da Bolívia',
+  'E Santo Cristo revendia em Planaltina',
+  'Mas acontece que um tal de Jeremias',
+  'Traficante de renome, apareceu por lá',
+  'Ficou sabendo dos planos de Santo Cristo',
+  'E decidiu que com o João ele ia acabar',
+  'Mas Pablo trouxe uma Winchester 22',
+  'E Santo Cristo já sabia atirar',
+  'E decidiu usar a arma só depois',
+  'Que Jeremias começasse a brigar',
+  'Jeremias, maconheiro sem-vergonha',
+  'Organizou a Rockonha e fez todo mundo dançar',
+  'Desvirginava mocinhas inocentes',
+  'Se dizia crente, não sabia rezar',
+  'E Santo Cristo há muito não ia pra casa',
+  'E a saudade começou a apertar',
+  'Eu vou me embora, eu vou ver Maria Lúcia',
+  'Já tá em tempo de a gente se casar',
+  'Chegando em casa, então, ele chorou',
+  'E pro inferno ele foi pela segunda vez',
+  'Com Maria Lúcia o Jeremias se casou',
+  'E um filho nela ele fez',
+  'Santo Cristo era só ódio por dentro',
+  'E então o Jeremias pra um duelo ele chamou',
+  'Amanhã às duas horas na Ceilândia',
+  'Em frente ao Lote 14, e é pra lá que eu vou',
+  'E você pode escolher as suas armas',
+  'Que eu acabo mesmo com você, seu porco traidor',
+  'E mato também Maria Lúcia',
+  'Aquela menina falsa pra quem jurei o meu amor',
+  'E o Santo Cristo não sabia o que fazer',
+  'Quando viu o repórter da televisão',
+  'Que deu notícia do duelo na TV',
+  'Dizendo a hora e o local e a razão',
+  'No sábado então, às duas horas',
+  'Todo o povo sem demora foi lá só para assistir',
+  'Um homem que atirava pelas costas',
+  'E acertou o Santo Cristo e começou a sorrir',
+  'Sentindo o sangue na garganta',
+  'João olhou pras bandeirinhas e pro povo a aplaudir',
+  'E olhou pro sorveteiro e pras câmeras',
+  'E a gente da TV que filmava tudo ali',
+  'E se lembrou de quando era uma criança',
+  'E de tudo o que vivera até ali',
+  'E decidiu entrar de vez naquela dança',
+  'Se a via-crucis virou circo, estou aqui',
+  'E nisso o sol cegou seus olhos',
+  'E então Maria Lúcia ele reconheceu',
+  'Ela trazia a Winchester 22',
+  'A arma que seu primo Pablo lhe deu',
+  'Jeremias, eu sou homem, coisa que você não é',
+  'E não atiro pelas costas não',
+  'Olha pra cá filha da puta, sem-vergonha',
+  'Dá uma olhada no meu sangue e vem sentir o teu perdão',
+  'E Santo Cristo com a Winchester 22',
+  'Deu cinco tiros no bandido traidor',
+  'Maria Lúcia se arrependeu depois',
+  'E morreu junto com João, seu protetor',
+  'E o povo declarava que João de Santo Cristo',
+  'Era santo porque sabia morrer',
+  'E a alta burguesia da cidade',
+  'Não acreditou na história que eles viram na TV',
+  'E João não conseguiu o que queria',
+  'Quando veio pra Brasília, com o diabo ter',
+  'Ele queria era falar pro presidente',
+  'Pra ajudar toda essa gente que só faz sofrer',
+];
+
+/**
+ * Fase extra: TODAS as master_instances conectadas enviam 1-5 estrofes de "João de Santo Cristo"
+ * de partes aleatórias diferentes do texto ao grupo de maturação.
+ * Processa APENAS 1 instância por tick para não consumir o orçamento da maturação mútua.
+ */
+export async function runGroupMessaging(supabase: SupabaseClient): Promise<number> {
+  const now = new Date();
+
+  const { data: rows, error } = await supabase
+    .from('master_instances')
+    .select(`
+      id,
+      group_msg_next_at,
+      group_msg_strophe_idx,
+      evolution_instances:evolution_instance_id (
+        instance_name,
+        status,
+        evolution_apis:evolution_api_id ( base_url, api_key_global )
+      )
+    `)
+    .order('group_msg_next_at', { ascending: true, nullsFirst: true });
+
+  if (error) {
+    console.warn(`${LOG_GRUPO} Erro ao listar instâncias: ${error.message}`);
+    return 0;
+  }
+
+  if (!rows || rows.length === 0) return 0;
+
+  let totalSent = 0;
+
+  for (const row of rows as any[]) {
+    // Primeira vez: agenda com delay escalonado curto (0-30s) para não enviar tudo ao mesmo tempo
+    if (!row.group_msg_next_at) {
+      const staggerMs = Math.random() * 30_000;
+      await supabase
+        .from('master_instances')
+        .update({ group_msg_next_at: new Date(Date.now() + staggerMs).toISOString() })
+        .eq('id', row.id);
+      continue;
+    }
+
+    if (new Date(row.group_msg_next_at).getTime() > now.getTime()) continue;
+
+    const ei = Array.isArray(row.evolution_instances) ? row.evolution_instances[0] : row.evolution_instances;
+    const api = Array.isArray(ei?.evolution_apis) ? ei.evolution_apis[0] : ei?.evolution_apis;
+    const instanceName: string = ei?.instance_name ?? '';
+    const baseUrl: string = api?.base_url ?? '';
+    const apiKey: string = api?.api_key_global ?? '';
+    const instanceStatus: string = ei?.status ?? '';
+
+    if (!instanceName || !baseUrl || !apiKey) continue;
+
+    // Desconectada: reagenda em 1 min sem enviar
+    if (!evolutionMaturationDbStatusIsConnected(instanceStatus)) {
+      await supabase.from('master_instances')
+        .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
+        .eq('id', row.id);
+      continue;
+    }
+
+    // Escolhe 1-5 linhas de partes diferentes do texto
+    const count = Math.floor(Math.random() * 5) + 1;
+    const total = GRUPO_LINES.length;
+    const sectionSize = Math.floor(total / count);
+    const selectedIndices: number[] = [];
+    for (let s = 0; s < count; s++) {
+      const sectionStart = s * sectionSize;
+      const sectionEnd = s === count - 1 ? total : (s + 1) * sectionSize;
+      selectedIndices.push(sectionStart + Math.floor(Math.random() * (sectionEnd - sectionStart)));
+    }
+
+    // Envia as linhas selecionadas; para na primeira falha 400 (instância fora do grupo)
+    let sentCount = 0;
+    let notInGroup = false;
+    for (let i = 0; i < selectedIndices.length; i++) {
+      const result = await sendText({
+        baseUrl, instanceName, apiKey,
+        number: GRUPO_MATURACAO_ID,
+        text: GRUPO_LINES[selectedIndices[i]],
+      });
+      if (result.success) {
+        sentCount++;
+      } else if (result.httpStatus === 400) {
+        notInGroup = true;
+        break; // instância não está no grupo — para de tentar
+      }
+    }
+
+    if (notInGroup && sentCount === 0) {
+      // Reagenda daqui 10 min sem logar spam — instância provavelmente fora do grupo
+      await supabase.from('master_instances')
+        .update({ group_msg_next_at: new Date(Date.now() + 600_000).toISOString() })
+        .eq('id', row.id);
+      console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} fora do grupo (HTTP 400) — próxima tentativa em 10min`);
+      continue;
+    }
+
+    const nextIdx = (typeof row.group_msg_strophe_idx === 'number' ? row.group_msg_strophe_idx + count : count) % total;
+    const delayMs = (30 + Math.random() * 90) * 1000;
+
+    console.log(`${LOG_GRUPO} ✅ ${instanceName} ${sentCount}/${count} linha(s) → grupo (próximo ${Math.round(delayMs / 1000)}s)`);
+
+    await supabase.from('master_instances').update({
+      group_msg_next_at: new Date(Date.now() + delayMs).toISOString(),
+      group_msg_strophe_idx: nextIdx,
+    }).eq('id', row.id);
+
+    totalSent += sentCount;
+  }
+
+  return totalSent;
+}
+
 async function processMeshCycles(supabase: SupabaseClient): Promise<number> {
   const now = new Date();
   const nowIso = now.toISOString();
@@ -2115,13 +2406,17 @@ async function runMeshCycle(
   console.log(
     `${LOG_MESH} ciclo: ${senders.length} remetente(s) [${senders.map((s) => s.instanceName).join(', ')}] → ${eligible.length - 1} destinatário(s) = ${stepsToInsert.length} step(s)`
   );
-  const { error: insErr } = await supabase.from('maturation_steps').insert(stepsToInsert);
+  // ON CONFLICT DO NOTHING: se outro processo (PM2 cluster) já inseriu este ciclo, ignora silenciosamente
+  const { data: inserted, error: insErr } = await supabase
+    .from('maturation_steps')
+    .upsert(stepsToInsert, { onConflict: 'job_id,step_index', ignoreDuplicates: true })
+    .select('id');
   if (insErr) {
     console.warn(`${LOG_MESH} Erro inserindo steps campaign=${controller.campaign_id}: ${insErr.message}`);
-    await supabase
-      .from('maturation_jobs')
-      .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
-      .eq('id', controller.id);
+    return false;
+  }
+  if (!inserted || inserted.length === 0) {
+    // Outro processo já inseriu este ciclo — nada a fazer
     return false;
   }
 
@@ -2166,7 +2461,17 @@ async function runMeshCycle(
   return true;
 }
 
+// Mutex global: impede execuções simultâneas de runMaturationTick no mesmo processo Node
+// (protege contra: instrumentation timer + process-now + cron-tick + mesh after() rodando juntos)
+let _tickMutex = false;
+
 export async function runMaturationTick(supabase: SupabaseClient): Promise<any> {
+  if (_tickMutex) {
+    console.warn('[MATURATION] runMaturationTick já está rodando — tick ignorado para evitar duplicação');
+    return { processed: 0, hasMorePending: false, jobs: [], skipped: true };
+  }
+  _tickMutex = true;
+  try {
   const startTime = Date.now();
   /**
    * Orçamento total do tick. O cron-tick tem maxDuration=55s; usamos 50s para processamento
@@ -2316,4 +2621,7 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
     jobs: Array.from(processedJobIds),
     hasMorePending,
   };
+  } finally {
+    _tickMutex = false;
+  }
 }

@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ChevronUp,
   Info,
+  Users,
 } from 'lucide-react';
 import { clampMaturationStepDelaySec, MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 import {
@@ -33,6 +34,7 @@ import {
   evolutionMaturationDbStatusShouldAutoPauseMaturation,
 } from '@/lib/utils/evolution-instance-status';
 import MeshCard from './MeshCard';
+import GrupoMaturacaoModal, { type GroupMessagingInstance } from '@/components/GrupoMaturacaoModal';
 
 type MaturationStepStatus = 'pending' | 'processing' | 'sent' | 'failed';
 
@@ -242,6 +244,11 @@ export default function MaturadorPage() {
   const instancesPerPage = 8;
   const [mounted, setMounted] = useState(false);
 
+  // Grupo de maturação
+  const [showGrupoModal, setShowGrupoModal] = useState(false);
+  const [grupoInstances, setGrupoInstances] = useState<GroupMessagingInstance[]>([]);
+  const [grupoLoading, setGrupoLoading] = useState(false);
+
   /** Mesmos headers que a lista de Instâncias (WL / tenant no servidor). */
   const maturationApiHeaders = useCallback(
     (withJsonContentType = false): HeadersInit => ({
@@ -256,12 +263,61 @@ export default function MaturadorPage() {
     const tp = Math.max(1, Math.ceil(masterInstances.length / instancesPerPage) || 1);
     setInstancesPage((p) => (p > tp ? tp : p));
   }, [masterInstances.length, instancesPerPage]);
+
+  const loadGrupoInstances = useCallback(async () => {
+    setGrupoLoading(true);
+    try {
+      const res = await fetch('/api/maturation/group-messaging', {
+        headers: maturationApiHeaders(),
+      });
+      const json = await res.json();
+      if (json.instances) setGrupoInstances(json.instances);
+    } catch {
+      // silently ignore
+    } finally {
+      setGrupoLoading(false);
+    }
+  }, [maturationApiHeaders]);
+
+  const handleOpenGrupoModal = useCallback(async () => {
+    setShowGrupoModal(true);
+    await loadGrupoInstances();
+  }, [loadGrupoInstances]);
+
+  const handleToggleGrupoInstance = useCallback(async (id: string, enable: boolean) => {
+    await fetch('/api/maturation/group-messaging', {
+      method: 'POST',
+      headers: maturationApiHeaders(true),
+      body: JSON.stringify({ instance_id: id, enable }),
+    });
+    await loadGrupoInstances();
+  }, [maturationApiHeaders, loadGrupoInstances]);
+
+  const handleToggleAllGrupo = useCallback(async (enable: boolean) => {
+    await fetch('/api/maturation/group-messaging', {
+      method: 'POST',
+      headers: maturationApiHeaders(true),
+      body: JSON.stringify({ enable }),
+    });
+    await loadGrupoInstances();
+  }, [maturationApiHeaders, loadGrupoInstances]);
+
   const loadDataRef = useRef<(opts?: { background?: boolean }) => Promise<void>>(() => Promise.resolve());
   /** Após o primeiro GET bem-sucedido, recarregamentos usam modo silencioso (sem trocar a lista inteira por “Carregando…”). */
   const dataReadyRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
+    // Auto-abre modal do grupo quando chega via criação de instância virgem
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('grupo') === '1') {
+        setShowGrupoModal(true);
+        // Limpa o parâmetro da URL sem recarregar
+        const clean = window.location.pathname;
+        window.history.replaceState({}, '', clean);
+      }
+    }
   }, []);
 
   // Verifica se é admin
@@ -286,6 +342,13 @@ export default function MaturadorPage() {
   useEffect(() => {
     setJobsListPage(1);
   }, [statusFilter]);
+
+  // Carrega instâncias do grupo sempre que o modal é aberto
+  useEffect(() => {
+    if (showGrupoModal && userId) {
+      loadGrupoInstances();
+    }
+  }, [showGrupoModal, userId, loadGrupoInstances]);
 
   // Polling: atualiza a lista enquanto houver maturação rodando ou pausada (instância ainda travada)
   const hasMaturationInProgress = jobs.some(
@@ -1280,7 +1343,8 @@ export default function MaturadorPage() {
     <Layout>
       <div className="min-h-full bg-slate-50/60 dark:bg-[#1a1a1a] p-4 md:p-6">
         {/* Header */}
-        <div className="mb-6">
+        <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+          <div>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">
             Maturador
           </h1>
@@ -1298,6 +1362,14 @@ export default function MaturadorPage() {
                 : ''}
             </span>
           </p>
+          </div>
+          <button
+            onClick={handleOpenGrupoModal}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/50 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors text-sm font-medium shrink-0"
+          >
+            <Users className="w-4 h-4" />
+            Grupo de Maturação
+          </button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
@@ -2440,6 +2512,16 @@ export default function MaturadorPage() {
           </div>
         </div>
       )}
+
+      {/* Modal Grupo de Maturação */}
+      <GrupoMaturacaoModal
+        isOpen={showGrupoModal}
+        onClose={() => setShowGrupoModal(false)}
+        instances={grupoInstances}
+        loading={grupoLoading}
+        onToggleInstance={handleToggleGrupoInstance}
+        onToggleAll={handleToggleAllGrupo}
+      />
     </Layout>
   );
 }

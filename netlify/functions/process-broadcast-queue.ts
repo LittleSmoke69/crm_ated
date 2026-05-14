@@ -1,13 +1,13 @@
 /**
- * Netlify Scheduled Function: process-broadcast-queue
+ * Worker: fila de disparo em massa (chat_broadcasts status running).
  *
- * Roda a cada 1 minuto. Processa broadcasts com status 'running' respeitando
- * o delay_seconds entre envios. Garante que o disparo continue mesmo se o
- * usuário fechar o navegador — funciona como o process-message-queue.
+ * Agendamento em produção: crontab na VPS (`npm run cron:run -- process-broadcast-queue`),
+ * ver `scripts/linux/scheduled-jobs.ts` e `install-linux-cron.ts`. O fonte permanece em
+ * `netlify/functions/` apenas como pasta de handlers reutilizáveis pelo runner.
  *
  * Fluxo por broadcast:
  * 1. Verifica se já passou delay_seconds desde last_sent_at
- * 2. Busca instância e credenciais
+ * 2. Escolhe instância(s) da rotação; se uma cair, tenta as outras ativas antes de pausar
  * 3. Envia mensagem via Evolution API
  * 4. Persiste conversa e mensagem no chat (realtime)
  * 5. Avança current_index e atualiza last_sent_at
@@ -16,6 +16,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark-instance-disconnected';
+import { broadcastSendErrorIsInstanceUnreachable, orderedBroadcastInstanceIds } from '../../lib/chat/broadcast-instance-failover';
 import { computeNextDelaySeconds } from '../../lib/chat/broadcast-delay';
 import { getSequenceDelaySeconds, parseBroadcastSteps } from '../../lib/chat/broadcast-sequence';
 import { coerceEvolutionSendMediaFields } from '../../lib/crm/evolution-send-media-meta';
@@ -163,28 +164,8 @@ async function processOneBroadcast(
       Array.isArray(rawRotation) && rawRotation.length > 0
         ? rawRotation
         : [{ id: job.instance_id as string, name: job.instance_name as string }];
-    const instanceUuid = rotation[idx % rotation.length]?.id || job.instance_id;
-
-    const { data: instance } = await supabase
-      .from('evolution_instances')
-      .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
-      .eq('id', instanceUuid)
-      .single();
-
-    if (!instance) {
-      console.error(`${logPrefix} Instância não encontrada: ${instanceUuid}`);
-      return { sent, done: false, error: 'Instância não encontrada' };
-    }
-
-    const evolutionApi = Array.isArray(instance.evolution_apis)
-      ? instance.evolution_apis[0]
-      : instance.evolution_apis;
-
-    if (!evolutionApi?.base_url || !instance.apikey) {
-      return { sent: 0, done: false, error: 'Configuração incompleta da Evolution API' };
-    }
-
-    const baseUrl = normalizeBaseUrl(evolutionApi.base_url);
+    const pick = rotation[idx % rotation.length];
+    const fallbackInstanceId = pick?.id || job.instance_id;
 
     const contact = contacts[idx];
     const remoteJid = normalizePhone(contact.phone);
@@ -205,15 +186,103 @@ async function processOneBroadcast(
 
     const msgConfig = steps[stepIdx];
 
-    try {
-      const evolutionRes = await sendEvolutionMessage(
-        baseUrl,
-        instance.instance_name,
-        instance.apikey,
-        remoteJid,
-        msgConfig,
-      );
+    const orderedIds = orderedBroadcastInstanceIds(rotation, idx);
+    const tryInstanceIds = orderedIds.length > 0 ? orderedIds : [String(fallbackInstanceId)].filter(Boolean);
 
+    let instance: {
+      id: string;
+      instance_name: string;
+      apikey: string;
+      phone_number: string | null;
+      workspace_id: string | null;
+      user_id: string | null;
+      evolution_apis: { base_url: string } | { base_url: string }[] | null;
+    } | null = null;
+    let evolutionRes: Record<string, unknown> | null = null;
+    let lastSendError: string | null = null;
+    let sawNonUnreachableError = false;
+
+    for (const tryId of tryInstanceIds) {
+      const { data: inst } = await supabase
+        .from('evolution_instances')
+        .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
+        .eq('id', tryId)
+        .single();
+
+      if (!inst) {
+        if (tryInstanceIds.length === 1) {
+          console.error(`${logPrefix} Instância não encontrada: ${tryId}`);
+          return { sent, done: false, error: 'Instância não encontrada' };
+        }
+        continue;
+      }
+
+      const evolutionApi = Array.isArray(inst.evolution_apis) ? inst.evolution_apis[0] : inst.evolution_apis;
+
+      if (!evolutionApi?.base_url || !inst.apikey) {
+        if (tryInstanceIds.length === 1) {
+          return { sent, done: false, error: 'Configuração incompleta da Evolution API' };
+        }
+        continue;
+      }
+
+      const baseUrl = normalizeBaseUrl(evolutionApi.base_url);
+
+      try {
+        evolutionRes = await sendEvolutionMessage(baseUrl, inst.instance_name, inst.apikey, remoteJid, msgConfig);
+        instance = inst;
+        lastSendError = null;
+        break;
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        lastSendError = msg;
+        await maybeMarkEvolutionInstanceDisconnected(supabase, inst.id, msg, 'cron/broadcast-queue');
+        if (!broadcastSendErrorIsInstanceUnreachable(msg)) {
+          sawNonUnreachableError = true;
+          instance = inst;
+          break;
+        }
+        if (tryInstanceIds.length === 1) break;
+      }
+    }
+
+    if (!evolutionRes || !instance) {
+      if (sawNonUnreachableError && lastSendError) {
+        idx += 1;
+        stepIdx = 0;
+        await supabase
+          .from('chat_broadcasts')
+          .update({
+            current_index: idx,
+            message_step_index: 0,
+            last_error: lastSendError,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id);
+        delayMs = computeNextDelaySeconds(job) * 1000;
+        console.warn(`${logPrefix} Contato ${idx} pulado: ${lastSendError}`);
+        continue;
+      }
+
+      if (lastSendError && broadcastSendErrorIsInstanceUnreachable(lastSendError)) {
+        await supabase
+          .from('chat_broadcasts')
+          .update({ last_error: lastSendError, updated_at: new Date().toISOString() })
+          .eq('id', job.id);
+        console.error(`${logPrefix} Todas instâncias da rotação offline: ${lastSendError}`);
+        return { sent, done: false, error: lastSendError };
+      }
+
+      if (!lastSendError && tryInstanceIds.length > 1) {
+        console.error(`${logPrefix} Nenhuma instância válida na rotação`);
+        return { sent, done: false, error: 'Nenhuma instância válida na rotação' };
+      }
+
+      console.error(`${logPrefix} Instância não encontrada`);
+      return { sent, done: false, error: 'Instância não encontrada' };
+    }
+
+    try {
       const now = new Date().toISOString();
       const mediaLabels: Record<string, string> = {
         audio: '🎵 Áudio',
@@ -327,32 +396,7 @@ async function processOneBroadcast(
       }
     } catch (err: any) {
       const msg = err?.message || String(err);
-      await maybeMarkEvolutionInstanceDisconnected(supabase, instance.id, msg, 'netlify/broadcast');
-      const isDown =
-        /timeout|ECONNREFUSED|ENOTFOUND|network|socket|offline|disconnected/i.test(msg);
-
-      if (isDown) {
-        await supabase
-          .from('chat_broadcasts')
-          .update({ last_error: msg, updated_at: new Date().toISOString() })
-          .eq('id', job.id);
-        console.error(`${logPrefix} Instância offline: ${msg}`);
-        return { sent, done: false, error: msg };
-      }
-
-      idx += 1;
-      stepIdx = 0;
-      await supabase
-        .from('chat_broadcasts')
-        .update({
-          current_index: idx,
-          message_step_index: 0,
-          last_error: msg,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.id);
-      delayMs = computeNextDelaySeconds(job) * 1000;
-      console.warn(`${logPrefix} Contato ${idx} pulado: ${msg}`);
+      console.warn(`${logPrefix} Pós-envio: ${msg}`);
     }
   }
 

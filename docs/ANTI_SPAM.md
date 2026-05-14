@@ -74,7 +74,7 @@ O scanner que percorre grupos e remove participantes da blacklist (função `ant
 - **Lista de jobs:** `scripts/linux/scheduled-jobs.ts` (inclui `anti-spam-group-scanner` a cada minuto em UTC).
 - **Executar um job manualmente:** na raiz do app, com `.env` carregado:  
   `npm run cron:run -- anti-spam-group-scanner`  
-  (implementação em `netlify/functions/anti-spam-group-scanner.ts`, invocada pelo runner `scripts/linux/run-netlify-scheduled-function.ts`.)
+  (implementação em `netlify/functions/anti-spam-group-scanner.ts`, invocada pelo runner `scripts/linux/run-scheduled-job.ts` via crontab.)
 - **Instalar crontab:** `npx tsx scripts/linux/install-linux-cron.ts` (gera bloco com `flock` e `CRON_TZ=UTC`; log padrão `/var/log/zaploto-cron.log` ou `CRON_LOG_FILE`).
 
 Garanta `NEXT_PUBLIC_SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no ambiente do cron (mesmo do Next/PM2).

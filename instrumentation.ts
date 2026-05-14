@@ -61,23 +61,51 @@ export async function register() {
     const { runMaturationTick } = await import('./lib/services/maturation/processor');
     const { supabaseServiceRole } = await import('./lib/services/supabase-service');
 
-    let running = false;
+    // Loop da maturação mútua (mesh)
+    let tickRunning = false;
     const runTick = async () => {
-      if (running) return; // evita sobreposição se o tick anterior ainda estiver rodando
-      running = true;
+      if (tickRunning) return;
+      tickRunning = true;
       try {
         await runMaturationTick(supabaseServiceRole);
       } catch (e) {
         console.error('[instrumentation] maturation-tick erro:', e instanceof Error ? e.message : e);
       } finally {
-        running = false;
+        tickRunning = false;
       }
     };
 
-    // Aguarda 5s para o app terminar de inicializar antes do primeiro tick
+    // Aguarda 5s para o app terminar de inicializar
     setTimeout(runTick, 5_000);
     setInterval(runTick, tickIntervalMs);
 
     console.log(`[instrumentation] Maturation ticker ativo: intervalo ${tickIntervalMs}ms`);
+  }
+
+  // ── Group messaging ticker ──────────────────────────────────────────────────
+  // Sempre roda no processo Node (independente de MATURATION_TICK_ENABLED).
+  // Envia estrofes de João de Santo Cristo ao grupo de maturação a cada 30s.
+  {
+    const { runGroupMessaging } = await import('./lib/services/maturation/processor');
+    const { supabaseServiceRole } = await import('./lib/services/supabase-service');
+
+    let groupRunning = false;
+    const runGroup = async () => {
+      if (groupRunning) return;
+      groupRunning = true;
+      try {
+        await runGroupMessaging(supabaseServiceRole);
+      } catch (e) {
+        console.error('[instrumentation] group-messaging erro:', e instanceof Error ? e.message : e);
+      } finally {
+        groupRunning = false;
+      }
+    };
+
+    // Aguarda 15s para o app terminar de inicializar antes do primeiro disparo
+    setTimeout(runGroup, 15_000);
+    setInterval(runGroup, 30_000);
+
+    console.log('[instrumentation] Group messaging ativo: intervalo 30s');
   }
 }

@@ -19,8 +19,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 const MESH_MIN_INTERVAL_SEC = 5;
 const MESH_MAX_INTERVAL_SEC = 3600;
 
-async function loadController(controllerId: string, _userId: string) {
-  // Mesh é singleton global: qualquer usuário autenticado pode controlar.
+async function loadController(controllerId: string) {
   const { data, error } = await supabaseServiceRole
     .from('maturation_jobs')
     .select('id, owner_user_id, campaign_id, mesh_is_controller, status, mesh_cycle_interval_sec')
@@ -31,6 +30,25 @@ async function loadController(controllerId: string, _userId: string) {
   return { controller: data };
 }
 
+async function assertMeshLifecycleAdmin(userId: string): Promise<NextResponse | null> {
+  const { data: row } = await supabaseServiceRole
+    .from('profiles')
+    .select('status')
+    .eq('id', userId)
+    .maybeSingle();
+  const s = String((row as { status?: string } | null)?.status ?? '').toLowerCase();
+  if (s !== 'admin' && s !== 'super_admin') {
+    return NextResponse.json(
+      {
+        error:
+          'Apenas administrador ou super administrador pode pausar, retomar, encerrar o mesh ou alterar o intervalo entre ciclos.',
+      },
+      { status: 403 }
+    );
+  }
+  return null;
+}
+
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id: controllerId } = await ctx.params;
@@ -38,7 +56,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const userId = auth.userId;
     if (!userId) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
 
-    const loaded = await loadController(controllerId, userId);
+    const forbidden = await assertMeshLifecycleAdmin(userId);
+    if (forbidden) return forbidden;
+
+    const loaded = await loadController(controllerId);
     if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
     const ctrl = loaded.controller as any;
 
@@ -106,7 +127,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     const userId = auth.userId;
     if (!userId) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
 
-    const loaded = await loadController(controllerId, userId);
+    const loaded = await loadController(controllerId);
     if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
     const ctrl = loaded.controller as any;
 

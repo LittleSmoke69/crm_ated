@@ -80,12 +80,14 @@ const PerfilPage = () => {
         if (result.success) {
           setProfile(result.data);
           // Remove o prefixo 55 do telefone para exibição/edição
-          const telefoneDisplay = result.data.telefone 
+          const telefoneDisplay = result.data.telefone
             ? result.data.telefone.replace(/\D/g, '').startsWith('55')
               ? result.data.telefone.replace(/\D/g, '').slice(2)
               : result.data.telefone.replace(/\D/g, '')
             : '';
           setTelefoneValue(telefoneDisplay);
+          // Força modo edição quando o usuário ainda não tem telefone
+          if (!result.data.telefone) setEditingTelefone(true);
         } else {
           throw new Error(result.error || 'Erro ao carregar perfil');
         }
@@ -418,17 +420,6 @@ const PerfilPage = () => {
                       ) : (
                         <Save className="w-4 h-4" />
                       )}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditingTelefone(false);
-                        setTelefoneValue(profile.telefone || '');
-                        setError(null);
-                      }}
-                      className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
-                      title="Cancelar"
-                    >
-                      <X className="w-4 h-4" />
                     </button>
                   </div>
                 ) : (

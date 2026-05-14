@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse, after } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { runMaturationTick } from '@/lib/services/maturation/processor';
+import { runMaturationTick, runGroupMessaging } from '@/lib/services/maturation/processor';
 
 /**
  * O tick pode levar dezenas de segundos; proxies (504 Inactivity Timeout) cortam se não houver resposta.
@@ -51,6 +51,10 @@ export async function POST(req: NextRequest) {
     req.headers.get('x-maturation-tick-mode') === 'sync';
 
   const runTickAndMaybeChain = async () => {
+    // Roda group messaging em paralelo ao tick — independente, sem bloquear o tick
+    runGroupMessaging(supabaseServiceRole).catch((e) =>
+      console.error('[cron-tick] group-messaging erro:', e instanceof Error ? e.message : e)
+    );
     const result = await runMaturationTick(supabaseServiceRole);
     if (result.hasMorePending && chainDepth < MAX_CHAIN_DEPTH) {
       const nextDepth = chainDepth + 1;

@@ -39,6 +39,12 @@ type MeshCampaign = {
   participants: MeshParticipant[];
 };
 
+type MeshCampaignActive = Omit<MeshCampaign, 'status'> & { status: 'running' | 'paused' };
+
+function isMeshCampaignActive(c: MeshCampaign): c is MeshCampaignActive {
+  return c.status === 'running' || c.status === 'paused';
+}
+
 function meshCampaignViewerCanDelete(
   c: MeshCampaign,
   viewerProfileStatus: string | null | undefined
@@ -47,11 +53,17 @@ function meshCampaignViewerCanDelete(
   return viewerProfileStatus === 'super_admin';
 }
 
+/** Pausar, encerrar mesh e editar intervalo — só admin / super_admin (alinhado ao PATCH /api/maturation/mesh/[id]). */
+function meshViewerCanControlLifecycle(viewerProfileStatus: string | null | undefined): boolean {
+  const s = String(viewerProfileStatus ?? '').toLowerCase();
+  return s === 'admin' || s === 'super_admin';
+}
+
 interface Props {
   /** Lista de instâncias elegíveis (conectadas + telefone). */
   eligibleInstances: EligibleInstance[];
   apiHeaders: HeadersInit;
-  /** Cargo do perfil (ex.: can-access); usado para ocultar exclusão de malha criada por super_admin. */
+  /** Cargo do perfil (ex.: can-access); usado para exclusão de malha criada por super_admin e para Pausar/Encerrar/intervalo (só admin/super_admin). */
   viewerProfileStatus?: string | null;
 }
 
@@ -73,6 +85,11 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
   const headersJson = useMemo(
     () => ({ ...apiHeaders, 'Content-Type': 'application/json' }),
     [apiHeaders]
+  );
+
+  const canControlMeshLifecycle = useMemo(
+    () => meshViewerCanControlLifecycle(viewerProfileStatus),
+    [viewerProfileStatus]
   );
 
   /**
@@ -219,7 +236,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
     if (res.ok) await loadCampaigns();
   }
 
-  const activeCampaigns = campaigns.filter((c) => c.status === 'running' || c.status === 'paused');
+  const activeCampaigns = campaigns.filter(isMeshCampaignActive);
   const finishedCampaigns = campaigns.filter((c) => c.status !== 'running' && c.status !== 'paused');
   const hasRunning = activeCampaigns.some((c) => c.status === 'running');
 
@@ -265,8 +282,24 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
         </div>
       )}
 
-      {/* Animação da rede */}
-      <NetworkAnimation chips={animChips} active={hasRunning} />
+      {/* Animação da rede — Pausar/Cancelar só admin e super_admin */}
+      <NetworkAnimation
+        chips={animChips}
+        active={hasRunning}
+        cycleControls={
+          canControlMeshLifecycle && activeCampaigns.length > 0
+            ? {
+                status: activeCampaigns[0].status,
+                onToggle: () => {
+                  void handleToggle(activeCampaigns[0]);
+                },
+                onAbort: () => {
+                  void handleAbort(activeCampaigns[0]);
+                },
+              }
+            : undefined
+        }
+      />
 
       {/* Controles abaixo da animação (só aparece quando NÃO tem campanha ativa) */}
       {activeCampaigns.length === 0 && (
@@ -319,6 +352,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
                     key={c.controller_job_id}
                     campaign={c}
                     nextCycleLabel={formatNextCycle(c)}
+                    canControlLifecycle={canControlMeshLifecycle}
                     canDelete={meshCampaignViewerCanDelete(c, viewerProfileStatus)}
                     onToggle={() => handleToggle(c)}
                     onAbort={() => handleAbort(c)}
@@ -370,9 +404,16 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
 function NetworkAnimation({
   chips,
   active,
+  cycleControls,
 }: {
   chips: Array<{ id: string; name: string }>;
   active: boolean;
+  /** Pausar / retomar / encerrar sobre a área visual do ciclo (mesma API que a linha de campanha). */
+  cycleControls?: {
+    status: 'running' | 'paused';
+    onToggle: () => void;
+    onAbort: () => void;
+  };
 }) {
   const VIEW_W = 600;
   const VIEW_H = 360;
@@ -602,6 +643,38 @@ function NetworkAnimation({
           <span className="text-slate-400 dark:text-[#666]">Em espera</span>
         )}
       </div>
+
+      {cycleControls && (
+        <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 flex-wrap items-center justify-center gap-2 px-2">
+          <button
+            type="button"
+            onClick={cycleControls.onToggle}
+            title={cycleControls.status === 'running' ? 'Pausar ciclos' : 'Retomar ciclos'}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-md backdrop-blur-sm hover:bg-slate-50 dark:border-[#404040] dark:bg-[#1f1f1f]/95 dark:text-[#eee] dark:hover:bg-[#2a2a2a]"
+          >
+            {cycleControls.status === 'running' ? (
+              <>
+                <Pause className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                Pausar
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 shrink-0 text-[#8CD955]" />
+                Retomar
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={cycleControls.onAbort}
+            title="Encerrar campanha mesh"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200/90 bg-white/95 px-3 py-2 text-xs font-semibold text-red-700 shadow-md backdrop-blur-sm hover:bg-red-50 dark:border-red-900/50 dark:bg-[#1f1f1f]/95 dark:text-red-400 dark:hover:bg-red-950/40"
+          >
+            <Square className="h-4 w-4 shrink-0" />
+            Cancelar
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -611,6 +684,7 @@ function NetworkAnimation({
 function CampaignRow({
   campaign,
   nextCycleLabel,
+  canControlLifecycle,
   canDelete,
   onToggle,
   onAbort,
@@ -619,6 +693,7 @@ function CampaignRow({
 }: {
   campaign: MeshCampaign;
   nextCycleLabel: string;
+  canControlLifecycle: boolean;
   canDelete: boolean;
   onToggle: () => void;
   onAbort: () => void;
@@ -666,64 +741,73 @@ function CampaignRow({
           </div>
           <div className="text-xs text-slate-500 dark:text-[#888] mt-0.5 flex items-center gap-1 flex-wrap">
             Intervalo:{' '}
-            {editingInterval ? (
-              <>
-                <input
-                  type="number"
-                  min={MIN_INTERVAL}
-                  max={MAX_INTERVAL}
-                  value={intervalDraft}
-                  onChange={(e) => setIntervalDraft(Number(e.target.value) || DEFAULT_INTERVAL)}
-                  className="w-20 px-2 py-0.5 rounded border border-slate-300 dark:border-[#404040] bg-white dark:bg-[#0f0f0f] text-xs"
-                />
-                s
-                <button
-                  onClick={() => {
-                    onIntervalChange(intervalDraft);
-                    setEditingInterval(false);
-                  }}
-                  className="text-[#8CD955] hover:underline"
-                >
-                  salvar
-                </button>
-                <button
-                  onClick={() => {
-                    setIntervalDraft(c.cycle_interval_sec ?? DEFAULT_INTERVAL);
-                    setEditingInterval(false);
-                  }}
-                  className="text-slate-500 hover:underline"
-                >
-                  cancelar
-                </button>
-              </>
+            {canControlLifecycle ? (
+              editingInterval ? (
+                <>
+                  <input
+                    type="number"
+                    min={MIN_INTERVAL}
+                    max={MAX_INTERVAL}
+                    value={intervalDraft}
+                    onChange={(e) => setIntervalDraft(Number(e.target.value) || DEFAULT_INTERVAL)}
+                    className="w-20 px-2 py-0.5 rounded border border-slate-300 dark:border-[#404040] bg-white dark:bg-[#0f0f0f] text-xs"
+                  />
+                  s
+                  <button
+                    onClick={() => {
+                      onIntervalChange(intervalDraft);
+                      setEditingInterval(false);
+                    }}
+                    className="text-[#8CD955] hover:underline"
+                  >
+                    salvar
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIntervalDraft(c.cycle_interval_sec ?? DEFAULT_INTERVAL);
+                      setEditingInterval(false);
+                    }}
+                    className="text-slate-500 hover:underline"
+                  >
+                    cancelar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <strong>{c.cycle_interval_sec ?? DEFAULT_INTERVAL}s</strong>
+                  <button
+                    onClick={() => setEditingInterval(true)}
+                    className="text-[#8CD955] hover:underline ml-1"
+                  >
+                    editar
+                  </button>
+                </>
+              )
             ) : (
-              <>
-                <strong>{c.cycle_interval_sec ?? DEFAULT_INTERVAL}s</strong>
-                <button
-                  onClick={() => setEditingInterval(true)}
-                  className="text-[#8CD955] hover:underline ml-1"
-                >
-                  editar
-                </button>
-              </>
+              <strong>{c.cycle_interval_sec ?? DEFAULT_INTERVAL}s</strong>
             )}
           </div>
         </div>
+        {(canControlLifecycle || canDelete) && (
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={onToggle}
-            title={c.status === 'running' ? 'Pausar ciclos' : 'Retomar ciclos'}
-            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-[#333] text-slate-600 dark:text-[#bbb]"
-          >
-            {c.status === 'running' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={onAbort}
-            title="Encerrar campanha (stop)"
-            className="p-2 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-600 dark:text-amber-400"
-          >
-            <Square className="w-4 h-4" />
-          </button>
+          {canControlLifecycle && (
+            <>
+              <button
+                onClick={onToggle}
+                title={c.status === 'running' ? 'Pausar ciclos' : 'Retomar ciclos'}
+                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-[#333] text-slate-600 dark:text-[#bbb]"
+              >
+                {c.status === 'running' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={onAbort}
+                title="Encerrar campanha (stop)"
+                className="p-2 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-600 dark:text-amber-400"
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            </>
+          )}
           {canDelete ? (
             <button
               onClick={onDelete}
@@ -734,6 +818,7 @@ function CampaignRow({
             </button>
           ) : null}
         </div>
+        )}
       </div>
     </div>
   );

@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { runMaturationTick } from '@/lib/services/maturation/processor';
+import { runMaturationTick, runGroupMessaging } from '@/lib/services/maturation/processor';
 
 export const maxDuration = 300;
 
@@ -71,6 +71,11 @@ export async function POST(req: NextRequest) {
         { status: 202 }
       );
     }
+
+    // Dispara group messaging em paralelo sem bloquear o loop de ticks
+    runGroupMessaging(supabaseServiceRole).catch((e) =>
+      console.error('[process-now] group-messaging erro:', e instanceof Error ? e.message : e)
+    );
 
     const deadline = Date.now() + MAX_WALL_MS;
     let totalProcessed = 0;

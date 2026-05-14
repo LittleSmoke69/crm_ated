@@ -835,7 +835,7 @@ const InstancesPage = () => {
         await loadInitialData();
         if (navigateToMaturadorAfterPhoneRef.current) {
           navigateToMaturadorAfterPhoneRef.current = false;
-          window.location.href = withTenantSlug('/maturador');
+          window.location.href = withTenantSlug('/maturador?grupo=1');
         }
       } else {
         showToast(data.error || 'Erro ao atualizar telefone', 'error');
@@ -2150,31 +2150,17 @@ const InstancesPage = () => {
 
       {/* Modal de Telefone da Instância */}
       {isPhoneModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isSavingPhone) {
-              setIsPhoneModalOpen(false);
-            }
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Overlay */}
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-          
+
           {/* Modal */}
           <div className="relative bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-2xl p-6 max-w-md w-full z-10 animate-in fade-in zoom-in duration-200">
-            <div className="flex justify-between items-center mb-5">
+            <div className="mb-5">
               <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
                 <Phone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                 Telefone da Instância
               </h2>
-              <button
-                onClick={() => !isSavingPhone && setIsPhoneModalOpen(false)}
-                disabled={isSavingPhone}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-[#333] rounded-lg transition text-gray-500 hover:text-gray-700 dark:text-[#aaa] dark:hover:text-white disabled:opacity-50"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
 
             <div className="space-y-4">
@@ -2203,16 +2189,9 @@ const InstancesPage = () => {
 
               <div className="flex gap-3 pt-2">
                 <button
-                  onClick={() => setIsPhoneModalOpen(false)}
-                  disabled={isSavingPhone}
-                  className="flex-1 py-2.5 bg-gray-100 dark:bg-[#404040] hover:bg-gray-200 dark:hover:bg-[#505050] text-gray-700 dark:text-white rounded-lg font-medium transition disabled:opacity-50"
-                >
-                  Cancelar
-                </button>
-                <button
                   onClick={handleSavePhone}
                   disabled={isSavingPhone || !phoneValue}
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {isSavingPhone ? (
                     <>
