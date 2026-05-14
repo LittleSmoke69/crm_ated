@@ -865,7 +865,7 @@ function CampaignRow({
               .map((p) => {
                 const active = p.job_status === 'running';
                 const warmingUp = active && p.started_at
-                  ? Date.now() - new Date(p.started_at).getTime() < 15 * 60 * 1000
+                  ? Date.now() - new Date(p.started_at).getTime() < 5 * 60 * 1000
                   : false;
                 return (
                   <div
@@ -882,8 +882,11 @@ function CampaignRow({
                         {p.instance_name || p.master_instance_id.slice(0, 8)}
                       </span>
                       {warmingUp && (
-                        <span className="text-xs text-amber-500 dark:text-amber-400 shrink-0">
-                          aquecendo…
+                        <span
+                          className="text-xs text-amber-500 dark:text-amber-400 shrink-0"
+                          title="Recebendo mensagens por 30 min antes de começar a enviar"
+                        >
+                          só recebe…
                         </span>
                       )}
                     </div>

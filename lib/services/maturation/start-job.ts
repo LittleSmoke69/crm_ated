@@ -46,7 +46,7 @@ async function getVirginMessagesAsSteps(
   });
 }
 
-/** IDs de evolution_instances visíveis ao usuário (escopo Instâncias) e liberadas para o maturador. */
+/** IDs de evolution_instances visíveis ao usuário (escopo Instâncias), do tipo virgem e liberadas para o maturador. */
 async function evolutionIdsAllowedForMaturation(
   supabase: SupabaseClient,
   userId: string,
@@ -54,7 +54,12 @@ async function evolutionIdsAllowedForMaturation(
   scope: EvolutionMaturationVisibilityScope | null
 ): Promise<string[]> {
   if (!ids.length) return [];
-  let q = supabase.from('evolution_instances').select('id').in('id', ids).eq('blocked_from_maturation', false);
+  let q = supabase
+    .from('evolution_instances')
+    .select('id')
+    .in('id', ids)
+    .eq('maturation_type', 'virgem')
+    .eq('blocked_from_maturation', false);
   if (scope) {
     q = applyEvolutionInstancesVisibilityFilters(q, scope);
   } else {
@@ -601,6 +606,7 @@ export async function runMeshStart(
       .from('evolution_instances')
       .select('id, phone_number, status, user_id')
       .eq('is_active', true)
+      .eq('maturation_type', 'virgem')
       .eq('blocked_from_maturation', false)
       .not('phone_number', 'is', null);
     if (visibilityScope) {

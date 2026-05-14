@@ -2169,12 +2169,12 @@ async function autoEnrollMeshParticipants(
 ): Promise<void> {
   if (!controller.campaign_id) return;
 
-  // Busca todas as evolution_instances elegíveis no sistema (sem filtro por usuário —
-  // mesh é singleton global; a "rede" é tudo que pode maturar).
+  // Busca apenas evolution_instances do tipo 'virgem' — maturadas não participam do mesh.
   const { data: eligibleRows, error: eligErr } = await supabase
     .from('evolution_instances')
     .select('id, instance_name, phone_number')
     .eq('is_active', true)
+    .eq('maturation_type', 'virgem')
     .eq('blocked_from_maturation', false)
     .not('phone_number', 'is', null);
 
@@ -2278,7 +2278,7 @@ async function runMeshCycle(
       `id, master_instance_id, started_at,
        master_instances!inner (
          id, is_active,
-         evolution_instances!inner ( id, instance_name, phone_number, status )
+         evolution_instances!inner ( id, instance_name, phone_number, status, maturation_type )
        )`
     )
     .eq('campaign_id', controller.campaign_id)
@@ -2293,8 +2293,10 @@ async function runMeshCycle(
     return false;
   }
 
-  const SEND_DELAY_MS = 5 * 60 * 1000;   // 5 min: instância começa a enviar
-  const RECV_DELAY_MS = 15 * 60 * 1000;  // 15 min: instância começa a receber
+  // Nova instância: recebe mensagens imediatamente (RECV_DELAY_MS=0), só envia depois de 5 min.
+  // Garante que toda instância nova recebe antes de enviar, nunca o contrário.
+  const SEND_DELAY_MS = 5 * 60 * 1000;  // 5 min: instância começa a enviar
+  const RECV_DELAY_MS = 0;              // 0 min: instância recebe desde o primeiro ciclo
 
   const eligible: MeshParticipant[] = [];
   for (const j of participantJobs as any[]) {
@@ -2302,6 +2304,8 @@ async function runMeshCycle(
     if (!mi?.is_active) continue;
     const ei = Array.isArray(mi.evolution_instances) ? mi.evolution_instances[0] : mi.evolution_instances;
     if (!ei?.phone_number) continue;
+    // Apenas instâncias virgem participam do ciclo mesh
+    if (ei.maturation_type !== 'virgem') continue;
     if (!evolutionMaturationDbStatusIsConnected(ei.status)) continue;
     const jid = normalizePhoneToJid(String(ei.phone_number));
     if (!jid) continue;
