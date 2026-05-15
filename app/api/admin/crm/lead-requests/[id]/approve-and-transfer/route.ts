@@ -166,27 +166,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!sourceEmail) return errorResponse('E-mail do consultor doador não encontrado.', 400);
 
     const emailById = new Map<string, string>();
-    if (directCount > 0) {
-      const targetIds = validConsultores.map((c: { consultor_id: string }) => c.consultor_id);
-      const { data: targetProfiles } = await supabaseServiceRole
-        .from('profiles')
-        .select('id, email')
-        .in('id', targetIds);
-      (targetProfiles ?? []).forEach((p: { id: string; email: string | null }) => {
-        if (p.email) emailById.set(p.id, p.email.trim());
-      });
-      for (const c of validConsultores) {
-        if (!emailById.has(c.consultor_id)) {
-          return errorResponse(`E-mail do consultor recebedor não encontrado: ${c.consultor_id}`, 400);
-        }
+    const targetIds = [...new Set(validConsultores.map((c: { consultor_id: string }) => String(c.consultor_id).trim()))];
+    const { data: targetProfiles } = await supabaseServiceRole.from('profiles').select('id, email').in('id', targetIds);
+    (targetProfiles ?? []).forEach((p: { id: string; email: string | null }) => {
+      if (p.email) emailById.set(p.id, p.email.trim());
+    });
+    for (const c of validConsultores) {
+      if (!emailById.has(c.consultor_id)) {
+        return errorResponse(`E-mail do consultor recebedor não encontrado: ${c.consultor_id}`, 400);
       }
+    }
 
+    if (directCount > 0) {
       // Doador pode ser qualquer usuário do sistema; a disponibilidade de leads é validada no CRM abaixo.
       for (const c of validConsultores) {
         const email = emailById.get(c.consultor_id);
         if (email && !(await isConsultantInBanca(ctx.bancaId, email))) {
           return errorResponse(`O consultor recebedor ${email} não pertence à banca.`, 400);
         }
+      }
+    }
+
+    if (stockCount > 0) {
+      const primary = validConsultores[0] as { consultor_id: string };
+      const stockCrmTarget = (emailById.get(primary.consultor_id) ?? '').trim().toLowerCase();
+      if (!stockCrmTarget) {
+        return errorResponse('Não foi possível resolver o e-mail do consultor recebedor para o estoque.', 400);
+      }
+      if (!(await isConsultantInBanca(ctx.bancaId, stockCrmTarget))) {
+        return errorResponse('O consultor recebedor da solicitação não pertence à banca (destino CRM ao sair do estoque).', 400);
       }
     }
 
@@ -342,6 +350,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             target_consultant_email: targetEmail,
             leads_ids: batchIds,
             transfer_type: 'TF',
+            gerente_destino_crm_direto: true,
             filters_snapshot: {
               lead_types: leadTypes,
               from_solicitation: requestId,
@@ -386,6 +395,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             approve_transfer_mode: 'gerente_stock',
             split_direct_portion: directCount,
             split_stock_portion: stockCount,
+            stock_crm_target_consultant_email: (emailById.get(validConsultores[0].consultor_id) ?? '').trim().toLowerCase(),
           },
           lead_snapshots: leadSnapshots,
         }),

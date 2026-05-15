@@ -459,25 +459,6 @@ export async function markAdminStockPackageEntriesReleasedToOrigin(params: {
   return { released: Array.isArray(data) ? data.length : 0 };
 }
 
-export async function markStockEntriesCanceled(
-  transferLogId: string,
-  bancaId: string,
-  gerenteUserId?: string | null
-): Promise<{ canceled: number } | { error: string }> {
-  let q = supabaseServiceRole
-    .from('admin_lead_transfer_entries')
-    .update({ stock_status: 'cancelado', stock_resolved_at: new Date().toISOString() })
-    .eq('transfer_log_id', transferLogId)
-    .eq('banca_id', bancaId)
-    .eq('stock_status', 'em_estoque');
-
-  if (gerenteUserId) q = q.eq('stock_gerente_user_id', gerenteUserId);
-
-  const { data, error } = await q.select('id');
-  if (error) return { error: error.message };
-  return { canceled: Array.isArray(data) ? data.length : 0 };
-}
-
 /**
  * Desfaz cancelamento da reserva admin→estoque: volta cancelado → em_estoque no estoque do gerente.
  * Não chama o CRM.
@@ -501,4 +482,32 @@ export async function markStockEntriesRestoreCanceledToEmEstoque(params: {
   const { data, error } = await q.select('id');
   if (error) return { error: error.message };
   return { restored: Array.isArray(data) ? data.length : 0 };
+}
+
+/**
+ * Marca leads em_estoque ou cancelados (legado) como repassados após envio ao consultor no CRM
+ * (origem → consultor destino). Atualiza target_consultant_email para o consultor real.
+ */
+export async function markStockEntriesDirectCrmSyncToConsultant(params: {
+  transferLogId: string;
+  bancaId: string;
+  gerenteUserId: string;
+  destinationConsultantEmail: string;
+}): Promise<{ updated: number } | { error: string }> {
+  const dest = params.destinationConsultantEmail.trim().toLowerCase();
+  if (!dest) return { error: 'E-mail do consultor destino inválido.' };
+  const { data, error } = await supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .update({
+      stock_status: 'repassado',
+      stock_resolved_at: new Date().toISOString(),
+      target_consultant_email: dest,
+    })
+    .eq('transfer_log_id', params.transferLogId)
+    .eq('banca_id', params.bancaId)
+    .eq('stock_gerente_user_id', params.gerenteUserId)
+    .in('stock_status', ['em_estoque', 'cancelado'])
+    .select('id');
+  if (error) return { error: error.message };
+  return { updated: Array.isArray(data) ? data.length : 0 };
 }

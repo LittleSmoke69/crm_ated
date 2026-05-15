@@ -413,7 +413,8 @@ export async function GET(req: NextRequest) {
       const storedTotal = storedTotalByLogId.get(log.id) ?? null;
       const totalBalance = storedTotal ?? totalBalanceByLogId.get(log.id) ?? 0;
       const performedBy = (log.performed_by_user_id ?? '').trim();
-      const deadlineDays = log.deadline_days != null ? log.deadline_days : DEFAULT_DEADLINE;
+      const deadlineDays =
+        log.deadline_days === 0 ? 0 : log.deadline_days != null && log.deadline_days >= 1 ? log.deadline_days : DEFAULT_DEADLINE;
       const expired = isTransferExpired(log.created_at, deadlineDays);
       const resInfo = resolutionByLogId.get(log.id);
       const stockInfo = stockByLogId.get(log.id) ?? { total: 0, em_estoque: 0, repassado: 0, cancelado: 0, revertido: 0 };
@@ -428,7 +429,8 @@ export async function GET(req: NextRequest) {
         | 'cancelado_parcial'
         | 'cancelado_total'
         | 'revertido_total'
-        | 'revertido_parcial' = 'none';
+        | 'revertido_parcial'
+        | 'repasse_estoque_revertido' = 'none';
       if ((log.transfer_kind ?? 'standard') === 'admin_to_gerente_stock') {
         if (stockInfo.em_estoque > 0) {
           stock_status_log = 'em_estoque';
@@ -442,6 +444,20 @@ export async function GET(req: NextRequest) {
           stock_status_log = 'cancelado_total';
         } else if (stockInfo.cancelado > 0) {
           stock_status_log = 'cancelado_parcial';
+        }
+      }
+      if ((log.transfer_kind ?? 'standard') === 'gerente_stock_to_consultant') {
+        let fsRaw: unknown = log.filters_snapshot;
+        if (typeof fsRaw === 'string') {
+          try {
+            fsRaw = JSON.parse(fsRaw) as unknown;
+          } catch {
+            fsRaw = null;
+          }
+        }
+        if (fsRaw != null && typeof fsRaw === 'object' && !Array.isArray(fsRaw)) {
+          const ra = String((fsRaw as { reversed_at?: unknown }).reversed_at ?? '').trim();
+          if (ra) stock_status_log = 'repasse_estoque_revertido';
         }
       }
       const resInfoFull = resolutionByLogId.get(log.id);

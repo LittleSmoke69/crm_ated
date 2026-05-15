@@ -5,6 +5,144 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LOG_PREFIX = '[lead-transfer][consultants]';
 
+function bancaIdInJsonbArray(bancaIds: unknown, bancaIdNorm: string): boolean {
+  if (!Array.isArray(bancaIds)) return false;
+  return (bancaIds as string[]).some((id) => String(id ?? '').trim().toLowerCase() === bancaIdNorm);
+}
+
+/** IDs de usuários com esta banca em user_bancas.banca_ids (JSONB array de UUIDs como string). */
+async function getUserIdsOnBanca(bancaId: string): Promise<string[]> {
+  const raw = bancaId.trim();
+  const norm = raw.toLowerCase();
+  if (!raw) return [];
+
+  /**
+   * Não usar `.contains('banca_ids', [id])`: o postgrest-js trata array como tipo Postgres array e gera
+   * `cs.{uuid}` (sem aspas) → Postgres responde "invalid input syntax for type json" em coluna jsonb.
+   * Usar operador PostgREST `cs` (@>) com JSON array válido: `["uuid"]`.
+   */
+  const tryUserBancasCs = (id: string) =>
+    supabaseServiceRole.from('user_bancas').select('user_id').filter('banca_ids', 'cs', JSON.stringify([id]));
+
+  let rows: { user_id: string }[] = [];
+  for (const id of [...new Set([raw, norm, raw.toUpperCase()])].filter(Boolean)) {
+    const q1 = await tryUserBancasCs(id);
+    if (!q1.error && (q1.data?.length ?? 0) > 0) {
+      rows = (q1.data ?? []) as { user_id: string }[];
+      break;
+    }
+    if (q1.error) {
+      console.warn(`${LOG_PREFIX} user_bancas jsonb @> (${id.slice(0, 8)}…):`, q1.error.message);
+    }
+  }
+  if (rows.length === 0) {
+    const all = await supabaseServiceRole.from('user_bancas').select('user_id, banca_ids');
+    if (all.error) {
+      console.error(`${LOG_PREFIX} user_bancas (full):`, all.error.message);
+      return [];
+    }
+    rows = (all.data ?? [])
+      .filter((r: { banca_ids?: unknown }) => bancaIdInJsonbArray(r.banca_ids, norm))
+      .map((r: { user_id: string }) => ({ user_id: r.user_id }));
+  }
+  const uniq = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+  console.log(`${LOG_PREFIX} getUserIdsOnBanca(${bancaId}): ${uniq.length} usuário(s)`);
+  return uniq;
+}
+
+/** Escapa % e _ para ILIKE exato (sem curingas). */
+function escapeIlikeExact(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+type ConsultantRow = {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  gerente_nome?: string;
+  consultores_vinculados?: { id: string; full_name: string; email: string }[];
+};
+
+/**
+ * Inclui titulares do lote (e-mails dos logs) que existem em profiles e têm conta no CRM desta banca (200).
+ * Usado pelo modal «Mover leads» quando a hierarquia user_bancas/enroller não lista quem já é titular no CRM.
+ */
+async function mergeTitularesFromEmails(
+  ctx: { crmBaseUrl: string; bancaId: string },
+  consultants: ConsultantRow[],
+  titularEmails: string[]
+): Promise<ConsultantRow[]> {
+  const seen = new Set(consultants.map((c) => (c.email ?? '').trim().toLowerCase()).filter(Boolean));
+  const candidates = [...new Set(titularEmails.map((e) => e.trim()).filter(Boolean))].slice(0, 40).filter((e) => !seen.has(e.toLowerCase()));
+  if (candidates.length === 0) return consultants;
+
+  const apiKey = process.env.CRM_API_KEY?.trim();
+  const roleLabel = (s: string | null | undefined) => {
+    const v = String(s ?? '').toLowerCase();
+    if (v === 'gerente') return 'Gerente';
+    if (v === 'consultor') return 'Consultor';
+    if (v === 'dono_banca') return 'Dono Banca';
+    if (v === 'admin' || v === 'super_admin') return 'Admin';
+    if (v === 'gestor') return 'Gestor';
+    if (v === 'auditoria') return 'Auditoria';
+    return v || 'Consultor';
+  };
+
+  type ProfTitularRow = { id: string; email: string | null; full_name: string | null; status: string | null };
+
+  const extra: ConsultantRow[] = [];
+  for (const email of candidates) {
+    let prof: ProfTitularRow | null = null;
+    const { data: byEq } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status')
+      .eq('email', email)
+      .maybeSingle();
+    if (byEq && (byEq as ProfTitularRow).email?.trim()) prof = byEq as ProfTitularRow;
+    if (!prof?.email?.trim()) {
+      const { data: byIlike } = await supabaseServiceRole
+        .from('profiles')
+        .select('id, email, full_name, status')
+        .ilike('email', escapeIlikeExact(email))
+        .maybeSingle();
+      if (byIlike && (byIlike as ProfTitularRow).email?.trim()) prof = byIlike as ProfTitularRow;
+    }
+    if (!prof?.email) {
+      console.log(`${LOG_PREFIX} titular_email sem perfil no Zaploto: ${email.slice(0, 3)}…`);
+      continue;
+    }
+    const em = (prof.email ?? '').trim();
+    if (seen.has(em.toLowerCase())) continue;
+
+    if (ctx.crmBaseUrl && apiKey) {
+      const ok = await consultantHasAccountInBanca(ctx.crmBaseUrl, em, apiKey);
+      if (!ok) {
+        console.log(`${LOG_PREFIX} titular_email CRM≠200 (ignorado): ${em.slice(0, 3)}…`);
+        continue;
+      }
+    } else if (ctx.crmBaseUrl) {
+      console.warn(`${LOG_PREFIX} titular_email sem CRM_API_KEY; incluindo perfil só por match de e-mail: ${em.slice(0, 3)}…`);
+    }
+
+    seen.add(em.toLowerCase());
+    extra.push({
+      id: prof.id,
+      email: em,
+      full_name: ((prof.full_name ?? em).trim() || em),
+      role: roleLabel(prof.status),
+    });
+  }
+
+  if (extra.length === 0) return consultants;
+  console.log(`${LOG_PREFIX} mergeTitularesFromEmails: +${extra.length} consultor(es) pelos e-mails dos logs`);
+  return [...consultants, ...extra].sort((a, b) => {
+    const na = (a.full_name ?? a.email).toLowerCase();
+    const nb = (b.full_name ?? b.email).toLowerCase();
+    return na.localeCompare(nb, 'pt-BR');
+  });
+}
+
 function normalizeBancaUrl(raw: string): string {
   let u = raw.trim();
   u = u.replace(/^https?:\/\//i, '').replace(/\/api\/crm\/?/i, '').replace(/\/+$/, '').trim();
@@ -37,8 +175,8 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 
 /**
  * GET /api/admin/crm/consultants
- * Lista consultores da hierarquia da banca (apenas user_bancas + subordinados vinculados à banca).
- * Query: banca_id (obrigatório), hierarchy_only=0 (opcional), verify_crm=1 (opcional) — se verify_crm=1, filtra apenas consultores que têm conta na banca (CRM total-indicateds-by-consultant 200).
+ * Lista consultores da hierarquia da banca: user_bancas + (com hierarchy_only=0) perfis com enroller em qualquer membro da banca.
+ * Query: banca_id (obrigatório), hierarchy_only=0 — inclui subordinados (enroller na equipe da banca) mesmo sem linha em user_bancas; hierarchy_only=1 (padrão) — só usuários com user_bancas nesta banca. verify_crm=1 (opcional) — se verify_crm=1, filtra apenas consultores que têm conta na banca (CRM total-indicateds-by-consultant 200).
  * all_profiles_for_donor=1 — lista todos os perfis com e-mail (modal consultor doador na aprovação de solicitação); banca_id só valida permissão do admin.
  */
 export async function GET(req: NextRequest) {
@@ -81,19 +219,8 @@ export async function GET(req: NextRequest) {
       return successResponse({ consultants });
     }
 
-    // banca_ids é JSONB (array de UUIDs). Filtro "cs" (contains) exige JSON válido para evitar erro 22P02.
-    const { data: userBancas, error: ubError } = await supabaseServiceRole
-      .from('user_bancas')
-      .select('user_id')
-      .filter('banca_ids', 'cs', JSON.stringify([ctx.bancaId]));
-
-    if (ubError) {
-      console.error(`${LOG_PREFIX} GET user_bancas error:`, ubError);
-      return errorResponse('Erro ao buscar consultores da banca.', 500);
-    }
-
-    const userIds = (userBancas ?? []).map((ub: { user_id: string }) => ub.user_id);
-    console.log(`${LOG_PREFIX} GET user_bancas: ${userBancas?.length ?? 0} rows, unique userIds=${userIds.length}`);
+    const userIds = await getUserIdsOnBanca(ctx.bancaId);
+    console.log(`${LOG_PREFIX} GET user_bancas (resolved): unique userIds=${userIds.length}`);
     if (userIds.length === 0) {
       console.log(`${LOG_PREFIX} GET success: 0 consultants (no users in banca)`);
       return successResponse({ consultants: [] });
@@ -112,7 +239,19 @@ export async function GET(req: NextRequest) {
     }
 
     const list = Array.isArray(profiles) ? profiles : [];
-    const enrollerIds = [...new Set(list.map((p: { enroller?: string | null }) => p.enroller).filter(Boolean))] as string[];
+    const hierarchyOnly = searchParams.get('hierarchy_only') !== '0';
+    const gerenteIdsFromList = list
+      .filter((p: { status?: string | null }) => String(p.status ?? '').toLowerCase() === 'gerente')
+      .map((p: { id: string }) => p.id);
+    /** Com hierarchy_only=0: qualquer perfil com enroller ∈ equipe da banca entra; com 1: só subordinados de gerentes na lista. */
+    const enrollerIdsForSubs = hierarchyOnly ? gerenteIdsFromList : [...new Set(userIds)];
+
+    const enrollerIds = [
+      ...new Set([
+        ...list.map((p: { enroller?: string | null }) => p.enroller).filter(Boolean),
+        ...enrollerIdsForSubs,
+      ]),
+    ] as string[];
     const enrollerNames = new Map<string, string>();
     if (enrollerIds.length > 0) {
       const { data: enrollers } = await supabaseServiceRole
@@ -125,23 +264,17 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const gerenteIds = list.filter((p: { status?: string | null }) => String(p.status ?? '').toLowerCase() === 'gerente').map((p: { id: string }) => p.id);
     const consultoresPorGerente = new Map<string, { id: string; full_name: string; email: string }[]>();
-    const hierarchyOnly = searchParams.get('hierarchy_only') !== '0';
-    if (gerenteIds.length > 0) {
+    if (enrollerIdsForSubs.length > 0) {
       const { data: subordinados } = await supabaseServiceRole
         .from('profiles')
         .select('id, email, full_name, enroller')
-        .in('enroller', gerenteIds)
+        .in('enroller', enrollerIdsForSubs)
         .not('email', 'is', null);
       const subordinadoIds = (subordinados ?? []).map((s: { id: string }) => s.id);
       let idsPermitidos = new Set(subordinadoIds);
       if (hierarchyOnly && subordinadoIds.length > 0) {
-        const { data: subUb } = await supabaseServiceRole
-          .from('user_bancas')
-          .select('user_id')
-          .filter('banca_ids', 'cs', JSON.stringify([ctx.bancaId]));
-        const idsNaBanca = new Set((subUb ?? []).map((u: { user_id: string }) => u.user_id));
+        const idsNaBanca = new Set(userIds);
         idsPermitidos = new Set(subordinadoIds.filter((id: string) => idsNaBanca.has(id)));
       }
       (subordinados ?? []).forEach((s: { id: string; email: string | null; full_name: string | null; enroller: string | null }) => {
@@ -189,10 +322,12 @@ export async function GET(req: NextRequest) {
 
     const idsInList = new Set((consultantsFromList as { id: string }[]).map((c) => c.id));
     const consultantsDosGerentes: { id: string; email: string; full_name: string; role: string; gerente_nome: string }[] = [];
-    for (const gerenteId of gerenteIds) {
-      const gerenteProfile = list.find((p: { id: string }) => p.id === gerenteId);
-      const gerenteNome = gerenteProfile ? ((gerenteProfile.full_name ?? gerenteProfile.email ?? '').trim() || (gerenteProfile.email ?? '')) : enrollerNames.get(gerenteId) ?? 'Gerente';
-      const subs = consultoresPorGerente.get(gerenteId) ?? [];
+    for (const enrollerId of enrollerIdsForSubs) {
+      const gerenteProfile = list.find((p: { id: string }) => p.id === enrollerId);
+      const gerenteNome = gerenteProfile
+        ? ((gerenteProfile.full_name ?? gerenteProfile.email ?? '').trim() || (gerenteProfile.email ?? ''))
+        : enrollerNames.get(enrollerId) ?? 'Equipe';
+      const subs = consultoresPorGerente.get(enrollerId) ?? [];
       for (const sub of subs) {
         if (!sub.email || idsInList.has(sub.id)) continue;
         idsInList.add(sub.id);
@@ -235,7 +370,9 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(`${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (banca ${ctx.bancaId}, ${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} de gerentes)`);
+    console.log(
+      `${LOG_PREFIX} GET success: ${consultants.length} consultant(s) (banca ${ctx.bancaId}, ${consultantsFromList.length} diretos + ${consultantsDosGerentes.length} por enroller; hierarchy_only=${hierarchyOnly ? '1' : '0'})`
+    );
     return successResponse({ consultants });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

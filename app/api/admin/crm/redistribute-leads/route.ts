@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { requireAdminLeadTransferContext } from '@/lib/server/crm/adminLeadTransferContext';
+import { requireAdminLeadTransferContext, isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
 import { executeLeadRedistributionCore, type TransferKind } from '@/lib/server/crm/leadRedistributionCore';
 import { findGerenteUserIdIfEmailIsGerenteOnBanca } from '@/lib/server/crm/gerenteLeadStock';
 import { reserveAdminToGerenteStock } from '@/lib/server/crm/adminToStockReservation';
@@ -31,12 +31,20 @@ const bodySchema = z
     to_gerente_stock_gerente_id: z.string().uuid().optional(),
     leads_ids: z.array(z.union([z.number(), z.string()])).default([]),
     transfer_type: transferTypeEnum.optional().default('TF'),
-    transfer_deadline_days: z.number().int().min(1).max(365).optional().default(10),
+    /** 0 = transferência total / sem expiração (não entra em resolver expiradas). */
+    transfer_deadline_days: z.number().int().min(0).max(365).optional().default(10),
     filters_snapshot: z.record(z.string(), z.unknown()).optional(),
     lead_snapshots: z.array(leadSnapshotSchema).optional(),
     source_transfer_log_id: z.string().uuid().optional(),
     original_source_consultant_email: z.string().email().optional(),
     force_db_only: z.boolean().optional().default(false),
+    /**
+     * Se true e o destino for e-mail de um gerente na banca: repasse padrão no CRM (titular = gerente).
+     * Se false (padrão): mantém o comportamento automático — reserva no estoque do gerente sem chamar o CRM.
+     */
+    gerente_destino_crm_direto: z.boolean().optional().default(false),
+    /** Consultor (CRM) para quem os leads devem ir em «Transferência direta» após reserva no estoque. */
+    stock_crm_target_consultant_email: z.string().email().optional(),
   })
   .refine(
     (data) => !!(data.to_gerente_stock_gerente_id || (data.target_consultant_email && String(data.target_consultant_email).trim())),
@@ -52,6 +60,11 @@ const bodySchema = z
 
 const LOG_PREFIX = '[lead-transfer][redistribute-leads]';
 
+function isCrmDesyncDbOnlyRecovery(filters_snapshot: Record<string, unknown> | null | undefined): boolean {
+  if (filters_snapshot == null || typeof filters_snapshot !== 'object') return false;
+  return (filters_snapshot as Record<string, unknown>)['crm_desync_recovery'] === true;
+}
+
 /**
  * POST /api/admin/crm/redistribute-leads
  * Proxy para CRM: redistribuir leads de um consultor para outro.
@@ -65,6 +78,9 @@ export async function POST(req: NextRequest) {
       source_consultant_email: body?.source_consultant_email,
       target_consultant_email: body?.target_consultant_email,
       to_gerente_stock_gerente_id: body?.to_gerente_stock_gerente_id,
+      gerente_destino_crm_direto: body?.gerente_destino_crm_direto === true,
+      force_db_only: body?.force_db_only === true,
+      source_transfer_log_id: body?.source_transfer_log_id ?? null,
       leads_ids_count: Array.isArray(body?.leads_ids) ? body.leads_ids.length : 0,
     });
 
@@ -82,7 +98,13 @@ export async function POST(req: NextRequest) {
     console.log(`${LOG_PREFIX} POST context: userId=${ctx.userId}, bancaId=${ctx.bancaId}, crmBaseUrl=${ctx.crmBaseUrl}`);
 
     let toGerenteStockGerenteId = parsed.data.to_gerente_stock_gerente_id;
-    if (!toGerenteStockGerenteId && parsed.data.target_consultant_email?.trim()) {
+    const repasseFromResolvedLog = Boolean(parsed.data.source_transfer_log_id?.trim());
+    if (
+      !toGerenteStockGerenteId &&
+      parsed.data.target_consultant_email?.trim() &&
+      !parsed.data.gerente_destino_crm_direto &&
+      !repasseFromResolvedLog
+    ) {
       const autoGerenteId = await findGerenteUserIdIfEmailIsGerenteOnBanca(parsed.data.target_consultant_email.trim(), ctx.bancaId);
       if (autoGerenteId) {
         toGerenteStockGerenteId = autoGerenteId;
@@ -90,6 +112,14 @@ export async function POST(req: NextRequest) {
           `${LOG_PREFIX} POST destino é gerente na banca → reserva lógica no estoque (admin_to_gerente_stock) gerente_id=${autoGerenteId}`
         );
       }
+    }
+    if (parsed.data.gerente_destino_crm_direto && parsed.data.target_consultant_email?.trim()) {
+      console.log(`${LOG_PREFIX} POST gerente_destino_crm_direto=true — repasse no CRM para o e-mail do gerente (sem auto-estoque).`);
+    }
+    if (repasseFromResolvedLog && parsed.data.target_consultant_email?.trim() && !toGerenteStockGerenteId) {
+      console.log(
+        `${LOG_PREFIX} POST source_transfer_log_id presente — repasse de transferência resolvida; não auto-encaminhar para estoque do gerente.`
+      );
     }
 
     /** Fluxo reserva lógica: admin envia ao estoque do gerente SEM chamar o CRM.
@@ -106,6 +136,29 @@ export async function POST(req: NextRequest) {
       }
       const gerenteEmail = String(gerenteProfile.email ?? '').trim().toLowerCase();
 
+      const baseFs =
+        parsed.data.filters_snapshot != null &&
+        typeof parsed.data.filters_snapshot === 'object' &&
+        !Array.isArray(parsed.data.filters_snapshot)
+          ? { ...(parsed.data.filters_snapshot as Record<string, unknown>) }
+          : {};
+      const fromBody = (parsed.data.stock_crm_target_consultant_email ?? '').trim().toLowerCase();
+      const fromNested = String(baseFs.stock_crm_target_consultant_email ?? '').trim().toLowerCase();
+      const stockCrmTarget = fromBody || fromNested;
+      if (fromBody) {
+        baseFs.stock_crm_target_consultant_email = fromBody;
+      }
+      if (stockCrmTarget) {
+        const src = parsed.data.source_consultant_email.trim().toLowerCase();
+        if (stockCrmTarget === src) {
+          return errorResponse('Consultor de destino (CRM) do estoque deve ser diferente do consultor de origem.', 400);
+        }
+        const ok = await isConsultantInBanca(ctx.bancaId, stockCrmTarget);
+        if (!ok) {
+          return errorResponse('O consultor de destino (CRM) informado para o estoque não está cadastrado nesta banca.', 400);
+        }
+      }
+
       const reservation = await reserveAdminToGerenteStock({
         userId: ctx.userId,
         bancaId: ctx.bancaId,
@@ -115,7 +168,7 @@ export async function POST(req: NextRequest) {
         leadsIds: parsed.data.leads_ids,
         transferType: parsed.data.transfer_type,
         transferDeadlineDays: parsed.data.transfer_deadline_days,
-        filtersSnapshot: parsed.data.filters_snapshot ?? null,
+        filtersSnapshot: Object.keys(baseFs).length > 0 ? baseFs : parsed.data.filters_snapshot ?? null,
         leadSnapshots: parsed.data.lead_snapshots,
         sourceTransferLogId: parsed.data.source_transfer_log_id?.trim() || null,
       });
@@ -145,6 +198,23 @@ export async function POST(req: NextRequest) {
       return errorResponse('Consultor origem e destino devem ser diferentes.', 400);
     }
 
+    /**
+     * Repasse direto (consultor ou gerente com gerente_destino_crm_direto) deve atualizar o CRM (titular TRANSFERIDO).
+     * Só o envio para estoque lógico (`to_gerente_stock_gerente_id`) fica sem CRM.
+     * `force_db_only` fica restrito à recuperação de desincronização (UI envia filters_snapshot.crm_desync_recovery).
+     */
+    const desyncRecovery = isCrmDesyncDbOnlyRecovery(filters_snapshot as Record<string, unknown> | null | undefined);
+    let effectiveForceDbOnly = Boolean(parsed.data.force_db_only) && desyncRecovery;
+    /** Repasse de transferência resolvida ou CRM direto exige chamada ao CRM — nunca force_db_only. */
+    if (parsed.data.gerente_destino_crm_direto || repasseFromResolvedLog) {
+      effectiveForceDbOnly = false;
+    }
+    if (parsed.data.force_db_only && !effectiveForceDbOnly) {
+      console.warn(
+        `${LOG_PREFIX} force_db_only ignorado: repasse direto/resolvido exige CRM; omitir CRM só em «Forçar registro (apenas sistema)» em transferência manual sem source_transfer_log_id, ou em reserva no estoque do gerente.`
+      );
+    }
+
     const core = await executeLeadRedistributionCore({
       ctx: { userId: ctx.userId, bancaId: ctx.bancaId, crmBaseUrl: ctx.crmBaseUrl },
       transferKind,
@@ -157,7 +227,7 @@ export async function POST(req: NextRequest) {
       lead_snapshots: parsed.data.lead_snapshots,
       source_transfer_log_id: parsed.data.source_transfer_log_id,
       original_source_consultant_email: parsed.data.original_source_consultant_email,
-      force_db_only: parsed.data.force_db_only,
+      force_db_only: effectiveForceDbOnly,
     });
 
     if (!core.ok) {

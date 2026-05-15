@@ -374,6 +374,42 @@ async function terminateMaturationJobsInfrastructureFailure(
 }
 
 /**
+ * Garante que o plano virgem usado pelos participant jobs mesh existe e está ativo.
+ * Deve rodar ANTES de failRunningMaturationJobsWithInactivePlans para que o plano
+ * nunca seja encontrado inativo naquela checagem e os jobs não sejam mortos.
+ */
+async function ensureMeshVirginPlanActive(supabase: SupabaseClient): Promise<void> {
+  const { data: existing } = await supabase
+    .from('maturation_plans')
+    .select('id, is_active')
+    .eq('id', VIRGIN_AUTO_MATURATION_PLAN_ID)
+    .maybeSingle();
+
+  if (!existing) {
+    const { error } = await supabase.from('maturation_plans').insert({
+      id: VIRGIN_AUTO_MATURATION_PLAN_ID,
+      name: 'Plano Mesh (auto)',
+      description: 'Plano interno do ciclo mesh. Não editar.',
+      is_active: true,
+    });
+    if (error && !error.message?.includes('duplicate')) {
+      console.warn(`${LOG_MESH} Falha ao criar plano virgem: ${error.message}`);
+    } else if (!error) {
+      console.log(`${LOG_MESH} Plano virgem (${VIRGIN_AUTO_MATURATION_PLAN_ID}) criado automaticamente.`);
+    }
+    return;
+  }
+
+  if (existing.is_active !== true) {
+    await supabase
+      .from('maturation_plans')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', VIRGIN_AUTO_MATURATION_PLAN_ID);
+    console.log(`${LOG_MESH} Plano virgem reativado automaticamente.`);
+  }
+}
+
+/**
  * Jobs em running cujo plano foi desativado não são mais elegíveis ao claim (migration),
  * mas ficariam presos para sempre. Finaliza em lote no início do tick.
  */
@@ -1748,9 +1784,10 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
 // ─── Mesh cycles ─────────────────────────────────────────────────────────────
 /** Logs do maturador mesh (campanhas contínuas auto-maturadas). */
 const LOG_MESH = '[MATURADOR-MESH]';
-// Intervalo aleatório entre ciclos mesh: 5–15 min (ignoramos o valor fixo do banco)
-const MESH_CYCLE_INTERVAL_MIN_SEC = 5 * 60;  // 5 min
-const MESH_CYCLE_INTERVAL_MAX_SEC = 15 * 60; // 15 min
+// Intervalo entre ciclos mesh: 1–3 min aleatório.
+// Separado do warmup de 15 min para instâncias novas (SEND_DELAY_MS no runMeshCycle).
+const MESH_CYCLE_INTERVAL_MIN_SEC = 60;       // 1 min
+const MESH_CYCLE_INTERVAL_MAX_SEC = 3 * 60;   // 3 min
 const MESH_MAX_SENDERS_PER_CYCLE = 5;
 const MESH_MIN_SENDERS_PER_CYCLE = 1;
 
@@ -1998,6 +2035,21 @@ const GRUPO_LINES: string[] = [
  * Processa APENAS 1 instância por tick para não consumir o orçamento da maturação mútua.
  */
 export async function runGroupMessaging(supabase: SupabaseClient): Promise<number> {
+  // Só envia ao grupo se houver campanha mesh ativa (running).
+  // Quando o mesh está pausado, o envio ao grupo também é suspenso.
+  const { data: runningCtrl } = await supabase
+    .from('maturation_jobs')
+    .select('id')
+    .eq('mesh_is_controller', true)
+    .eq('status', 'running')
+    .limit(1)
+    .maybeSingle();
+
+  if (!runningCtrl) {
+    logVerbose(`${LOG_GRUPO} Mesh pausado ou sem campanha ativa — envio ao grupo suspenso`);
+    return 0;
+  }
+
   const now = new Date();
 
   const { data: rows, error } = await supabase
@@ -2010,9 +2062,11 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
         id,
         instance_name,
         status,
+        maturation_type,
         evolution_apis:evolution_api_id ( base_url, api_key_global )
       )
     `)
+    .eq('is_active', true)
     .order('group_msg_next_at', { ascending: true, nullsFirst: true });
 
   if (error) {
@@ -2038,6 +2092,8 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
     if (new Date(row.group_msg_next_at).getTime() > now.getTime()) continue;
 
     const ei = Array.isArray(row.evolution_instances) ? row.evolution_instances[0] : row.evolution_instances;
+    // Apenas instâncias virgem enviam ao grupo de maturação
+    if (ei?.maturation_type !== 'virgem') continue;
     const api = Array.isArray(ei?.evolution_apis) ? ei.evolution_apis[0] : ei?.evolution_apis;
     const instanceName: string = ei?.instance_name ?? '';
     const baseUrl: string = api?.base_url ?? '';
@@ -2189,11 +2245,13 @@ async function autoEnrollMeshParticipants(
   );
   if (eligible.length === 0) return;
 
-  // Quem já participa
+  // Quem já participa ATIVAMENTE (running ou paused).
+  // Jobs abortados/failed/finished não contam: a instância pode se re-inscrever.
   const { data: existingJobs } = await supabase
     .from('maturation_jobs')
     .select('id, master_instance_id, master_instances!inner(evolution_instance_id)')
-    .eq('campaign_id', controller.campaign_id);
+    .eq('campaign_id', controller.campaign_id)
+    .in('status', ['running', 'paused']);
 
   const enrolledEvoIds = new Set<string>();
   for (const j of (existingJobs || []) as any[]) {
@@ -2338,8 +2396,9 @@ async function runMeshCycle(
       .from('maturation_jobs')
       .update({ mesh_next_cycle_at: nextCycleAt, updated_at: now.toISOString() })
       .eq('id', controller.id);
+    const totalJobs = (participantJobs as any[]).length;
     console.warn(
-      `${LOG_MESH} ⚠️ campaign=${controller.campaign_id}: apenas ${eligible.length} instância(s) conectada(s) (mínimo 2), ciclo pulado`
+      `${LOG_MESH} ⚠️ campaign=${controller.campaign_id}: ${eligible.length} instância(s) conectada(s) de ${totalJobs} job(s) running — mínimo 2 para ciclo. Verifique se as instâncias estão conectadas e são do tipo virgem.`
     );
     return false;
   }
@@ -2559,6 +2618,11 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
 
   // Fase 0: Recuperar steps travados em 'processing' de ticks anteriores
   await recoverStuckSteps(supabase);
+
+  // Garante o plano virgem ANTES de failRunningMaturationJobsWithInactivePlans.
+  // Se o plano não existir ou estiver inativo, aquela função mataria todos os
+  // participant jobs do mesh a cada tick, impedindo a maturação mútua.
+  await ensureMeshVirginPlanActive(supabase);
 
   await failRunningMaturationJobsWithInactivePlans(supabase);
 

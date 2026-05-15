@@ -7,8 +7,10 @@
  *
  * Retorna { done, contact, success, error, current_index, total_count, next_delay_seconds, ... }
  *
- * Se todas as instâncias da rotação estiverem offline, retorna { instanceDown: true }
- * sem avançar índice nem passo. Com várias instâncias, tenta as demais antes de pausar.
+ * Se todas as instâncias da rotação estiverem offline, retorna { instanceDown: true },
+ * define o job como `paused` e não avança índice. Com várias instâncias, tenta as demais;
+ * em "connection closed" remove a instância caída de `broadcast_instances` e segue nas outras.
+ * `evolution_session_dropped` indica que a UI deve atualizar a lista de canais (reconectar).
  */
 
 import { NextRequest } from 'next/server';
@@ -16,13 +18,17 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
-import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import {
+  maybeMarkEvolutionInstanceDisconnected,
+  messageIndicatesEvolutionSessionDropped,
+} from '@/lib/evolution/mark-instance-disconnected';
 import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
 import { getSequenceDelaySeconds, parseBroadcastSteps } from '@/lib/chat/broadcast-sequence';
 import {
   broadcastSendErrorIsInstanceUnreachable,
   orderedBroadcastInstanceIds,
 } from '@/lib/chat/broadcast-instance-failover';
+import { publicBroadcastSendErrorMessage } from '@/lib/chat/broadcast-send-user-message';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -84,11 +90,12 @@ export async function POST(
     }
 
     const rawRotation = job.broadcast_instances as { id: string; name?: string }[] | null;
-    const rotation =
+    const baseRotation: { id: string; name?: string }[] =
       Array.isArray(rawRotation) && rawRotation.length > 0
-        ? rawRotation
-        : [{ id: job.instance_id as string, name: job.instance_name as string }];
-    const pick = rotation[idx % rotation.length];
+        ? rawRotation.map((r) => ({ id: r.id, name: r.name }))
+        : [{ id: job.instance_id as string, name: job.instance_name as string | undefined }];
+    let effectiveRotation = [...baseRotation];
+    const pick = effectiveRotation[idx % Math.max(1, effectiveRotation.length)];
     const instanceUuid = pick?.id || job.instance_id;
 
     const contact = contacts[idx];
@@ -125,8 +132,10 @@ export async function POST(
 
     const msgConfig = steps[stepIdx];
 
-    const orderedIds = orderedBroadcastInstanceIds(rotation, idx);
+    const orderedIds = orderedBroadcastInstanceIds(effectiveRotation, idx);
     const tryInstanceIds = orderedIds.length > 0 ? orderedIds : [String(instanceUuid)].filter(Boolean);
+    const singleInstanceBroadcast = baseRotation.length <= 1;
+    let evolutionSessionDropped = false;
 
     type InstanceRow = {
       id: string;
@@ -144,6 +153,8 @@ export async function POST(
     let sawNonUnreachableError = false;
 
     for (const tryId of tryInstanceIds) {
+      if (!effectiveRotation.some((r) => r.id === tryId)) continue;
+
       const { data: inst } = await supabaseServiceRole
         .from('evolution_instances')
         .select('id, instance_name, apikey, phone_number, workspace_id, user_id, evolution_apis(base_url)')
@@ -151,14 +162,14 @@ export async function POST(
         .single();
 
       if (!inst) {
-        if (tryInstanceIds.length === 1) return errorResponse('Instância não encontrada', 404);
+        if (singleInstanceBroadcast) return errorResponse('Instância não encontrada', 404);
         continue;
       }
 
       const evolutionApi = Array.isArray(inst.evolution_apis) ? inst.evolution_apis[0] : inst.evolution_apis;
 
       if (!evolutionApi?.base_url || !inst.apikey) {
-        if (tryInstanceIds.length === 1) return errorResponse('Configuração incompleta da Evolution API', 400);
+        if (singleInstanceBroadcast) return errorResponse('Configuração incompleta da Evolution API', 400);
         continue;
       }
 
@@ -186,17 +197,32 @@ export async function POST(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         lastError = msg;
+        const sessionDropped = messageIndicatesEvolutionSessionDropped(msg);
+        if (sessionDropped) evolutionSessionDropped = true;
         await maybeMarkEvolutionInstanceDisconnected(supabaseServiceRole, inst.id, msg, 'chat/broadcast');
         if (!broadcastSendErrorIsInstanceUnreachable(msg)) {
           sawNonUnreachableError = true;
           instance = inst as InstanceRow;
           break;
         }
-        if (tryInstanceIds.length === 1) break;
+        if (sessionDropped && effectiveRotation.length > 1) {
+          effectiveRotation = effectiveRotation.filter((r) => r.id !== tryId);
+          await supabaseServiceRole
+            .from('chat_broadcasts')
+            .update({
+              broadcast_instances: effectiveRotation,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', jobId);
+          continue;
+        }
+        if (singleInstanceBroadcast) break;
+        continue;
       }
     }
 
     const sendError = lastError;
+    const displaySendError = publicBroadcastSendErrorMessage(sendError);
 
     if (!evolutionRes || !instance) {
       if (sawNonUnreachableError && sendError) {
@@ -205,7 +231,7 @@ export async function POST(
           .update({
             current_index: idx + 1,
             message_step_index: 0,
-            last_error: sendError,
+            last_error: displaySendError || sendError,
             updated_at: new Date().toISOString(),
           })
           .eq('id', jobId);
@@ -216,7 +242,8 @@ export async function POST(
           total_count: job.total_count,
           message_step_index: 0,
           message_steps_total: steps.length,
-          error: sendError,
+          error: displaySendError || sendError,
+          evolution_session_dropped: evolutionSessionDropped,
           ...delayBetweenContacts(),
         });
       }
@@ -224,7 +251,11 @@ export async function POST(
       if (sendError && broadcastSendErrorIsInstanceUnreachable(sendError)) {
         await supabaseServiceRole
           .from('chat_broadcasts')
-          .update({ last_error: sendError, updated_at: new Date().toISOString() })
+          .update({
+            status: 'paused',
+            last_error: sendError,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', jobId);
         return successResponse({
           done: false,
@@ -234,10 +265,11 @@ export async function POST(
           message_step_index: stepIdx,
           message_steps_total: steps.length,
           error: sendError,
+          evolution_session_dropped: evolutionSessionDropped,
         }, 'Todas as instâncias da rotação indisponíveis — disparo pausado no mesmo número');
       }
 
-      if (!sendError && tryInstanceIds.length > 1) {
+      if (!sendError && !singleInstanceBroadcast) {
         return errorResponse('Nenhuma instância válida na rotação', 400);
       }
 
@@ -250,7 +282,7 @@ export async function POST(
         .update({
           current_index: idx + 1,
           message_step_index: 0,
-          last_error: sendError,
+          last_error: displaySendError || sendError,
           updated_at: new Date().toISOString(),
         })
         .eq('id', jobId);
@@ -261,7 +293,8 @@ export async function POST(
         total_count: job.total_count,
         message_step_index: 0,
         message_steps_total: steps.length,
-        error: sendError,
+        error: displaySendError || sendError,
+        evolution_session_dropped: evolutionSessionDropped,
         ...delayBetweenContacts(),
       });
     }
@@ -338,6 +371,7 @@ export async function POST(
         message_step_index: nextStep,
         message_steps_total: steps.length,
         same_contact_continue: true,
+        evolution_session_dropped: evolutionSessionDropped,
         ...delayBetweenSequence(),
       }, 'Mensagem enviada (sequência)');
     }
@@ -367,6 +401,7 @@ export async function POST(
       message_step_index: 0,
       message_steps_total: steps.length,
       same_contact_continue: false,
+      evolution_session_dropped: evolutionSessionDropped,
       ...delayBetweenContacts(),
     }, isDone ? 'Disparo concluído' : 'Mensagem enviada');
   } catch (err) {

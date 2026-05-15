@@ -29,6 +29,7 @@ export type ResolveContext = {
 };
 
 export function isTransferExpired(createdAt: string | null | undefined, deadlineDays?: number | null): boolean {
+  if (deadlineDays === 0) return false;
   if (!createdAt) return true;
   const days = deadlineDays != null && deadlineDays >= 1 ? deadlineDays : DEFAULT_DEADLINE_DAYS;
   const createdDate = new Date(createdAt);

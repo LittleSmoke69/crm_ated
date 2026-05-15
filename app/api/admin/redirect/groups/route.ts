@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
       const { data: userBancasRows, error: userBancasErr } = await supabaseServiceRole
         .from('user_bancas')
         .select('user_id')
-        .contains('banca_ids', [project.banca_id]);
+        .filter('banca_ids', 'cs', JSON.stringify([project.banca_id]));
       if (!userBancasErr) {
         userBancaUserIds = Array.from(
           new Set((userBancasRows ?? []).map((row: { user_id?: string | null }) => row.user_id).filter(Boolean))

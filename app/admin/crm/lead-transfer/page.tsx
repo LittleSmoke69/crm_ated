@@ -258,6 +258,96 @@ function sortMoveLeadsTfLabels(types: Set<string>): string[] {
     return ia - ib;
   });
 }
+/** Chave estável para saber se os leads do modal já foram carregados para o conjunto de logs aberto. */
+function stableResolvedLogsKey(logs: Array<{ log_id: string }>): string {
+  return [...new Set(logs.map((l) => String(l.log_id ?? '').trim()).filter(Boolean))].sort().join('|');
+}
+
+/** Chave única para casar logs entre API, formulário e repasse (evita falha silenciosa na reconciliação). */
+function normalizeTransferLogId(id: unknown): string {
+  return String(id ?? '').trim().toLowerCase();
+}
+
+/** Linha da API lead-trace com contagens por status (pending costuma indicar inconsistência / desync). */
+function leadTraceTimelineRowHasAlert(t: { status_breakdown?: Record<string, number> }): boolean {
+  const b = t.status_breakdown ?? {};
+  return (b.pending ?? 0) > 0;
+}
+
+/** Resposta de GET /api/admin/crm/transfer-logs/lead-trace (modal Mover leads e aba TP). */
+type LeadTracePanoramaPayload = {
+  timeline: Array<{
+    log_id: string;
+    created_at: string | null;
+    source_consultant_email: string | null;
+    target_consultant_email: string | null;
+    transfer_type: string | null;
+    leads_total: number;
+    entries_loaded: number;
+    status_breakdown: Record<string, number>;
+  }>;
+  lead_history: Array<{
+    lead_id: string;
+    log_id: string;
+    log_created_at: string | null;
+    source_consultant_email: string | null;
+    target_consultant_email: string | null;
+    resolution_status: string | null;
+    resolved_at: string | null;
+  }>;
+  current_holders: Array<{ email: string; count: number; statuses: string[] }>;
+};
+
+type MoveLeadsResolvedListRow = {
+  log_id: string;
+  banca_id: string;
+  transfer_type: string;
+  disponivel: number;
+  source_consultant_email: string;
+  target_consultant_email: string;
+  source_consultant_name?: string | null;
+};
+
+/**
+ * Após repasse, GET resolved-list pode responder antes do Postgres refletir `repassado` nas entries.
+ * Garante que, por `log_id`, o disponível exibido não fique acima do máximo possível após o movimento
+ * que acabou de ocorrer (evita re-marcar a mesma origem com contagem inflada).
+ */
+function reconcileResolvedListAfterRepatriate(
+  serverRows: MoveLeadsResolvedListRow[],
+  preMoveAvailByLogId: Map<string, number>,
+  movedCountByLogId: Map<string, number>
+): MoveLeadsResolvedListRow[] {
+  return serverRows
+    .map((r) => {
+      const nid = normalizeTransferLogId(r.log_id);
+      const moved = movedCountByLogId.get(nid);
+      if (moved == null) return r;
+      const pre = preMoveAvailByLogId.get(nid);
+      if (pre == null) {
+        // Sem snapshot (log fora do recorte carregado): ainda assim reduz do retorno do servidor para não manter “fantasma”.
+        return { ...r, disponivel: Math.max(0, r.disponivel - moved) };
+      }
+      const cap = Math.max(0, pre - moved);
+      return { ...r, disponivel: Math.min(r.disponivel, cap) };
+    })
+    .filter((r) => r.disponivel > 0);
+}
+
+/** Remove linhas de log totalmente esgotadas neste repasse (servidor ainda pode devolver disponível obsoleto). */
+function stripFullyRepatriatedResolvedLogs(
+  rows: MoveLeadsResolvedListRow[],
+  preMoveAvailByLogId: Map<string, number>,
+  movedCountByLogId: Map<string, number>
+): MoveLeadsResolvedListRow[] {
+  return rows.filter((r) => {
+    const nid = normalizeTransferLogId(r.log_id);
+    const mv = movedCountByLogId.get(nid);
+    const pre = preMoveAvailByLogId.get(nid);
+    if (mv != null && pre != null && mv >= pre) return false;
+    return true;
+  });
+}
 /** Heurística: muitas transferências resolvidas em TF vs TF1 → recomendar filtro TF1 (próximo passo do funil). */
 const MOVE_LEADS_REC_MIN_TF_LOGS = 5;
 const MOVE_LEADS_REC_TF_OVER_TF1 = 3;
@@ -296,6 +386,7 @@ const NUMERIC_FILTER_OPTIONS = [
 
 /** Retorna { daysLeft, expired } para o prazo de transferência a partir da data. Se deadlineDays for informado (ex.: do log), usa esse valor; senão usa o padrão 10. */
 function getTransferDeadlineInfo(createdAt: string | null | undefined, deadlineDays?: number | null): { daysLeft: number; expired: boolean } {
+  if (deadlineDays === 0) return { daysLeft: 9999, expired: false };
   if (!createdAt) return { daysLeft: 0, expired: true };
   const days = deadlineDays != null && deadlineDays >= 1 ? deadlineDays : DAYS_DEADLINE_TRANSFER;
   const createdDate = new Date(createdAt);
@@ -308,6 +399,29 @@ function getTransferDeadlineInfo(createdAt: string | null | undefined, deadlineD
   const daysLeft = Math.max(0, days - diffDays);
   const expired = diffDays >= days;
   return { daysLeft, expired };
+}
+
+/**
+ * Pacotes que costumam exigir acompanhamento: conversão fora do prazo (expirada) ou reserva no estoque do gerente
+ * (admin → estoque) ainda com pendência ou em estoque após o fim do prazo.
+ */
+function isTransferHistoryProblemLog(log: Record<string, unknown>): boolean {
+  const resolution = String((log as { resolution_status_log?: string }).resolution_status_log ?? '');
+  if (resolution === 'expirada') return true;
+
+  const kind = String((log as { transfer_kind?: string }).transfer_kind ?? 'standard');
+  if (kind !== 'admin_to_gerente_stock') return false;
+
+  const stockStatus = String((log as { stock_status_log?: string }).stock_status_log ?? 'none');
+  const pending = Number((log as { stock_pending_count?: number }).stock_pending_count ?? 0);
+  const deadline = getTransferDeadlineInfo(
+    (log.created_at ?? '') as string,
+    (log as { deadline_days?: number }).deadline_days
+  );
+  if (!deadline.expired) return false;
+  if (stockStatus === 'em_estoque') return true;
+  if (pending > 0) return true;
+  return false;
 }
 
 /** Snapshot para POST redistribute: prioriza CRM (name/last_name/email); senão usa lead_* gravados na entry. */
@@ -340,6 +454,32 @@ function buildLeadSnapshotForRedistribute(e: Record<string, unknown>, leadId: st
   };
 }
 
+/** Destino CRM planejado na reserva admin→estoque (ex.: recebedor da solicitação). */
+function getStockCrmPlannedTargetFromLog(log: { filters_snapshot?: unknown } | null | undefined): string {
+  const fs = log?.filters_snapshot;
+  if (fs == null || typeof fs !== 'object' || Array.isArray(fs)) return '';
+  const v = String((fs as { stock_crm_target_consultant_email?: string }).stock_crm_target_consultant_email ?? '').trim().toLowerCase();
+  return v.includes('@') ? v : '';
+}
+
+function getStockDirectCrmLastTargetFromLog(log: { filters_snapshot?: unknown } | null | undefined): string {
+  const fs = log?.filters_snapshot;
+  if (fs == null || typeof fs !== 'object' || Array.isArray(fs)) return '';
+  const v = String((fs as { stock_direct_crm_target_email?: string }).stock_direct_crm_target_email ?? '').trim().toLowerCase();
+  return v.includes('@') ? v : '';
+}
+
+/** Coluna «Destino» do log (admin→estoque): consultor quando diferente da origem. */
+function getStockCrmTargetFromLogTargetColumn(
+  log: { transfer_kind?: string; target_consultant_email?: string | null; source_consultant_email?: string | null } | null | undefined
+): string {
+  if (!log || String(log.transfer_kind ?? '').trim() !== 'admin_to_gerente_stock') return '';
+  const t = String(log.target_consultant_email ?? '').trim().toLowerCase();
+  const s = String(log.source_consultant_email ?? '').trim().toLowerCase();
+  if (!t.includes('@') || t === s) return '';
+  return t;
+}
+
 /** Legível na pesquisa por e-mail: normal / expirada / resolvida / estoque / devolução. */
 function getPacoteEstadoHistoricoLabel(log: Record<string, unknown>): string {
   if (log.devolvido_at) return 'Devolvido ao consultor de origem';
@@ -357,6 +497,19 @@ function getPacoteEstadoHistoricoLabel(log: Record<string, unknown>): string {
     if (stock === 'cancelado_total') return 'Reserva de estoque cancelada';
     if (stock === 'cancelado_parcial') return 'Reserva parcialmente cancelada';
     return `Estoque: ${stock}`;
+  }
+
+  if (kind.trim() === 'gerente_stock_to_consultant') {
+    if (stock === 'repasse_estoque_revertido') {
+      return 'Repasse estoque → consultor revertido (CRM e estoque alinhados ao doador quando aplicável)';
+    }
+    const gfs = log.filters_snapshot;
+    if (gfs != null && typeof gfs === 'object' && !Array.isArray(gfs)) {
+      const ra = String((gfs as { reversed_at?: unknown }).reversed_at ?? '').trim();
+      if (ra) {
+        return 'Repasse estoque → consultor revertido (CRM e estoque alinhados ao doador quando aplicável)';
+      }
+    }
   }
 
   const rs = log.resolution_status_log as string | undefined;
@@ -990,6 +1143,8 @@ export default function AdminLeadTransferPage() {
   /** Modal Mover leads: pesquisa e filtro por tipo TF nas transferências resolvidas */
   const [moveLeadsModalResolvedSearch, setMoveLeadsModalResolvedSearch] = useState('');
   const [moveLeadsModalTfFilter, setMoveLeadsModalTfFilter] = useState<'all' | 'TF' | 'TF1' | 'TF2' | 'TF3'>('all');
+  /** No modal Mover leads: e-mails (lowercase) marcados para carregar várias origens no mesmo envio */
+  const [moveLeadsModalOriginPickKeys, setMoveLeadsModalOriginPickKeys] = useState<string[]>([]);
   const [resolvedList, setResolvedList] = useState<
     Array<{
       log_id: string;
@@ -1001,6 +1156,10 @@ export default function AdminLeadTransferPage() {
       source_consultant_name?: string | null;
     }>
   >([]);
+  const resolvedListRef = useRef(resolvedList);
+  useEffect(() => {
+    resolvedListRef.current = resolvedList;
+  }, [resolvedList]);
   const [loadingResolvedList, setLoadingResolvedList] = useState(false);
   const [moveLeadsSelectedLog, setMoveLeadsSelectedLog] = useState<{
     log_id: string;
@@ -1021,13 +1180,32 @@ export default function AdminLeadTransferPage() {
   const [moveLeadsPreselectRequestId, setMoveLeadsPreselectRequestId] = useState<string | null>(null);
   /** Consultor de origem (doador) da transferência selecionada — também usado no seletor da seção Solicitações */
   const [moveLeadsSelectedSourceEmail, setMoveLeadsSelectedSourceEmail] = useState('');
-  const [moveLeadsEntries, setMoveLeadsEntries] = useState<Array<{ lead_id: string; name?: string | null; phone?: string | null; resolution_status?: string }>>([]);
+  const [moveLeadsEntries, setMoveLeadsEntries] = useState<
+    Array<{ lead_id: string; name?: string | null; phone?: string | null; resolution_status?: string; source_log_id: string }>
+  >([]);
   const [loadingMoveLeadsEntries, setLoadingMoveLeadsEntries] = useState(false);
   /**
-   * `log_id` cujo fetch de entries já terminou e foi aplicado a `moveLeadsEntries`.
-   * O card "Esta transferência tem…" só aparece quando bate com `moveLeadsSelectedLog.log_id`.
+   * Chave estável (`stableResolvedLogsKey`) dos logs cujos entries já foram carregados em `moveLeadsEntries`.
+   * Deve coincidir com a chave de `moveLeadsOpenLogRows` para habilitar confirmar.
    */
-  const [moveLeadsEntriesLoadedForLogId, setMoveLeadsEntriesLoadedForLogId] = useState<string | null>(null);
+  const [moveLeadsEntriesLoadedKey, setMoveLeadsEntriesLoadedKey] = useState<string | null>(null);
+  /** Linhas de transferência resolvida abertas ao escolher origem (uma ou várias agregadas). */
+  const [moveLeadsOpenLogRows, setMoveLeadsOpenLogRows] = useState<(typeof resolvedList)[number][]>([]);
+  /** Subconjunto de `log_id` incluído no repasse (padrão: todas as linhas abertas). */
+  const [moveLeadsIncludedLogIds, setMoveLeadsIncludedLogIds] = useState<string[]>([]);
+  const moveLeadsIncludedLogIdSet = useMemo(
+    () => new Set(moveLeadsIncludedLogIds.map((id) => String(id).trim()).filter(Boolean)),
+    [moveLeadsIncludedLogIds]
+  );
+  const moveLeadsEntriesForMove = useMemo(
+    () =>
+      moveLeadsEntries.filter((e) => {
+        const lid = String(e.source_log_id ?? '').trim();
+        return lid.length > 0 && moveLeadsIncludedLogIdSet.has(lid);
+      }),
+    [moveLeadsEntries, moveLeadsIncludedLogIdSet]
+  );
+  const moveLeadsOpenLogsStableKey = useMemo(() => stableResolvedLogsKey(moveLeadsOpenLogRows), [moveLeadsOpenLogRows]);
   const moveLeadsOpenFormGenRef = useRef(0);
   const [moveLeadsTargetEmail, setMoveLeadsTargetEmail] = useState('');
   const [moveLeadsTransferType, setMoveLeadsTransferType] = useState<'TF' | 'TF1' | 'TF2' | 'TF3'>('TF');
@@ -1056,29 +1234,98 @@ export default function AdminLeadTransferPage() {
     current_holders: Array<{ email: string; count: number; statuses: string[] }>;
   } | null>(null);
   const [moveLeadsTraceLoading, setMoveLeadsTraceLoading] = useState(false);
-  const [moveLeadsConsultants, setMoveLeadsConsultants] = useState<Array<{ id?: string; email?: string; full_name?: string }>>([]);
+  /** Panorama (titular do lote): timeline ampla no modal — independente do banner de desync */
+  const [moveLeadsPanoramaData, setMoveLeadsPanoramaData] = useState<LeadTracePanoramaPayload | null>(null);
+  const [moveLeadsPanoramaLoading, setMoveLeadsPanoramaLoading] = useState(false);
+  /** Panorama na aba (TP): titular escolhido na grelha por banca + e-mail (independente do modal Mover leads). */
+  const [tpPanoramaSelection, setTpPanoramaSelection] = useState<{ banca_id: string; titular_email: string } | null>(null);
+  const [tpPanoramaData, setTpPanoramaData] = useState<LeadTracePanoramaPayload | null>(null);
+  const [tpPanoramaLoading, setTpPanoramaLoading] = useState(false);
+  const moveLeadsPanoramaAlertRows = useMemo(() => {
+    const tl = moveLeadsPanoramaData?.timeline;
+    if (!Array.isArray(tl)) return [];
+    const included = moveLeadsIncludedLogIdSet;
+    const hasSessionProblems = problematicLeadIds.size > 0;
+    return tl.filter((t) => {
+      if (leadTraceTimelineRowHasAlert(t)) return true;
+      if (hasSessionProblems && included.has(t.log_id)) return true;
+      return false;
+    });
+  }, [moveLeadsPanoramaData?.timeline, moveLeadsIncludedLogIdSet, problematicLeadIds]);
+  const [moveLeadsConsultants, setMoveLeadsConsultants] = useState<Array<{ id?: string; email?: string; full_name?: string; role?: string }>>([]);
   const [loadingMoveLeadsConsultants, setLoadingMoveLeadsConsultants] = useState(false);
+  /** Pesquisa no seletor de consultor destino (modal Mover leads) */
+  const [moveLeadsConsultantSearch, setMoveLeadsConsultantSearch] = useState('');
+  const [moveLeadsConsultantPickerOpen, setMoveLeadsConsultantPickerOpen] = useState(false);
+  const moveLeadsConsultantPickerRef = useRef<HTMLDivElement>(null);
+  const moveLeadsConsultantsSorted = useMemo(
+    () =>
+      [...moveLeadsConsultants]
+        .filter((c) => (c.email ?? '').trim().length > 0)
+        .sort((a, b) => {
+          const na = (a.full_name ?? a.email ?? '').toString().toLowerCase();
+          const nb = (b.full_name ?? b.email ?? '').toString().toLowerCase();
+          return na.localeCompare(nb, 'pt-BR');
+        }),
+    [moveLeadsConsultants]
+  );
+  const moveLeadsConsultantsFiltered = useMemo(() => {
+    const q = moveLeadsConsultantSearch.trim().toLowerCase();
+    if (!q) return moveLeadsConsultantsSorted;
+    return moveLeadsConsultantsSorted.filter((c) => {
+      const em = (c.email ?? '').trim().toLowerCase();
+      const nm = (c.full_name ?? '').trim().toLowerCase();
+      return em.includes(q) || nm.includes(q);
+    });
+  }, [moveLeadsConsultantsSorted, moveLeadsConsultantSearch]);
   /** Atalho «Para estoque»: destino = estoque CRM do gerente (lista gerentes-for-banca), não consultor. */
   const [moveLeadsEstoqueGerenteMode, setMoveLeadsEstoqueGerenteMode] = useState(false);
   const [moveLeadsEstoqueGerenteId, setMoveLeadsEstoqueGerenteId] = useState('');
+  /**
+   * Quando o destino é um gerente (perfil na lista): estoque = reserva lógica (padrão do sistema);
+   * crm_direto = repasse no CRM para o e-mail do gerente neste passo.
+   */
+  const [moveLeadsGerenteDestinoVia, setMoveLeadsGerenteDestinoVia] = useState<'estoque' | 'crm_direto'>('crm_direto');
   /** Solicitação de leads selecionada no modal Mover (ao confirmar, marcar como aprovada) */
   const [moveLeadsSelectedRequest, setMoveLeadsSelectedRequest] = useState<GerenteLeadRequest | null>(null);
   /** Enviar apenas a quantidade necessária para completar a solicitação (resto fica para mover depois) */
   const [moveLeadsOnlyQtyToComplete, setMoveLeadsOnlyQtyToComplete] = useState(true);
-  /** E-mail do consultor destino no modal Mover leads (solicitação fixa / pedido pré-selecionado / legado em estado) */
+  /**
+   * E-mail efetivo de destino no modal Mover leads.
+   * Ordem: destino fixo do fluxo (solicitação travada) → escolha atual no picker → 1º consultor da solicitação (fallback).
+   * O picker deve prevalecer sobre o fallback da API para o POST coincidir com o que o utilizador vê.
+   */
   const moveLeadsDestinationEmail = useMemo(() => {
     const fixed = moveLeadsFixedRecipient?.email?.trim() ?? '';
-    const fromRequest = moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() ?? '';
     const fromState = moveLeadsTargetEmail?.trim() ?? '';
-    return fixed || fromRequest || fromState;
+    const fromRequest = moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() ?? '';
+    return fixed || fromState || fromRequest;
   }, [moveLeadsFixedRecipient, moveLeadsSelectedRequest, moveLeadsTargetEmail]);
+  /** Destino atual é gerente na lista de consultores (para oferecer estoque vs CRM direto). */
+  const moveLeadsDestinatarioIsGerente = useMemo(() => {
+    const t = moveLeadsDestinationEmail.trim().toLowerCase();
+    if (!t) return false;
+    const c = moveLeadsConsultants.find((x) => (x.email ?? '').trim().toLowerCase() === t);
+    const roleLower = String(c?.role ?? '').trim().toLowerCase();
+    return Boolean(c) && (roleLower === 'gerente' || roleLower.includes('gerente'));
+  }, [moveLeadsDestinationEmail, moveLeadsConsultants]);
+  /** Rótulo do botão do picker: mesmo e-mail que vai no POST (`moveLeadsDestinationEmail`). */
+  const moveLeadsSelectedConsultantLabel = useMemo(() => {
+    const t = moveLeadsDestinationEmail.trim().toLowerCase();
+    if (!t) return '';
+    const c = moveLeadsConsultants.find((x) => (x.email ?? '').trim().toLowerCase() === t);
+    if (!c) return moveLeadsDestinationEmail.trim();
+    const em = (c.email ?? '').trim();
+    const nm = (c.full_name ?? '').trim();
+    return nm ? `${nm} · ${em}` : em;
+  }, [moveLeadsDestinationEmail, moveLeadsConsultants]);
   const moveLeadsPendingQty = useMemo(() => {
     if (!moveLeadsSelectedRequest) return 0;
     const totalRequested = (moveLeadsSelectedRequest.consultores ?? []).reduce((sum, c) => sum + c.quantity, 0);
     return Math.max(0, moveLeadsSelectedRequest.leads_still_needed ?? totalRequested);
   }, [moveLeadsSelectedRequest]);
   const moveLeadsAvailableQty = useMemo(
-    () => moveLeadsEntries
+    () => moveLeadsEntriesForMove
       .filter((e: Record<string, unknown>) => {
         const st = String(e.resolution_status ?? 'pending');
         // Excluir apenas status "finalizados" — pending e disponivel_retransferencia são válidos para mover
@@ -1086,7 +1333,7 @@ export default function AdminLeadTransferPage() {
         return !problematicLeadIds.has(String(e.lead_id));
       })
       .length,
-    [moveLeadsEntries, problematicLeadIds]
+    [moveLeadsEntriesForMove, problematicLeadIds]
   );
   const moveLeadsQtyToSend = useMemo(() => {
     if (!moveLeadsSelectedRequest || !moveLeadsOnlyQtyToComplete) return moveLeadsAvailableQty;
@@ -1094,7 +1341,9 @@ export default function AdminLeadTransferPage() {
   }, [moveLeadsSelectedRequest, moveLeadsOnlyQtyToComplete, moveLeadsPendingQty, moveLeadsAvailableQty]);
   const canConfirmMoveLeads = useMemo(() => {
     if (!moveLeadsSelectedLog) return false;
-    if (moveLeadsEntriesLoadedForLogId !== moveLeadsSelectedLog.log_id) return false;
+    if (moveLeadsOpenLogRows.length === 0) return false;
+    if (moveLeadsIncludedLogIds.length === 0) return false;
+    if (moveLeadsEntriesLoadedKey !== moveLeadsOpenLogsStableKey) return false;
     if (loadingMoveLeadsEntries || loadingMoveLeadsConsultants) return false;
     if (moveLeadsEstoqueGerenteMode) {
       if (!moveLeadsEstoqueGerenteId.trim()) return false;
@@ -1107,7 +1356,10 @@ export default function AdminLeadTransferPage() {
     return true;
   }, [
     moveLeadsSelectedLog,
-    moveLeadsEntriesLoadedForLogId,
+    moveLeadsOpenLogRows.length,
+    moveLeadsIncludedLogIds.length,
+    moveLeadsEntriesLoadedKey,
+    moveLeadsOpenLogsStableKey,
     loadingMoveLeadsEntries,
     loadingMoveLeadsConsultants,
     moveLeadsEstoqueGerenteMode,
@@ -1155,8 +1407,12 @@ export default function AdminLeadTransferPage() {
   const [loadingStep1Resolved, setLoadingStep1Resolved] = useState(false);
   /** Enquanto percorre todas as bancas no preview do passo 1 (lista atualiza incrementalmente). */
   const [step1ResolvedLoadProgress, setStep1ResolvedLoadProgress] = useState<{ done: number; total: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<'transfer' | 'transfer_stock' | 'history' | 'solicitations' | 'analysis'>('transfer');
+  const [activeTab, setActiveTab] = useState<
+    'transfer' | 'transfer_stock' | 'history' | 'solicitations' | 'analysis' | 'transfer_problems'
+  >('transfer');
   const isTransferWizardTab = activeTab === 'transfer' || activeTab === 'transfer_stock';
+  /** Colunas da tabela de histórico: aba TP inclui coluna «Indicação TP». */
+  const historyTransferTableColSpan = activeTab === 'transfer_problems' ? 16 : 15;
   /** Bloqueio da aba Análise: false = tab oculta e conteúdo não exibido (reverter para true para reativar). */
   const ANALYSIS_TAB_ENABLED = false;
   /** Aba Análise: banca selecionada, período de inatividade (dias) e resultados por consultor */
@@ -1222,6 +1478,11 @@ export default function AdminLeadTransferPage() {
   const [apagarLoading, setApagarLoading] = useState(false);
   /** Histórico admin→estoque: restaurar leads cancelados no estoque (POST restore-canceled-stock) */
   const [adminRestoreCanceledLoadingLogId, setAdminRestoreCanceledLoadingLogId] = useState<string | null>(null);
+  /** Modal: estoque gerente → enviar ao consultor no CRM (origem → destino) */
+  const [showStockDirectSyncModal, setShowStockDirectSyncModal] = useState(false);
+  const [logSelectedForStockDirectSync, setLogSelectedForStockDirectSync] = useState<typeof transferLogs[0] | null>(null);
+  const [stockDirectSyncTargetEmail, setStockDirectSyncTargetEmail] = useState('');
+  const [stockDirectSyncLoading, setStockDirectSyncLoading] = useState(false);
   /** Modal Reverse: re-transferir leads de uma devolução de volta para o consultor destino (quando CRM não mostrou corretamente) */
   const [showReverseModal, setShowReverseModal] = useState(false);
   const [logSelectedForReverse, setLogSelectedForReverse] = useState<typeof transferLogs[0] | null>(null);
@@ -1326,6 +1587,72 @@ export default function AdminLeadTransferPage() {
     'Content-Type': 'application/json',
     'X-User-Id': userId ?? '',
   });
+
+  /** Carrega timeline ampla do titular (GET lead-trace) para o painel de panorama no modal Mover leads. */
+  const loadMoveLeadsPanorama = useCallback(async () => {
+    if (!userId || !moveLeadsSelectedLog) {
+      setMoveLeadsPanoramaData(null);
+      setMoveLeadsPanoramaLoading(false);
+      return;
+    }
+    const titular = (moveLeadsSelectedLog.target_consultant_email ?? '').trim();
+    const bid = moveLeadsSelectedLog.banca_id;
+    if (!titular || !bid) {
+      setMoveLeadsPanoramaData(null);
+      setMoveLeadsPanoramaLoading(false);
+      return;
+    }
+    setMoveLeadsPanoramaLoading(true);
+    try {
+      const params = new URLSearchParams({ banca_id: bid, consultant_email: titular });
+      const res = await fetch(`/api/admin/crm/transfer-logs/lead-trace?${params.toString()}`, { headers: headers() });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success && json.data) setMoveLeadsPanoramaData(json.data as LeadTracePanoramaPayload);
+      else setMoveLeadsPanoramaData(null);
+    } catch {
+      setMoveLeadsPanoramaData(null);
+    } finally {
+      setMoveLeadsPanoramaLoading(false);
+    }
+  }, [userId, moveLeadsSelectedLog]);
+
+  const loadTpPanorama = useCallback(
+    async (bancaId: string, consultantEmail: string) => {
+      const tit = consultantEmail.trim();
+      const bid = bancaId.trim();
+      if (!userId || !tit || !bid) {
+        setTpPanoramaSelection(null);
+        setTpPanoramaData(null);
+        setTpPanoramaLoading(false);
+        return;
+      }
+      setTpPanoramaSelection({ banca_id: bid, titular_email: tit });
+      setTpPanoramaLoading(true);
+      try {
+        const params = new URLSearchParams({ banca_id: bid, consultant_email: tit });
+        const res = await fetch(`/api/admin/crm/transfer-logs/lead-trace?${params.toString()}`, { headers: headers() });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.success && json.data) {
+          setTpPanoramaData(json.data as LeadTracePanoramaPayload);
+        } else {
+          setTpPanoramaData(null);
+        }
+      } catch {
+        setTpPanoramaData(null);
+      } finally {
+        setTpPanoramaLoading(false);
+      }
+    },
+    [userId]
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'transfer_problems') {
+      setTpPanoramaSelection(null);
+      setTpPanoramaData(null);
+      setTpPanoramaLoading(false);
+    }
+  }, [activeTab]);
 
   const patchLeadTransferLock = useCallback(
     async (bid: string, locked: boolean) => {
@@ -1558,7 +1885,7 @@ export default function AdminLeadTransferPage() {
     });
     setHistoryBancaFilter(bancaIdFromUrl);
     setActiveTab(
-      tab === 'history' || tab === 'solicitations' || tab === 'analysis'
+      tab === 'history' || tab === 'solicitations' || tab === 'analysis' || tab === 'transfer_problems'
         ? tab
         : tab === 'transfer_stock'
           ? 'transfer_stock'
@@ -3109,8 +3436,15 @@ export default function AdminLeadTransferPage() {
       };
       if (destinoModo === 'estoque_gerente') {
         redistributeBody.to_gerente_stock_gerente_id = estoqueGerenteId.trim();
+        const solicDest = (transferFromSolicitationTargetEmail ?? '').trim().toLowerCase();
+        const srcLow = sourceEmail.trim().toLowerCase();
+        if (solicDest.includes('@') && solicDest !== srcLow) {
+          redistributeBody.stock_crm_target_consultant_email = solicDest;
+        }
       } else {
         redistributeBody.target_consultant_email = targetEmail.trim();
+        /** Modo «consultor» do assistente: o e-mail escolhido deve ir ao CRM (inclui gerente como titular), não reserva silenciosa no estoque. */
+        redistributeBody.gerente_destino_crm_direto = true;
       }
       const res = await fetch('/api/admin/crm/redistribute-leads', {
         method: 'POST',
@@ -3228,6 +3562,9 @@ export default function AdminLeadTransferPage() {
     if (!userId) return 0;
     if (!isAllBancas && !effectiveBancaId) return 0;
 
+    const fetchAllTransferKinds =
+      opts?.fetchAllTransferKinds != null ? opts.fetchAllTransferKinds : activeTab === 'transfer_problems';
+
     const runId = ++loadLogsRunIdRef.current;
     setLoadingLogs(true);
     setLoadingMoreLogs(false);
@@ -3243,7 +3580,7 @@ export default function AdminLeadTransferPage() {
       if (conversionConsultant.trim()) params.set('target_consultant_email', conversionConsultant.trim());
       if (historyDonorConsultantFilter.trim()) params.set('source_consultant_email', historyDonorConsultantFilter.trim());
       if (
-        !opts?.fetchAllTransferKinds &&
+        !fetchAllTransferKinds &&
         managementTransferKind.trim() &&
         ['standard', 'admin_to_gerente_stock', 'gerente_stock_to_consultant'].includes(managementTransferKind.trim())
       ) {
@@ -3449,35 +3786,15 @@ export default function AdminLeadTransferPage() {
     }
   };
 
-  /** Apagar transferência. Se for estoque (admin→estoque), apenas tira do estoque (sem CRM). */
+  /** Apagar transferência normal: devolve leads ao consultor de origem no CRM. */
   const confirmApagar = async () => {
     const log = logSelectedForApagar;
     if (!log || !userId) return;
     const transferKind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
-    const isStockReservation = transferKind === 'admin_to_gerente_stock';
-    if (isStockReservation) {
-      setApagarLoading(true);
-      try {
-        const res = await fetch('/api/admin/crm/cancel-stock-reservation', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          body: JSON.stringify({ transfer_log_id: log.id }),
-        });
-        const json = await res.json();
-        if (res.ok && json.success) {
-          setShowApagarModal(false);
-          setLogSelectedForApagar(null);
-          showToast(json?.message ?? 'Reserva removida do estoque.', 'success');
-          await loadTransferLogs(historyBancaFilter || undefined);
-          await loadTransferStats();
-        } else {
-          showToast(json?.error ?? 'Erro ao tirar leads do estoque.', 'error');
-        }
-      } catch {
-        showToast('Erro ao tirar leads do estoque.', 'error');
-      } finally {
-        setApagarLoading(false);
-      }
+    if (transferKind === 'admin_to_gerente_stock') {
+      setShowApagarModal(false);
+      setLogSelectedForApagar(null);
+      showToast('Para pacotes de estoque, use «Transferência direta» abaixo de «Devolver à origem».', 'info');
       return;
     }
 
@@ -3604,6 +3921,52 @@ export default function AdminLeadTransferPage() {
       showToast('Erro ao executar reverse.', 'error');
     } finally {
       setReverseLoading(false);
+    }
+  };
+
+  /** Reserva admin→estoque: envia ao consultor no CRM e marca repassado (sai do estoque do gerente). */
+  const confirmStockDirectSync = async () => {
+    const log = logSelectedForStockDirectSync;
+    if (!log || !userId) return;
+    const manual = stockDirectSyncTargetEmail.trim().toLowerCase();
+    const planned = getStockCrmPlannedTargetFromLog(log);
+    const lastDirect = getStockDirectCrmLastTargetFromLog(log);
+    const fromLogCol = getStockCrmTargetFromLogTargetColumn(log);
+    const resolved = (manual.includes('@') ? manual : '') || planned || lastDirect || fromLogCol;
+    if (!resolved.includes('@')) {
+      showToast(
+        'Este pacote não tem consultor de destino (CRM) gravado na reserva. Informe o e-mail abaixo ou refaça a reserva a partir da solicitação com recebedor definido.',
+        'error'
+      );
+      return;
+    }
+    setStockDirectSyncLoading(true);
+    try {
+      const body: { transfer_log_id: string; target_consultant_email?: string } = { transfer_log_id: log.id };
+      /** Sempre envia o destino exibido no modal; o servidor sozinho pode descartar a coluna do log se for o e-mail do gerente. */
+      if (resolved.includes('@')) {
+        body.target_consultant_email = resolved;
+      }
+      const res = await fetch('/api/admin/crm/sync-stock-reservation-as-direct-crm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(json.message ?? 'Leads enviados ao consultor no CRM e retirados do estoque.', 'success');
+        setShowStockDirectSyncModal(false);
+        setLogSelectedForStockDirectSync(null);
+        setStockDirectSyncTargetEmail('');
+        await loadTransferLogs(historyBancaFilter || undefined);
+        await loadTransferStats();
+      } else {
+        showToast(json?.error ?? 'Erro ao sincronizar com o CRM.', 'error');
+      }
+    } catch {
+      showToast('Erro ao sincronizar com o CRM.', 'error');
+    } finally {
+      setStockDirectSyncLoading(false);
     }
   };
 
@@ -3971,6 +4334,7 @@ export default function AdminLeadTransferPage() {
           leads_ids: leadIds,
           transfer_type: moveToNextTransferType,
           source_transfer_log_id: (selectedLogForModal as { id?: string })?.id,
+          gerente_destino_crm_direto: true,
           lead_snapshots: modalLeadSnapshots,
         }),
       });
@@ -4169,7 +4533,7 @@ export default function AdminLeadTransferPage() {
   };
 
   useEffect(() => {
-    if (activeTab !== 'history' || !SHOW_BAR_CHART_BY_BANCA) return;
+    if ((activeTab !== 'history' && activeTab !== 'transfer_problems') || !SHOW_BAR_CHART_BY_BANCA) return;
     setManagementLoaded(true);
     loadTransferStatsByBanca();
   }, [activeTab, managementFrom, managementTo]);
@@ -4386,21 +4750,60 @@ export default function AdminLeadTransferPage() {
     [userId, historyBancaFilter, historyDonorConsultantFilter]
   );
 
-  /** Ao abrir o modal Mover com log pré-selecionado (ex.: pelo botão Mover do relatório detalhado), seleciona a transferência quando resolvedList carregar. */
+  /** Panorama de transferências do titular no modal Mover leads (timeline + alertas). */
   useEffect(() => {
-    if (!moveLeadsModalOpen || !moveLeadsPreselectedLogId || resolvedList.length === 0) return;
-    const found = resolvedList.find((r) => r.log_id === moveLeadsPreselectedLogId);
-    if (found) {
-      setMoveLeadsSelectedLog(found);
-      setMoveLeadsPreselectedLogId(null);
+    if (!moveLeadsSelectedLog) {
+      setMoveLeadsPanoramaData(null);
+      setMoveLeadsPanoramaLoading(false);
+      return;
     }
-  }, [moveLeadsModalOpen, moveLeadsPreselectedLogId, resolvedList]);
+    void loadMoveLeadsPanorama();
+  }, [moveLeadsSelectedLog, loadMoveLeadsPanorama]);
 
   /** Ao abrir o modal Mover leads, o filtro de tipo (TF) sempre inicia em "Todos os tipos" (sem aplicar TF1 automaticamente). */
   useEffect(() => {
     if (!moveLeadsModalOpen) return;
     setMoveLeadsModalTfFilter('all');
   }, [moveLeadsModalOpen]);
+
+  /** Ao fechar o modal Mover leads, limpa marcação de múltiplas origens. */
+  useEffect(() => {
+    if (moveLeadsModalOpen) return;
+    setMoveLeadsModalOriginPickKeys([]);
+  }, [moveLeadsModalOpen]);
+
+  /** Ao mudar o filtro TF sem formulário aberto, evita seleção inconsistente. */
+  useEffect(() => {
+    if (moveLeadsModalOpen && !moveLeadsSelectedLog) setMoveLeadsModalOriginPickKeys([]);
+  }, [moveLeadsModalTfFilter, moveLeadsModalOpen, moveLeadsSelectedLog]);
+
+  /** Fecha o seletor com pesquisa e limpa o filtro ao sair do modal Mover leads. */
+  useEffect(() => {
+    if (moveLeadsModalOpen) return;
+    setMoveLeadsConsultantSearch('');
+    setMoveLeadsConsultantPickerOpen(false);
+  }, [moveLeadsModalOpen]);
+
+  /** Clique fora fecha o dropdown de consultor destino. */
+  useEffect(() => {
+    if (!moveLeadsConsultantPickerOpen) return;
+    const onPointerDown = (ev: PointerEvent) => {
+      const el = moveLeadsConsultantPickerRef.current;
+      if (el && !el.contains(ev.target as Node)) setMoveLeadsConsultantPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [moveLeadsConsultantPickerOpen]);
+
+  /** Escape fecha o dropdown de consultor destino. */
+  useEffect(() => {
+    if (!moveLeadsConsultantPickerOpen) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setMoveLeadsConsultantPickerOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [moveLeadsConsultantPickerOpen]);
 
   /** Após abrir o formulário Mover leads, pré-seleciona a solicitação vinda da aprovação e preenche consultor destino. */
   useEffect(() => {
@@ -4417,6 +4820,26 @@ export default function AdminLeadTransferPage() {
     setMoveLeadsTargetEmail(fromReq || fromList);
     setMoveLeadsPreselectRequestId(null);
   }, [moveLeadsPreselectRequestId, moveLeadsSelectedLog, leadRequests, loadingLeadRequests, loadingMoveLeadsConsultants, moveLeadsConsultants]);
+
+  /** Com destino manual por lista: remove e-mail que não existe mais entre os consultores da banca (evita confirmar com valor “invisível”). */
+  useEffect(() => {
+    if (!moveLeadsSelectedLog || loadingMoveLeadsConsultants) return;
+    if (moveLeadsFixedRecipient?.email?.trim()) return;
+    if (moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim()) return;
+    if (moveLeadsSelectedRequest && moveLeadsTargetEmail.trim()) return;
+    const t = moveLeadsTargetEmail.trim().toLowerCase();
+    if (!t) return;
+    const emails = moveLeadsConsultants.map((c) => (c.email ?? '').trim().toLowerCase()).filter(Boolean);
+    if (emails.length === 0) return;
+    if (!emails.includes(t)) setMoveLeadsTargetEmail('');
+  }, [
+    moveLeadsSelectedLog,
+    loadingMoveLeadsConsultants,
+    moveLeadsConsultants,
+    moveLeadsTargetEmail,
+    moveLeadsFixedRecipient,
+    moveLeadsSelectedRequest,
+  ]);
 
   /** Desvincula um lead (vinculado sem dados anteriores): altera para disponivel_retransferencia. */
   const desvincularLeadModal = useCallback(
@@ -4682,7 +5105,7 @@ export default function AdminLeadTransferPage() {
     }
   }, [resolveBatchDetailLog, resolveBatchResult, loadResolveBatchDetailEntries, loadResolvedStats]);
 
-  const pickBestResolvedLogForSource = useCallback(
+  const getAllResolvedLogsForSource = useCallback(
     (
       list: typeof resolvedList,
       sourceEmail: string,
@@ -4690,108 +5113,265 @@ export default function AdminLeadTransferPage() {
       transferTypeFilter: 'all' | 'TF' | 'TF1' | 'TF2' | 'TF3' = 'all'
     ) => {
       const norm = sourceEmail.trim().toLowerCase();
-      if (!norm) return null;
+      if (!norm) return [];
       let matches = list.filter(
         (r) =>
           (r.source_consultant_email ?? '').trim().toLowerCase() === norm &&
-          (!bancaId.trim() || r.banca_id === bancaId.trim())
+          (!bancaId.trim() || r.banca_id === bancaId.trim()) &&
+          (r.disponivel ?? 0) > 0
       );
       if (transferTypeFilter !== 'all') {
         const tf = transferTypeFilter;
         matches = matches.filter((r) => (r.transfer_type ?? 'TF') === tf);
       }
-      if (matches.length === 0) return null;
-      return matches.reduce((a, b) => (a.disponivel >= b.disponivel ? a : b));
+      return [...matches].sort((a, b) => b.disponivel - a.disponivel);
     },
     []
   );
 
   const openMoveLeadsForm = useCallback(
-    async (log: {
-      log_id: string;
-      banca_id: string;
-      transfer_type: string;
-      disponivel: number;
-      source_consultant_email: string;
-      target_consultant_email: string;
-      source_consultant_name?: string | null;
-    }, opts?: { keepRequest?: boolean; estoqueGerenteMode?: boolean; preserveEstoqueGerenteId?: boolean }) => {
-    const gen = ++moveLeadsOpenFormGenRef.current;
-    setMoveLeadsBlockedByRateLimit(false);
-    setMoveLeadsCrmDesyncPending(false);
-    setMoveLeadsEstoqueGerenteMode(opts?.estoqueGerenteMode ?? false);
-    if (!opts?.preserveEstoqueGerenteId) {
-      setMoveLeadsEstoqueGerenteId('');
-    }
-    setMoveLeadsSelectedLog(log);
-    setMoveLeadsSelectedSourceEmail((log.source_consultant_email ?? '').trim());
-    // Só limpa o email destino e a solicitação se não houver uma pré-selecionada (keepRequest=false)
-    if (!opts?.keepRequest) {
-      setMoveLeadsTargetEmail('');
-      setMoveLeadsSelectedRequest(null);
-    }
-    setMoveLeadsTransferType('TF');
-    setMoveLeadsDeadlineDays(10);
-    setMoveLeadsEntries([]);
-    setMoveLeadsConsultants([]);
-    setMoveLeadsEntriesLoadedForLogId(null);
-    setLoadingMoveLeadsEntries(true);
-    setLoadingMoveLeadsConsultants(true);
-    try {
-      // Sequencial para não saturar o rate limit do CRM com requisições paralelas.
-      // entries chama o CRM (getIndicatedsByConsultant); consultants sem verify_crm é só banco.
-      const entriesRes = await fetch(`/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`, { headers: headers() });
-      const entriesJson = await entriesRes.json().catch(() => null);
-      const entries = (entriesRes.ok && entriesJson?.success && Array.isArray(entriesJson?.data))
-        ? (entriesJson.data as Array<{
-            lead_id: string;
-            name?: string | null;
-            phone?: string | null;
-            resolution_status?: string;
-          }>)
-            .filter((e) => e.resolution_status === 'disponivel_retransferencia')
-        : [];
+    async (
+      logOrLogs:
+        | {
+            log_id: string;
+            banca_id: string;
+            transfer_type: string;
+            disponivel: number;
+            source_consultant_email: string;
+            target_consultant_email: string;
+            source_consultant_name?: string | null;
+          }
+        | Array<{
+            log_id: string;
+            banca_id: string;
+            transfer_type: string;
+            disponivel: number;
+            source_consultant_email: string;
+            target_consultant_email: string;
+            source_consultant_name?: string | null;
+          }>,
+      opts?: { keepRequest?: boolean; estoqueGerenteMode?: boolean; preserveEstoqueGerenteId?: boolean }
+    ) => {
+      const logsRaw = Array.isArray(logOrLogs) ? logOrLogs : [logOrLogs];
+      const logs = logsRaw.filter((l) => l?.log_id && l?.banca_id);
+      if (logs.length === 0) {
+        showToast('Nenhuma transferência válida para carregar.', 'info');
+        return;
+      }
+      const b0 = logs[0].banca_id;
+      if (!logs.every((l) => l.banca_id === b0)) {
+        showToast('Transferências de bancas diferentes não podem ser repassadas no mesmo envio.', 'error');
+        return;
+      }
+      const gen = ++moveLeadsOpenFormGenRef.current;
+      setMoveLeadsBlockedByRateLimit(false);
+      setMoveLeadsCrmDesyncPending(false);
+      setMoveLeadsEstoqueGerenteMode(opts?.estoqueGerenteMode ?? false);
+      if (!opts?.preserveEstoqueGerenteId) {
+        setMoveLeadsEstoqueGerenteId('');
+      }
+      const primary = logs[0];
+      setMoveLeadsSelectedLog(primary);
+      setMoveLeadsOpenLogRows(logs);
+      setMoveLeadsIncludedLogIds(logs.map((l) => l.log_id));
+      setMoveLeadsSelectedSourceEmail((primary.source_consultant_email ?? '').trim());
+      if (!opts?.keepRequest) {
+        setMoveLeadsTargetEmail('');
+        setMoveLeadsSelectedRequest(null);
+      }
+      setMoveLeadsTransferType('TF');
+      setMoveLeadsDeadlineDays(10);
+      setMoveLeadsEntries([]);
+      setMoveLeadsConsultants([]);
+      setMoveLeadsGerenteDestinoVia('crm_direto');
+      setMoveLeadsEntriesLoadedKey(null);
+      setLoadingMoveLeadsEntries(true);
+      setLoadingMoveLeadsConsultants(true);
+      const expectedKey = stableResolvedLogsKey(logs);
+      try {
+        const merged: Array<{
+          lead_id: string;
+          name?: string | null;
+          phone?: string | null;
+          resolution_status?: string;
+          source_log_id: string;
+        }> = [];
+        const seenLeadIds = new Set<string>();
 
-      if (gen !== moveLeadsOpenFormGenRef.current) return;
+        for (const log of logs) {
+          const entriesRes = await fetch(
+            `/api/admin/crm/transfer-logs/entries?log_id=${encodeURIComponent(log.log_id)}&banca_id=${encodeURIComponent(log.banca_id)}`,
+            { headers: headers() }
+          );
+          const entriesJson = await entriesRes.json().catch(() => null);
+          const rawEntries =
+            entriesRes.ok && entriesJson?.success && Array.isArray(entriesJson?.data)
+              ? (entriesJson.data as Array<{
+                  lead_id: string;
+                  name?: string | null;
+                  phone?: string | null;
+                  resolution_status?: string;
+                }>)
+                  .filter((e) => e.resolution_status === 'disponivel_retransferencia')
+                  .map((e) => ({
+                    ...e,
+                    lead_id: String(e.lead_id),
+                    source_log_id: log.log_id,
+                  }))
+              : [];
 
-      if (!entriesRes.ok || !entriesJson?.success) {
+          if (gen !== moveLeadsOpenFormGenRef.current) return;
+
+          if (!entriesRes.ok || !entriesJson?.success) {
+            showToast(
+              entriesJson?.error ??
+                entriesJson?.message ??
+                `Erro ao carregar leads (transferência ${log.log_id.slice(0, 8)}…, HTTP ${entriesRes.status}).`,
+              'error'
+            );
+          }
+
+          for (const row of rawEntries) {
+            const lid = String(row.lead_id);
+            if (seenLeadIds.has(lid)) continue;
+            seenLeadIds.add(lid);
+            merged.push(row);
+          }
+        }
+
+        if (gen !== moveLeadsOpenFormGenRef.current) return;
+
+        setMoveLeadsEntries(merged);
+        setMoveLeadsEntriesLoadedKey(expectedKey);
+        setLoadingMoveLeadsEntries(false);
+
+        // hierarchy_only=0: hierarquia da banca (gerentes na banca + subordinados com e-mail); sem e-mails extras vindos só dos logs do CRM.
+        const consultantsRes = await fetch(
+          `/api/admin/crm/consultants?banca_id=${encodeURIComponent(primary.banca_id)}&hierarchy_only=0`,
+          { headers: headers() }
+        );
+        if (gen !== moveLeadsOpenFormGenRef.current) return;
+
+        const consultantsJson = await consultantsRes.json();
+        let consultantList: Array<{ id?: string; email?: string; full_name?: string; role?: string }> =
+          consultantsRes.ok && consultantsJson.success && Array.isArray(consultantsJson.data?.consultants)
+            ? consultantsJson.data.consultants
+            : [];
+
+        consultantList = consultantList.filter((c) => (c.email ?? '').trim().length > 0);
+        consultantList.sort((a, b) => {
+          const na = (a.full_name ?? a.email ?? '').toString().toLowerCase();
+          const nb = (b.full_name ?? b.email ?? '').toString().toLowerCase();
+          return na.localeCompare(nb, 'pt-BR');
+        });
+        setMoveLeadsConsultants(consultantList);
+      } catch {
+        if (gen === moveLeadsOpenFormGenRef.current) {
+          showToast('Erro ao carregar dados.', 'error');
+        }
+      } finally {
+        if (gen === moveLeadsOpenFormGenRef.current) {
+          setLoadingMoveLeadsEntries(false);
+          setLoadingMoveLeadsConsultants(false);
+        }
+      }
+    },
+    [showToast]
+  );
+
+  /** Ao abrir o modal Mover com log pré-selecionado (ex.: relatório detalhado), carrega todas as resolvidas do mesmo doador na banca. */
+  useEffect(() => {
+    if (!moveLeadsModalOpen || !moveLeadsPreselectedLogId || resolvedList.length === 0) return;
+    const found = resolvedList.find((r) => r.log_id === moveLeadsPreselectedLogId);
+    if (!found) return;
+    setMoveLeadsPreselectedLogId(null);
+    const all = getAllResolvedLogsForSource(
+      resolvedList,
+      found.source_consultant_email ?? '',
+      found.banca_id ?? '',
+      'all'
+    );
+    const toOpen = all.length > 0 ? all : [found];
+    void openMoveLeadsForm(toOpen, { keepRequest: false });
+  }, [moveLeadsModalOpen, moveLeadsPreselectedLogId, resolvedList, getAllResolvedLogsForSource, openMoveLeadsForm]);
+
+  const toggleMoveLeadsModalOriginPick = useCallback((email: string) => {
+    const k = email.trim().toLowerCase();
+    if (!k) return;
+    setMoveLeadsModalOriginPickKeys((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  }, []);
+
+  const handleMoveLeadsPickMultipleSources = useCallback(
+    async (sourceEmailKeysLower: string[], bancaIdForFilter: string, keepRequest?: boolean) => {
+      setMoveLeadsBlockedByRateLimit(false);
+      setMoveLeadsCrmDesyncPending(false);
+      const uniq = [...new Set(sourceEmailKeysLower.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+      if (uniq.length < 2) {
+        showToast('Marque pelo menos dois consultores de origem para carregar em um único envio.', 'info');
+        return;
+      }
+      const mergedLogsMap = new Map<string, (typeof resolvedList)[number]>();
+      for (const low of uniq) {
+        const logs = getAllResolvedLogsForSource(resolvedList, low, bancaIdForFilter, moveLeadsModalTfFilter);
+        for (const log of logs) mergedLogsMap.set(log.log_id, log);
+      }
+      const merged = [...mergedLogsMap.values()].sort((a, b) => b.disponivel - a.disponivel);
+      if (merged.length === 0) {
         showToast(
-          entriesJson?.error ?? entriesJson?.message ?? `Erro ao carregar leads disponíveis (HTTP ${entriesRes.status}).`,
+          moveLeadsEstoqueGerenteMode
+            ? 'Nenhum lote encontrado para as origens selecionadas neste recorte.'
+            : 'Nenhuma transferência encontrada para as origens selecionadas.',
+          'info'
+        );
+        return;
+      }
+      const bancaSet = new Set(merged.map((l) => l.banca_id));
+      if (bancaSet.size > 1) {
+        showToast(
+          'As origens selecionadas envolvem mais de uma banca. Filtre uma banca no histórico antes de agrupar vários consultores.',
           'error'
         );
+        return;
       }
-      setMoveLeadsEntries(entries);
-      setMoveLeadsEntriesLoadedForLogId(log.log_id);
-      setLoadingMoveLeadsEntries(false);
-
-      const consultantsRes = await fetch(`/api/admin/crm/consultants?banca_id=${encodeURIComponent(log.banca_id)}&hierarchy_only=1`, { headers: headers() });
-      if (gen !== moveLeadsOpenFormGenRef.current) return;
-
-      const consultantsJson = await consultantsRes.json();
-      if (consultantsRes.ok && consultantsJson.success && Array.isArray(consultantsJson.data?.consultants)) {
-        setMoveLeadsConsultants(consultantsJson.data.consultants);
-      }
-    } catch {
-      if (gen === moveLeadsOpenFormGenRef.current) {
-        showToast('Erro ao carregar dados.', 'error');
-      }
-    } finally {
-      if (gen === moveLeadsOpenFormGenRef.current) {
-        setLoadingMoveLeadsEntries(false);
-        setLoadingMoveLeadsConsultants(false);
-      }
-    }
-  }, []);
+      const totalDisp = merged.reduce((s, l) => s + (l.disponivel ?? 0), 0);
+      const label =
+        uniq.length <= 2
+          ? uniq
+              .map((low) => {
+                const hit = resolvedList.find((r) => (r.source_consultant_email ?? '').trim().toLowerCase() === low);
+                return (hit?.source_consultant_email ?? low).trim();
+              })
+              .join(' + ')
+          : `${uniq.length} origens`;
+      setMoveLeadsSelectedSourceEmail(label);
+      setMoveLeadsModalOriginPickKeys([]);
+      await openMoveLeadsForm(merged, {
+        keepRequest: !!keepRequest,
+        estoqueGerenteMode: moveLeadsEstoqueGerenteMode,
+        preserveEstoqueGerenteId: moveLeadsEstoqueGerenteMode,
+      });
+      showToast(`${merged.length} pacote(s) · até ${totalDisp} lead(s) das origens selecionadas.`, 'success');
+    },
+    [
+      resolvedList,
+      getAllResolvedLogsForSource,
+      openMoveLeadsForm,
+      moveLeadsModalTfFilter,
+      moveLeadsEstoqueGerenteMode,
+      showToast,
+    ]
+  );
 
   const handleMoveLeadsPickSource = useCallback(
     async (sourceEmail: string, bancaIdForFilter: string, keepRequest?: boolean) => {
       setMoveLeadsBlockedByRateLimit(false);
       setMoveLeadsCrmDesyncPending(false);
+      setMoveLeadsModalOriginPickKeys([]);
       const trimmed = sourceEmail.trim();
       setMoveLeadsSelectedSourceEmail(trimmed);
       if (!trimmed) return;
-      const best = pickBestResolvedLogForSource(resolvedList, trimmed, bancaIdForFilter, moveLeadsModalTfFilter);
-      if (!best) {
+      const allLogs = getAllResolvedLogsForSource(resolvedList, trimmed, bancaIdForFilter, moveLeadsModalTfFilter);
+      if (!allLogs.length) {
         showToast(
           moveLeadsEstoqueGerenteMode
             ? moveLeadsModalTfFilter !== 'all'
@@ -4804,13 +5384,13 @@ export default function AdminLeadTransferPage() {
         );
         return;
       }
-      await openMoveLeadsForm(best, {
+      await openMoveLeadsForm(allLogs, {
         keepRequest: !!keepRequest,
         estoqueGerenteMode: moveLeadsEstoqueGerenteMode,
         preserveEstoqueGerenteId: moveLeadsEstoqueGerenteMode,
       });
     },
-    [resolvedList, pickBestResolvedLogForSource, openMoveLeadsForm, moveLeadsModalTfFilter, moveLeadsEstoqueGerenteMode]
+    [resolvedList, getAllResolvedLogsForSource, openMoveLeadsForm, moveLeadsModalTfFilter, moveLeadsEstoqueGerenteMode, showToast]
   );
 
   /** Modal Aprovar → "Ir para leads expirados…": abre Mover leads já no formulário, com o doador escolhido e a transferência resolvida correspondente. */
@@ -4837,7 +5417,9 @@ export default function AdminLeadTransferPage() {
     if (reqId) setMoveLeadsPreselectRequestId(reqId);
     else setMoveLeadsPreselectRequestId(null);
     setMoveLeadsSelectedLog(null);
-    setMoveLeadsEntriesLoadedForLogId(null);
+    setMoveLeadsEntriesLoadedKey(null);
+    setMoveLeadsOpenLogRows([]);
+    setMoveLeadsIncludedLogIds([]);
     setMoveLeadsSelectedSourceEmail('');
     setMoveLeadsEnterFormDirectly(false);
     setHistoryBancaFilter(bancaIdSolicitacao);
@@ -4866,16 +5448,14 @@ export default function AdminLeadTransferPage() {
     setActiveTab('history');
     const list = await loadResolvedList(bancaIdSolicitacao, { omitSourceConsultantFilter: true });
     void loadLeadRequests();
-    const bestForSelectedDoador = doadorEmail
-      ? pickBestResolvedLogForSource(list, doadorEmail, bancaIdSolicitacao)
-      : null;
+    const logsForDoador = doadorEmail ? getAllResolvedLogsForSource(list, doadorEmail, bancaIdSolicitacao, 'all') : [];
     const bestOverall =
       list.length > 0
         ? list.reduce((a, b) => (a.disponivel >= b.disponivel ? a : b))
         : null;
-    const best = bestForSelectedDoador ?? bestOverall;
-    if (best) {
-      await openMoveLeadsForm(best, {
+    const toOpen = logsForDoador.length > 0 ? logsForDoador : bestOverall ? [bestOverall] : [];
+    if (toOpen.length > 0) {
+      await openMoveLeadsForm(toOpen, {
         estoqueGerenteMode: irParaEstoqueNaAprovacao,
         preserveEstoqueGerenteId: irParaEstoqueNaAprovacao && !!gerenteEstoquePref,
       });
@@ -4894,7 +5474,7 @@ export default function AdminLeadTransferPage() {
     approveStockQty,
     approveEstoqueGerenteId,
     bancas,
-    pickBestResolvedLogForSource,
+    getAllResolvedLogsForSource,
     loadResolvedList,
     openMoveLeadsForm,
     loadLeadRequests,
@@ -4912,7 +5492,9 @@ export default function AdminLeadTransferPage() {
       setMoveLeadsFixedRecipient(null);
       setMoveLeadsPreselectRequestId(null);
       setMoveLeadsSelectedLog(null);
-      setMoveLeadsEntriesLoadedForLogId(null);
+      setMoveLeadsEntriesLoadedKey(null);
+      setMoveLeadsOpenLogRows([]);
+      setMoveLeadsIncludedLogIds([]);
       setMoveLeadsSelectedSourceEmail('');
       setMoveLeadsEnterFormDirectly(false);
       setMoveLeadsPreselectedLogId(null);
@@ -4929,7 +5511,14 @@ export default function AdminLeadTransferPage() {
       const bestOverall =
         withDisp.length > 0 ? withDisp.reduce((a, b) => (a.disponivel >= b.disponivel ? a : b)) : null;
       if (bestOverall) {
-        await openMoveLeadsForm(bestOverall, { estoqueGerenteMode: true });
+        const allForSource = getAllResolvedLogsForSource(
+          list,
+          bestOverall.source_consultant_email ?? '',
+          bid,
+          'all'
+        );
+        const toOpen = allForSource.length > 0 ? allForSource : [bestOverall];
+        await openMoveLeadsForm(toOpen, { estoqueGerenteMode: true });
       } else if (list.length === 0) {
         showToast('Nenhuma transferência resolvida nesta banca para carregar no modal.', 'info');
       } else {
@@ -4939,13 +5528,17 @@ export default function AdminLeadTransferPage() {
         );
       }
     },
-    [bancas, loadResolvedList, loadLeadRequests, openMoveLeadsForm, showToast]
+    [bancas, loadResolvedList, loadLeadRequests, openMoveLeadsForm, showToast, getAllResolvedLogsForSource]
   );
 
   const runMoveLeads = useCallback(async (forceDbOnly = false) => {
     const targetEmail = moveLeadsDestinationEmail.trim();
     if (!moveLeadsSelectedLog || !userId) {
       showToast('Dados da transferência incompletos.', 'info');
+      return;
+    }
+    if (moveLeadsOpenLogRows.length === 0 || moveLeadsIncludedLogIds.length === 0) {
+      showToast('Selecione ao menos uma transferência resolvida para repassar.', 'info');
       return;
     }
     if (moveLeadsEstoqueGerenteMode) {
@@ -4957,8 +5550,7 @@ export default function AdminLeadTransferPage() {
       showToast('Consultor destino não definido.', 'info');
       return;
     }
-    // Filtrar apenas disponíveis, excluindo leads que já falharam nesta sessão
-    const allLeadIds = moveLeadsEntries
+    const allLeadIds = moveLeadsEntriesForMove
       .filter((e: Record<string, unknown>) => {
         const st = String(e.resolution_status ?? 'pending');
         if (['repassado', 'vinculado', 'devolvido', 'revertido'].includes(st)) return false;
@@ -4975,6 +5567,11 @@ export default function AdminLeadTransferPage() {
       : 0;
     const faltam = Math.max(0, faltamRaw);
     const shouldLimitToRequest = !!moveLeadsSelectedRequest && moveLeadsOnlyQtyToComplete;
+    /**
+     * Transferência total (enviar todos os leads disponíveis) não deve entrar em fluxos de expiração/resolução.
+     * Usamos deadline_days = 0 como sem expiração.
+     */
+    const effectiveDeadlineDays = shouldLimitToRequest ? moveLeadsDeadlineDays : 0;
     const leadIds = shouldLimitToRequest
       ? allLeadIds.slice(0, Math.min(faltam, allLeadIds.length))
       : allLeadIds;
@@ -4989,179 +5586,298 @@ export default function AdminLeadTransferPage() {
     }
     setMoveLeadsMoving(true);
     try {
-      const entriesById = new Map(moveLeadsEntries.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
-      const leadSnapshots = leadIds.map((id) =>
-        buildLeadSnapshotForRedistribute(entriesById.get(String(id)) ?? {}, id as string | number)
-      );
-      const redistributePayload: Record<string, unknown> = {
-        banca_id: moveLeadsSelectedLog.banca_id,
-        source_consultant_email: moveLeadsSelectedLog.target_consultant_email,
-        leads_ids: leadIds,
-        transfer_type: moveLeadsTransferType,
-        transfer_deadline_days: moveLeadsDeadlineDays,
-        source_transfer_log_id: moveLeadsSelectedLog.log_id,
-        original_source_consultant_email: moveLeadsSelectedLog.source_consultant_email,
-        force_db_only: forceDbOnly,
-        lead_snapshots: leadSnapshots,
-      };
-      if (moveLeadsEstoqueGerenteMode && moveLeadsEstoqueGerenteId.trim()) {
-        redistributePayload.to_gerente_stock_gerente_id = moveLeadsEstoqueGerenteId.trim();
-      } else {
-        redistributePayload.target_consultant_email = targetEmail;
+      const entriesById = new Map(moveLeadsEntriesForMove.map((e: Record<string, unknown>) => [String(e.lead_id), e]));
+      const logRowById = new Map(moveLeadsOpenLogRows.map((r) => [normalizeTransferLogId(r.log_id), r]));
+      const leadsPerLog = new Map<string, (string | number)[]>();
+      for (const id of leadIds) {
+        const entry = entriesById.get(String(id)) as { source_log_id?: string } | undefined;
+        const lid = normalizeTransferLogId(String(entry?.source_log_id ?? moveLeadsSelectedLog.log_id));
+        if (!lid) continue;
+        const arr = leadsPerLog.get(lid) ?? [];
+        arr.push(id as string | number);
+        leadsPerLog.set(lid, arr);
       }
-      const res = await fetch('/api/admin/crm/redistribute-leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers() },
-        body: JSON.stringify(redistributePayload),
-      });
-      const json = await res.json();
-      if (isTooManyAttemptsMessage(json?.error ?? json?.message ?? json?.data?.message, res.status)) {
-        setMoveLeadsBlockedByRateLimit(true);
-        showToast('Muitas tentativas no CRM. Tente novamente em alguns segundos.', 'error');
-        return;
-      }
-      // Desync CRM↔DB detectado: leads não encontrados em nenhum consultor do chain
-      if (res.status === 409 && json?.code === 'CRM_DESYNC') {
-        setMoveLeadsCrmDesyncPending(true);
-        return;
-      }
-      if (res.ok && json.success) {
-        setMoveLeadsBlockedByRateLimit(false);
-        setMoveLeadsCrmDesyncPending(false);
-        const movedCount = Number.isFinite(Number(json?.data?.count)) ? Number(json?.data?.count) : leadIds.length;
-        const moveTransferLogId = json?.data?.transfer_log_id ?? null;
-        if (moveLeadsSelectedRequest?.id && userId && !moveLeadsEstoqueGerenteMode) {
-          const donorEmail = (
-            moveLeadsSelectedLog?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? ''
-          )
-            .toString()
-            .trim();
-          const sourceConsultant = moveLeadsConsultants.find(
-            (c) => c.email?.toLowerCase() === moveLeadsSelectedLog?.target_consultant_email?.toLowerCase()
-          );
-          const sourceConsultantId = (
-            sourceConsultant?.id
-            ?? approveFormSourceConsultantId
-            ?? moveLeadsSelectedRequest.source_consultant_id
-            ?? ''
-          )
-            .toString()
-            .trim();
-          const transferFiltersSnapshot = {
-            moved_from_resolved: true,
-            source_transfer_log_id: moveLeadsSelectedLog?.log_id ?? null,
-            transfer_log_id: moveTransferLogId,
-            transfer_type: moveLeadsTransferType,
-            transfer_deadline_days: moveLeadsDeadlineDays,
-            source_consultant_email: donorEmail || null,
-            target_consultant_email: targetEmail,
-            moved_count: movedCount,
-            moved_lead_ids: leadIds,
-            selected_log_banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
-          };
-          try {
-            const approveRes = await fetch(`/api/admin/crm/lead-requests/${moveLeadsSelectedRequest.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json', ...headers() },
-              body: JSON.stringify({
-                status: 'approved',
-                ...(sourceConsultantId ? { source_consultant_id: sourceConsultantId } : {}),
-                ...(donorEmail ? { source_consultant_email: donorEmail } : {}),
-                banca_id: moveLeadsSelectedLog?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
-                consultores: moveLeadsSelectedRequest.consultores?.map((c) => ({ consultor_id: c.consultor_id, quantity: c.quantity })) ?? [],
-                leads_transferred_count: movedCount,
-                transfer_filters_snapshot: transferFiltersSnapshot,
-                deadline_days: moveLeadsDeadlineDays,
-                transfer_log_id: moveTransferLogId,
-              }),
-            });
-            const approveJson = await approveRes.json();
-            if (approveRes.ok && approveJson.success) {
-              showToast(`Transferência concluída e solicitação aprovada. ${movedCount} lead(s) repassado(s).`, 'success');
-              loadLeadRequests();
-            } else {
-              showToast(
-                `${movedCount} lead(s) repassado(s). A solicitação não foi atualizada: ${approveJson?.error ?? approveJson?.message ?? 'erro desconhecido'}`,
-                'info',
-              );
-            }
-          } catch {
-            showToast(json?.data?.message ?? `${movedCount} lead(s) repassado(s).`, 'success');
-          }
-        } else if (json?.data?.stock_reservation && moveLeadsEstoqueGerenteMode) {
-          const gLabel =
-            gerentesForStockOptions.find((g) => g.id === moveLeadsEstoqueGerenteId)?.full_name?.trim() ||
-            gerentesForStockOptions.find((g) => g.id === moveLeadsEstoqueGerenteId)?.email ||
-            moveLeadsEstoqueGerenteId;
-          showToast(
-            `${movedCount} lead(s) reservado(s) no estoque do gerente (${gLabel}). Os leads permanecem com o consultor de origem no CRM até o gerente distribuir.`,
-            'success'
-          );
-        } else {
-          showToast(json?.data?.message ?? `${movedCount} lead(s) repassado(s).`, 'success');
-        }
-        const movedLogId = moveLeadsSelectedLog.log_id;
-        const enviadosTodos = leadIds.length === allLeadIds.length;
-        setMoveLeadsSelectedLog(null);
-        setMoveLeadsTargetEmail('');
-        setMoveLeadsEntries([]);
-        setMoveLeadsEntriesLoadedForLogId(null);
-        setMoveLeadsSelectedRequest(null);
-        setMoveLeadsFixedRecipient(null);
-        setMoveLeadsEnterFormDirectly(false);
-        setMoveLeadsPreselectRequestId(null);
-        setMoveLeadsSelectedSourceEmail('');
-        setMoveLeadsEstoqueGerenteMode(false);
-        setMoveLeadsEstoqueGerenteId('');
-        if (enviadosTodos) {
-          setResolvedList((prev) => prev.filter((r) => r.log_id !== movedLogId));
-        } else {
-          setResolvedList((prev) => prev.map((r) => (r.log_id === movedLogId ? { ...r, disponivel: r.disponivel - leadIds.length } : r)));
-        }
-        loadResolvedList();
-        loadResolvedStats();
-        await Promise.all([
-          loadTransferLogs(historyBancaFilter, { fetchAllTransferKinds: true }),
-          loadTransferStats(historyBancaFilter),
-          loadExpiredConversionStats(),
-          loadExpiredLogs(),
-        ]);
-      } else {
-        // Validação de e-mail (zod) e outros erros de dados inválidos
-        // Ex.: `target_consultant_email` ou `source_consultant_email` não é um e-mail válido.
-        if (res.status === 400) {
-          const rawMessage = String(json?.error ?? json?.message ?? '').trim();
-          const lower = rawMessage.toLowerCase();
-          const emailHint =
-            lower.includes('email') ||
-            lower.includes('consultor') && lower.includes('email') ||
-            lower.includes('invalid') && lower.includes('email');
 
-          showToast(
-            emailHint
-              ? rawMessage || 'E-mail do consultor inválido. Verifique origem e destino.'
-              : rawMessage || 'Requisição inválida (400). Verifique os dados informados.',
-            'error'
-          );
+      const perLogMoved: { logId: string; count: number }[] = [];
+      /** Pacotes resolvidos que devolveram 409 (CRM não moveu) — seguimos com os restantes. */
+      const skipped409Logs: { logId: string; label: string; n: number }[] = [];
+      /** IDs enviados ao CRM com resposta de sucesso (exclui pacotes 409). */
+      const crmSuccessLeadIds: string[] = [];
+      let totalMoved = 0;
+      let lastTransferLogId: string | null = null;
+      let lastSuccessJson: { data?: { message?: string; count?: number; transfer_log_id?: string | null; stock_reservation?: boolean } } | null =
+        null;
+
+      for (const [logId, idsForLog] of leadsPerLog) {
+        const row = logRowById.get(logId);
+        if (!row || idsForLog.length === 0) continue;
+
+        const leadSnapshots = idsForLog.map((id) =>
+          buildLeadSnapshotForRedistribute(entriesById.get(String(id)) ?? {}, id as string | number)
+        );
+        const redistributePayload: Record<string, unknown> = {
+          banca_id: row.banca_id,
+          source_consultant_email: row.target_consultant_email,
+          leads_ids: idsForLog,
+          transfer_type: moveLeadsTransferType,
+          transfer_deadline_days: effectiveDeadlineDays,
+          source_transfer_log_id: logId,
+          original_source_consultant_email: row.source_consultant_email,
+          lead_snapshots: leadSnapshots,
+        };
+        if (forceDbOnly) {
+          redistributePayload.force_db_only = true;
+          redistributePayload.filters_snapshot = { crm_desync_recovery: true };
+          if (targetEmail) {
+            redistributePayload.target_consultant_email = targetEmail;
+          }
+        } else if (
+          moveLeadsEstoqueGerenteMode &&
+          moveLeadsEstoqueGerenteId.trim() &&
+          moveLeadsGerenteDestinoVia !== 'crm_direto'
+        ) {
+          const reqEmail = moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim().toLowerCase() ?? '';
+          if (reqEmail.includes('@')) {
+            redistributePayload.filters_snapshot = { stock_crm_target_consultant_email: reqEmail };
+          }
+          redistributePayload.to_gerente_stock_gerente_id = moveLeadsEstoqueGerenteId.trim();
+        } else {
+          redistributePayload.target_consultant_email = targetEmail;
+          /**
+           * Modal «Mover leads» (fora do modo estoque): repasse no CRM — nunca reserva silenciosa no estoque do gerente.
+           * `source_transfer_log_id` na API também impede auto-estoque como rede de segurança.
+           */
+          if (!moveLeadsEstoqueGerenteMode) {
+            redistributePayload.gerente_destino_crm_direto = true;
+          } else if (moveLeadsGerenteDestinoVia === 'crm_direto') {
+            redistributePayload.gerente_destino_crm_direto = true;
+          }
+        }
+
+        const res = await fetch('/api/admin/crm/redistribute-leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers() },
+          body: JSON.stringify(redistributePayload),
+        });
+        const json = await res.json();
+        if (isTooManyAttemptsMessage(json?.error ?? json?.message ?? json?.data?.message, res.status)) {
+          setMoveLeadsBlockedByRateLimit(true);
+          showToast('Muitas tentativas no CRM. Tente novamente em alguns segundos.', 'error');
           return;
         }
-
-        // Falha permanente (não rate-limit): marcar lead IDs como problemáticos e mostrar banner de diagnóstico/força
-        if (res.status !== 409 || json?.code !== 'CRM_DESYNC') {
-          const failedLeadStringIds = leadIds.map(String);
-          const failedSourceEmail = (moveLeadsSelectedLog.source_consultant_email ?? '').trim();
-
-          // Marcar os lead IDs específicos como problemáticos (ignorados nas próximas tentativas manuais)
+        if (!res.ok || !json.success) {
+          if (res.status === 400) {
+            const rawMessage = String(json?.error ?? json?.message ?? '').trim();
+            const lower = rawMessage.toLowerCase();
+            const emailHint =
+              lower.includes('email') ||
+              (lower.includes('consultor') && lower.includes('email')) ||
+              (lower.includes('invalid') && lower.includes('email'));
+            showToast(
+              emailHint
+                ? rawMessage || 'E-mail do consultor inválido. Verifique origem e destino.'
+                : rawMessage || 'Requisição inválida (400). Verifique os dados informados.',
+              'error'
+            );
+            return;
+          }
+          if (res.status === 409) {
+            const failedLeadStringIds = idsForLog.map(String);
+            setProblematicLeadIds((prev) => new Set([...prev, ...failedLeadStringIds]));
+            const donor = (row.source_consultant_email ?? '').trim();
+            const titular = (row.target_consultant_email ?? '').trim();
+            const label = `${row.transfer_type ?? 'TF'} ${String(logId).slice(0, 8)}… · titular ${titular || '—'} (doador ${donor || '—'})`;
+            skipped409Logs.push({ logId: normalizeTransferLogId(logId), label, n: idsForLog.length });
+            continue;
+          }
+          const failedLeadStringIds = idsForLog.map(String);
+          const failedSourceEmail = (row.source_consultant_email ?? '').trim();
           setProblematicLeadIds((prev) => new Set([...prev, ...failedLeadStringIds]));
           setProblematicCountBySource((prev) => ({
             ...prev,
             [failedSourceEmail.toLowerCase()]: (prev[failedSourceEmail.toLowerCase()] ?? 0) + failedLeadStringIds.length,
           }));
+          if (json?.code === 'CRM_DESYNC') {
+            setMoveLeadsCrmDesyncPending(true);
+          }
+          showToast(String(json?.error ?? json?.message ?? 'Erro ao repassar leads.'), 'error');
+          return;
+        }
 
-          // Mostrar o banner de desync/força — igual ao CRM_DESYNC — para que o admin decida
-          setMoveLeadsCrmDesyncPending(true);
+        const movedCount = Number.isFinite(Number(json?.data?.count)) ? Number(json?.data?.count) : idsForLog.length;
+        perLogMoved.push({ logId: normalizeTransferLogId(logId), count: movedCount });
+        for (const id of idsForLog) {
+          crmSuccessLeadIds.push(String(id));
+        }
+        totalMoved += movedCount;
+        lastTransferLogId = (json?.data?.transfer_log_id as string | null | undefined) ?? lastTransferLogId;
+        lastSuccessJson = json;
+      }
+
+      if (totalMoved === 0) {
+        setMoveLeadsBlockedByRateLimit(false);
+        setMoveLeadsCrmDesyncPending(false);
+        if (skipped409Logs.length > 0) {
+          const detail = skipped409Logs.map((s) => `${s.label} (${s.n} lead(s))`).join(' · ');
+          showToast(
+            `Nenhum repasse concluído no CRM. ${skipped409Logs.length} transferência(s) resolvida(s) ignorada(s) por 409 (dessincronia): ${detail}. Corrija o titular no CRM ou use «Forçar registro» por pacote.`,
+            'error'
+          );
+        }
+        return;
+      }
+
+      setMoveLeadsBlockedByRateLimit(false);
+      setMoveLeadsCrmDesyncPending(false);
+
+      const firstEntry = entriesById.get(String(leadIds[0]));
+      const firstLogId = String((firstEntry as { source_log_id?: string })?.source_log_id ?? moveLeadsSelectedLog.log_id);
+      const holderRow = logRowById.get(firstLogId) ?? moveLeadsSelectedLog;
+      const moveTransferLogId = lastTransferLogId;
+
+      if (moveLeadsSelectedRequest?.id && userId && !moveLeadsEstoqueGerenteMode) {
+        const donorEmail = (
+          holderRow?.target_consultant_email ?? moveLeadsSelectedRequest.source_consultant_email ?? ''
+        )
+          .toString()
+          .trim();
+        const sourceConsultant = moveLeadsConsultants.find(
+          (c) => c.email?.toLowerCase() === holderRow?.target_consultant_email?.toLowerCase()
+        );
+        const sourceConsultantId = (
+          sourceConsultant?.id
+          ?? approveFormSourceConsultantId
+          ?? moveLeadsSelectedRequest.source_consultant_id
+          ?? ''
+        )
+          .toString()
+          .trim();
+        const transferFiltersSnapshot = {
+          moved_from_resolved: true,
+          source_transfer_log_id: holderRow?.log_id ?? null,
+          transfer_log_id: moveTransferLogId,
+          transfer_type: moveLeadsTransferType,
+          transfer_deadline_days: effectiveDeadlineDays,
+          source_consultant_email: donorEmail || null,
+          target_consultant_email: targetEmail,
+          moved_count: totalMoved,
+          moved_lead_ids: crmSuccessLeadIds,
+          selected_log_banca_id: holderRow?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
+          source_transfer_log_ids: perLogMoved.map((p) => p.logId),
+          ...(skipped409Logs.length > 0
+            ? {
+                skipped_409_transfer_log_ids: skipped409Logs.map((s) => s.logId),
+                skipped_409_labels: skipped409Logs.map((s) => s.label),
+              }
+            : {}),
+        };
+        try {
+          const approveRes = await fetch(`/api/admin/crm/lead-requests/${moveLeadsSelectedRequest.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...headers() },
+            body: JSON.stringify({
+              status: 'approved',
+              ...(sourceConsultantId ? { source_consultant_id: sourceConsultantId } : {}),
+              ...(donorEmail ? { source_consultant_email: donorEmail } : {}),
+              banca_id: holderRow?.banca_id ?? moveLeadsSelectedRequest.banca_id ?? null,
+              consultores: moveLeadsSelectedRequest.consultores?.map((c) => ({ consultor_id: c.consultor_id, quantity: c.quantity })) ?? [],
+              leads_transferred_count: totalMoved,
+              transfer_filters_snapshot: transferFiltersSnapshot,
+              deadline_days: effectiveDeadlineDays,
+              transfer_log_id: moveTransferLogId,
+            }),
+          });
+          const approveJson = await approveRes.json();
+          if (approveRes.ok && approveJson.success) {
+            const skipApprove =
+              skipped409Logs.length > 0
+                ? ` ${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}.`
+                : '';
+            showToast(
+              `Transferência concluída e solicitação aprovada. ${totalMoved} lead(s) repassado(s).${skipApprove}`,
+              'success'
+            );
+            loadLeadRequests();
+          } else {
+            showToast(
+              `${totalMoved} lead(s) repassado(s). A solicitação não foi atualizada: ${approveJson?.error ?? approveJson?.message ?? 'erro desconhecido'}`,
+              'info',
+            );
+          }
+        } catch {
+          showToast(lastSuccessJson?.data?.message ?? `${totalMoved} lead(s) repassado(s).`, 'success');
+        }
+      } else if (lastSuccessJson?.data?.stock_reservation && moveLeadsEstoqueGerenteMode) {
+        const gLabel =
+          gerentesForStockOptions.find((g) => g.id === moveLeadsEstoqueGerenteId)?.full_name?.trim() ||
+          gerentesForStockOptions.find((g) => g.id === moveLeadsEstoqueGerenteId)?.email ||
+          moveLeadsEstoqueGerenteId;
+        showToast(
+          `${totalMoved} lead(s) reservado(s) no estoque do gerente (${gLabel}). Os leads permanecem com o consultor de origem no CRM até o gerente distribuir.`,
+          'success'
+        );
+      } else if (lastSuccessJson?.data?.stock_reservation) {
+        showToast(
+          `${totalMoved} lead(s) reservado(s) no estoque do gerente (reserva lógica). Os leads permanecem com o titular atual no CRM até o gerente repassar à equipe.`,
+          'success'
+        );
+      } else {
+        const baseMsg = lastSuccessJson?.data?.message ?? `${totalMoved} lead(s) repassado(s).`;
+        const skipMsg =
+          skipped409Logs.length > 0
+            ? ` ${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}.`
+            : '';
+        showToast(baseMsg + skipMsg, 'success');
+      }
+
+      /** Antes de limpar o formulário: por log, o disponível exibido no repasse (só logs incluídos no envio). */
+      const repasseReduzDisponivelNoLogResolvido = !lastSuccessJson?.data?.stock_reservation;
+      const movedByLogId = new Map(perLogMoved.map((p) => [normalizeTransferLogId(p.logId), p.count]));
+      let preMoveAvailByLogId: Map<string, number> | null = null;
+      if (repasseReduzDisponivelNoLogResolvido && movedByLogId.size > 0) {
+        preMoveAvailByLogId = new Map<string, number>();
+        const includedIdSet = new Set(moveLeadsIncludedLogIds.map((id) => normalizeTransferLogId(id)));
+        for (const row of moveLeadsOpenLogRows) {
+          const nk = normalizeTransferLogId(row.log_id);
+          if (!nk || !includedIdSet.has(nk)) continue;
+          preMoveAvailByLogId.set(nk, Math.max(0, Number(row.disponivel) || 0));
+        }
+        for (const lid of movedByLogId.keys()) {
+          if (preMoveAvailByLogId.has(lid)) continue;
+          const fromRef = resolvedListRef.current.find((x) => normalizeTransferLogId(x.log_id) === lid);
+          if (fromRef) preMoveAvailByLogId.set(lid, Math.max(0, Number(fromRef.disponivel) || 0));
+          else preMoveAvailByLogId.set(lid, movedByLogId.get(lid) ?? 0);
         }
       }
+
+      setMoveLeadsSelectedLog(null);
+      setMoveLeadsTargetEmail('');
+      setMoveLeadsEntries([]);
+      setMoveLeadsEntriesLoadedKey(null);
+      setMoveLeadsOpenLogRows([]);
+      setMoveLeadsIncludedLogIds([]);
+      setMoveLeadsSelectedRequest(null);
+      setMoveLeadsFixedRecipient(null);
+      setMoveLeadsEnterFormDirectly(false);
+      setMoveLeadsPreselectRequestId(null);
+      setMoveLeadsSelectedSourceEmail('');
+      setMoveLeadsEstoqueGerenteMode(false);
+      setMoveLeadsEstoqueGerenteId('');
+      setMoveLeadsGerenteDestinoVia('crm_direto');
+      await loadResolvedList();
+      if (repasseReduzDisponivelNoLogResolvido && preMoveAvailByLogId && movedByLogId.size > 0) {
+        setResolvedList((curr) => {
+          const reconciled = reconcileResolvedListAfterRepatriate(curr, preMoveAvailByLogId, movedByLogId);
+          return stripFullyRepatriatedResolvedLogs(reconciled, preMoveAvailByLogId, movedByLogId);
+        });
+      }
+      loadResolvedStats();
+      await Promise.all([
+        loadTransferLogs(historyBancaFilter, { fetchAllTransferKinds: true }),
+        loadTransferStats(historyBancaFilter),
+        loadExpiredConversionStats(),
+        loadExpiredLogs(),
+      ]);
     } catch {
       showToast('Erro ao repassar leads.', 'error');
     } finally {
@@ -5170,7 +5886,9 @@ export default function AdminLeadTransferPage() {
   }, [
     moveLeadsSelectedLog,
     moveLeadsDestinationEmail,
-    moveLeadsEntries,
+    moveLeadsEntriesForMove,
+    moveLeadsOpenLogRows,
+    moveLeadsIncludedLogIds,
     moveLeadsSelectedRequest,
     moveLeadsOnlyQtyToComplete,
     moveLeadsConsultants,
@@ -5187,8 +5905,12 @@ export default function AdminLeadTransferPage() {
     moveLeadsEstoqueGerenteMode,
     moveLeadsEstoqueGerenteId,
     gerentesForStockOptions,
+    moveLeadsGerenteDestinoVia,
+    moveLeadsDestinatarioIsGerente,
     loadExpiredConversionStats,
     loadExpiredLogs,
+    showToast,
+    approveFormSourceConsultantId,
   ]);
 
   /** Resolução em lote de expiradas; `scopeBancaId` define uma banca (atalho passo 1) ou null = mesmo escopo do Histórico (filtro global / todas). */
@@ -5301,7 +6023,7 @@ export default function AdminLeadTransferPage() {
   }, [historyBancaFilter, runResolveBatchForScope]);
 
   useEffect(() => {
-    if (activeTab !== 'history') return;
+    if (activeTab !== 'history' && activeTab !== 'transfer_problems') return;
     setManagementLoaded(true);
     loadTransferLogs(historyBancaFilter);
     loadTransferStats(historyBancaFilter);
@@ -5520,6 +6242,65 @@ export default function AdminLeadTransferPage() {
     return list;
   }, [transferLogsFiltered, logsSortField, logsSortOrder, leadTransferCountMap]);
 
+  const tpProblemLogIdSet = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const log of transferLogsSorted) {
+      if (!isTransferHistoryProblemLog(log as Record<string, unknown>)) continue;
+      const id = normalizeTransferLogId((log as { id?: string }).id);
+      if (id) s.add(id);
+    }
+    return s;
+  }, [transferLogsSorted]);
+
+  const tpTitularGroups = React.useMemo(() => {
+    if (activeTab !== 'transfer_problems') {
+      return [] as Array<{
+        banca_id: string;
+        titular_email: string;
+        titular_display: string;
+        logs: typeof transferLogsSorted;
+        leadCount: number;
+        problemCount: number;
+      }>;
+    }
+    const map = new Map<
+      string,
+      { banca_id: string; titular_email: string; titular_display: string; logs: typeof transferLogsSorted }
+    >();
+    for (const log of transferLogsSorted) {
+      const bid = String((log as { banca_id?: string }).banca_id ?? '').trim();
+      const tit = String((log as { target_consultant_email?: string }).target_consultant_email ?? '').trim();
+      if (!bid || !tit) continue;
+      const key = `${bid}::${tit.toLowerCase()}`;
+      const nm = (log as { target_consultant_name?: string | null }).target_consultant_name?.trim();
+      const disp = nm ? `${nm} · ${tit}` : tit;
+      const cur = map.get(key);
+      if (cur) cur.logs.push(log);
+      else map.set(key, { banca_id: bid, titular_email: tit, titular_display: disp, logs: [log] });
+    }
+    return Array.from(map.values())
+      .map((g) => {
+        let leadCount = 0;
+        for (const l of g.logs) {
+          const ids = Array.isArray((l as { leads_ids?: unknown[] }).leads_ids) ? (l as { leads_ids: unknown[] }).leads_ids : [];
+          if (ids.length > 0) leadCount += ids.length;
+          else leadCount += Number((l as { count?: number }).count) || 0;
+        }
+        const problemCount = g.logs.filter((l) => isTransferHistoryProblemLog(l as Record<string, unknown>)).length;
+        return { ...g, leadCount, problemCount };
+      })
+      .sort((a, b) => b.problemCount - a.problemCount || b.logs.length - a.logs.length);
+  }, [activeTab, transferLogsSorted]);
+
+  const tpPanoramaTimelineAlertRows = React.useMemo(() => {
+    const tl = tpPanoramaData?.timeline;
+    if (!Array.isArray(tl)) return [];
+    return tl.filter((t) => {
+      if (leadTraceTimelineRowHasAlert(t)) return true;
+      return tpProblemLogIdSet.has(normalizeTransferLogId(t.log_id));
+    });
+  }, [tpPanoramaData, tpProblemLogIdSet]);
+
   /**
    * Última transferência em que o e-mail buscado participou — entre as linhas já filtradas
    * (e-mail na API + período, status, banca, etc.). Usa sempre `created_at` mais recente, independente da ordenação da tabela.
@@ -5624,7 +6405,15 @@ export default function AdminLeadTransferPage() {
 
   useEffect(() => {
     setLogsPage(1);
-  }, [transferLogs.length, managementPrazoFilter, managementPrazoCustomDays, managementStatusFilter, logsSortField, logsSortOrder]);
+  }, [
+    transferLogs.length,
+    managementPrazoFilter,
+    managementPrazoCustomDays,
+    managementStatusFilter,
+    logsSortField,
+    logsSortOrder,
+    activeTab,
+  ]);
 
   const handleLogsSort = (field: string) => {
     setLogsSortField(field);
@@ -5775,6 +6564,16 @@ export default function AdminLeadTransferPage() {
                 className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'solicitations' ? 'bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white shadow-sm' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'}`}
               >
                 Solicitações
+              </button>
+            )}
+            {!isGerenteLeadTransferViewer && (
+              <button
+                type="button"
+                title="Panorama por titular + tabela com indicação TP (conversão expirada ou estoque admin→gerente em atraso)"
+                onClick={() => setActiveTab('transfer_problems')}
+                className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'transfer_problems' ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-950 dark:text-amber-100 shadow-sm border border-amber-300/80 dark:border-amber-700/80' : 'text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white border border-transparent'}`}
+              >
+                (TP)
               </button>
             )}
             {!isGerenteLeadTransferViewer && ANALYSIS_TAB_ENABLED && (
@@ -6200,20 +6999,257 @@ export default function AdminLeadTransferPage() {
                 </>
               )}
             </div>
-          ) : activeTab === 'history' ? (
+          ) : activeTab === 'history' || activeTab === 'transfer_problems' ? (
             /* Conteúdo da aba Histórico (Gestão) - colapsado em aba separada */
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
                   <BarChart3 className="w-5 h-5 text-[#8CD955]" />
-                  Histórico e conversão
+                  {activeTab === 'transfer_problems' ? 'Panorama e transferências (TP)' : 'Histórico e conversão'}
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  {isGerenteLeadTransferViewer
-                    ? 'Você vê apenas as transferências executadas por você nesta banca (incluindo repasses do seu estoque aos consultores da equipe). Use os filtros para refinar período, tipo e consultores.'
-                    : 'Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.'}
+                  {activeTab === 'transfer_problems'
+                    ? 'Visão geral do recorte: panorama por titular (mesma API do modal Mover leads) e tabela completa com coluna TP para marcar pacotes com conversão expirada ou estoque admin→gerente em atraso. Os fluxos são carregados juntos.'
+                    : isGerenteLeadTransferViewer
+                      ? 'Você vê apenas as transferências executadas por você nesta banca (incluindo repasses do seu estoque aos consultores da equipe). Use os filtros para refinar período, tipo e consultores.'
+                      : 'Por padrão são carregadas todas as transferências. Use os filtros de período, tipo, consultor e prazo para refinar.'}
                 </p>
               </div>
+
+              {activeTab === 'transfer_problems' && (
+                <div className="mb-6 space-y-4">
+                  <div className="rounded-xl border-2 border-indigo-500/30 bg-gradient-to-br from-indigo-50/90 via-white to-slate-50/80 dark:from-indigo-950/40 dark:via-[#1c1c1c] dark:to-slate-950/40 p-4 shadow-sm ring-1 ring-indigo-400/15 dark:ring-indigo-700/25">
+                    <p className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 mb-1">
+                      <BarChart3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      Panorama por titular (todas as transferências do recorte)
+                    </p>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 mb-3 leading-snug">
+                      Agrupa os pacotes carregados pelo titular no CRM (destino). Carregue o panorama para ver até 200 linhas recentes na banca — à esquerda o histórico completo, à direita alertas (pending no CRM) ou pacotes marcados como <strong>TP</strong> neste recorte.
+                    </p>
+                    {tpTitularGroups.length === 0 ? (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Nenhum titular no recorte. Ajuste filtros ou clique em Aplicar filtros na gestão do histórico.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-[#404040] mb-3">
+                        <table className="w-full text-xs min-w-[640px]">
+                          <thead className="bg-gray-100 dark:bg-[#333]">
+                            <tr>
+                              <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Titular (CRM)</th>
+                              <th className="text-left py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Banca</th>
+                              <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Pacotes</th>
+                              <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Leads</th>
+                              <th className="text-right py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Com TP</th>
+                              <th className="text-center py-2 px-3 font-semibold text-gray-700 dark:text-gray-200">Ação</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tpTitularGroups.map((g) => {
+                              const selected =
+                                tpPanoramaSelection?.banca_id === g.banca_id &&
+                                tpPanoramaSelection.titular_email.trim().toLowerCase() === g.titular_email.trim().toLowerCase();
+                              const bancaNome =
+                                bancas.find((b) => b.id === g.banca_id)?.name ||
+                                bancas.find((b) => b.id === g.banca_id)?.url ||
+                                g.banca_id;
+                              return (
+                                <tr
+                                  key={`${g.banca_id}::${g.titular_email.toLowerCase()}`}
+                                  className={`border-t border-gray-100 dark:border-[#404040] ${selected ? 'bg-indigo-50/90 dark:bg-indigo-950/40' : ''}`}
+                                >
+                                  <td className="py-2 px-3 text-gray-800 dark:text-gray-100 truncate max-w-[240px]" title={g.titular_email}>
+                                    {g.titular_display}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-600 dark:text-gray-300 truncate max-w-[160px]">{bancaNome}</td>
+                                  <td className="py-2 px-3 text-right tabular-nums text-gray-800 dark:text-gray-100">{g.logs.length}</td>
+                                  <td className="py-2 px-3 text-right tabular-nums text-gray-800 dark:text-gray-100">{g.leadCount}</td>
+                                  <td className="py-2 px-3 text-right tabular-nums">
+                                    {g.problemCount > 0 ? (
+                                      <span className="font-semibold text-amber-700 dark:text-amber-300">{g.problemCount}</span>
+                                    ) : (
+                                      <span className="text-gray-400 dark:text-gray-500">0</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => void loadTpPanorama(g.banca_id, g.titular_email)}
+                                      disabled={tpPanoramaLoading}
+                                      className="inline-flex items-center justify-center gap-1 min-w-[7.5rem] px-2 py-1 rounded-md font-semibold border border-indigo-400/50 bg-indigo-600/90 text-white hover:bg-indigo-500 text-[11px] disabled:opacity-50"
+                                    >
+                                      {selected && tpPanoramaLoading ? (
+                                        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                                      ) : (
+                                        <RefreshCw className="w-3 h-3 shrink-0" />
+                                      )}
+                                      {selected && tpPanoramaLoading ? 'Carregando…' : 'Panorama'}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    {tpPanoramaSelection && (
+                      <div className="rounded-xl border-2 border-slate-500/35 bg-gradient-to-br from-slate-100/90 via-white to-indigo-50/50 dark:from-slate-950/80 dark:via-[#1c1c1c] dark:to-indigo-950/30 p-4 space-y-3 ring-1 ring-slate-400/20 dark:ring-slate-600/30">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <p className="text-xs font-bold text-slate-900 dark:text-slate-50 break-all min-w-0">
+                            Timeline — <span className="font-mono font-semibold">{tpPanoramaSelection.titular_email}</span>
+                          </p>
+                          <button
+                            type="button"
+                            disabled={tpPanoramaLoading}
+                            onClick={() => void loadTpPanorama(tpPanoramaSelection.banca_id, tpPanoramaSelection.titular_email)}
+                            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-400/50 bg-indigo-600/90 text-white hover:bg-indigo-500 disabled:opacity-50"
+                          >
+                            {tpPanoramaLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                            Atualizar panorama
+                          </button>
+                        </div>
+                        {tpPanoramaLoading && !tpPanoramaData ? (
+                          <div className="flex items-center justify-center gap-2 py-8 text-sm text-slate-600 dark:text-slate-400">
+                            <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                            Carregando timeline do titular…
+                          </div>
+                        ) : tpPanoramaData ? (
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                            <div className="rounded-lg border border-slate-300/60 dark:border-slate-600/50 bg-white/90 dark:bg-gray-900/60 p-3 min-h-[120px]">
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                                Todas as transferências (recentes)
+                              </p>
+                              <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                                {tpPanoramaData.timeline.map((t) => (
+                                  <div
+                                    key={t.log_id}
+                                    className={`rounded border px-2 py-1.5 ${
+                                      leadTraceTimelineRowHasAlert(t) || tpProblemLogIdSet.has(normalizeTransferLogId(t.log_id))
+                                        ? 'border-amber-400/70 bg-amber-50/80 dark:bg-amber-950/30 dark:border-amber-600/40'
+                                        : 'border-slate-200 dark:border-gray-700 bg-slate-50/80 dark:bg-gray-800/60'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-1 flex-wrap text-[11px]">
+                                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                                        {t.created_at
+                                          ? new Date(t.created_at).toLocaleDateString('pt-BR', {
+                                              day: '2-digit',
+                                              month: '2-digit',
+                                              year: '2-digit',
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                            })
+                                          : '—'}
+                                      </span>
+                                      <span className="text-slate-400">·</span>
+                                      <span className="font-mono text-blue-700 dark:text-blue-300 truncate max-w-[100px]">
+                                        {(t.source_consultant_email ?? '?').split('@')[0]}
+                                      </span>
+                                      <span className="text-slate-400">→</span>
+                                      <span className="font-mono text-emerald-700 dark:text-emerald-300 truncate max-w-[100px]">
+                                        {(t.target_consultant_email ?? '?').split('@')[0]}
+                                      </span>
+                                      <span className="text-slate-400 ml-auto">{t.transfer_type ?? 'TF'}</span>
+                                    </div>
+                                    {Object.keys(t.status_breakdown).length > 0 && (
+                                      <div className="flex gap-1.5 mt-1 flex-wrap">
+                                        {Object.entries(t.status_breakdown).map(([st, qty]) => (
+                                          <span
+                                            key={st}
+                                            className={`px-1 rounded text-[10px] font-medium ${
+                                              st === 'repassado'
+                                                ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                                                : st === 'disponivel_retransferencia'
+                                                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200'
+                                                  : st === 'vinculado'
+                                                    ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700'
+                                                    : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                                            }`}
+                                          >
+                                            {qty}{' '}
+                                            {st === 'disponivel_retransferencia'
+                                              ? 'disp.'
+                                              : st === 'repassado'
+                                                ? 'repass.'
+                                                : st === 'vinculado'
+                                                  ? 'vinc.'
+                                                  : st}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                {tpPanoramaData.timeline.length === 0 && (
+                                  <p className="text-xs text-slate-500 italic">Nenhum log encontrado para este titular na banca.</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="rounded-lg border-2 border-rose-400/45 dark:border-rose-700/40 bg-rose-50/90 dark:bg-rose-950/25 p-3 min-h-[120px]">
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-rose-800 dark:text-rose-200 mb-2 flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                Alertas / problema (TP ou pending)
+                              </p>
+                              <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                                {tpPanoramaTimelineAlertRows.map((t) => (
+                                  <div
+                                    key={`tp-panorama-alert-${t.log_id}`}
+                                    className="rounded border border-rose-300/70 dark:border-rose-800/50 bg-white/90 dark:bg-gray-900/70 px-2 py-1.5"
+                                  >
+                                    <div className="flex items-center gap-1 flex-wrap text-[11px] text-rose-950 dark:text-rose-50">
+                                      <span className="font-medium">
+                                        {t.created_at
+                                          ? new Date(t.created_at).toLocaleDateString('pt-BR', {
+                                              day: '2-digit',
+                                              month: '2-digit',
+                                              year: '2-digit',
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                            })
+                                          : '—'}
+                                      </span>
+                                      <span className="text-rose-400">·</span>
+                                      <span className="font-mono truncate max-w-[200px]">
+                                        {t.source_consultant_email ?? '?'} → {t.target_consultant_email ?? '?'}
+                                      </span>
+                                      <span className="text-rose-500 dark:text-rose-300 ml-auto">{t.transfer_type ?? 'TF'}</span>
+                                    </div>
+                                    <div className="flex gap-1.5 mt-1 flex-wrap">
+                                      {Object.entries(t.status_breakdown).map(([st, qty]) => (
+                                        <span
+                                          key={`${t.log_id}-${st}`}
+                                          className={`px-1 rounded text-[10px] font-semibold ${
+                                            st === 'pending'
+                                              ? 'bg-rose-200 dark:bg-rose-900/50 text-rose-900 dark:text-rose-100'
+                                              : st === 'disponivel_retransferencia'
+                                                ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-100'
+                                                : 'bg-slate-200/80 dark:bg-gray-700 text-slate-800 dark:text-slate-200'
+                                          }`}
+                                        >
+                                          {qty} {st}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                                {tpPanoramaTimelineAlertRows.length === 0 && (
+                                  <p className="text-xs text-rose-800/90 dark:text-rose-200/90 leading-relaxed">
+                                    Nenhuma linha com <strong>pending</strong> nem pacote deste recorte marcado como TP na timeline.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-600 dark:text-slate-400">
+                            Não foi possível carregar o panorama. Tente novamente ou verifique permissões na banca.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <LeadTransferHistoryEmailSearchField
                 draftValue={historyLeadEmailDraft}
@@ -7250,18 +8286,26 @@ export default function AdminLeadTransferPage() {
                         }
                       />
                       <th className="text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[140px]" title="Leads vinculados a um consultor (que realmente converteram) vs disponíveis para repasse">Conversão</th>
+                      {activeTab === 'transfer_problems' && (
+                        <th
+                          className="text-center py-3.5 px-2 font-semibold text-gray-700 dark:text-white w-[56px]"
+                          title="Indicação de problema (TP): conversão expirada ou estoque admin→gerente com pendência após o prazo"
+                        >
+                          TP
+                        </th>
+                      )}
                       <th className="text-center py-3.5 px-4 font-semibold text-gray-700 dark:text-white w-[100px]">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingLogs ? (
-                      <tr><td colSpan={15} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                      <tr><td colSpan={historyTransferTableColSpan} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
                     ) : !managementLoaded && !loadingLogs ? (
-                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
+                      <tr><td colSpan={historyTransferTableColSpan} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
-                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
+                      <tr><td colSpan={historyTransferTableColSpan} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência nos filtros. Ajuste data/tipo ou faça uma nova transferência.</td></tr>
                     ) : transferLogsFiltered.length === 0 ? (
-                      <tr><td colSpan={15} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
+                      <tr><td colSpan={historyTransferTableColSpan} className="p-8 text-center text-gray-500 dark:text-white">Nenhuma transferência corresponde aos filtros. Ajuste &quot;Status&quot; ou &quot;Prazo&quot;.</td></tr>
                     ) : (
                       <>
                       {transferLogsPaginated.map((log) => {
@@ -7309,13 +8353,27 @@ export default function AdminLeadTransferPage() {
                                   );
                                 }
                                 if (kind === 'gerente_stock_to_consultant') {
+                                  const revAt =
+                                    filtersSnapshot != null &&
+                                    typeof filtersSnapshot === 'object' &&
+                                    String((filtersSnapshot as { reversed_at?: string }).reversed_at ?? '').trim() !== '';
+                                  const repasseRev =
+                                    revAt || (log as { stock_status_log?: string }).stock_status_log === 'repasse_estoque_revertido';
                                   return (
                                     <span
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30"
-                                      title="Gerente distribuiu leads do estoque para um consultor da sua equipe na banca"
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                                        repasseRev
+                                          ? 'bg-orange-500/15 text-orange-800 dark:text-orange-200 border-orange-500/40'
+                                          : 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30'
+                                      }`}
+                                      title={
+                                        repasseRev
+                                          ? 'Este repasse estoque→consultor foi revertido: CRM voltou ao doador; estoque do gerente restaurado quando havia reserva vinculada.'
+                                          : 'Gerente distribuiu leads do estoque para um consultor da sua equipe na banca'
+                                      }
                                     >
                                       <ArrowRightLeft className="w-3 h-3 flex-shrink-0" />
-                                      Estoque → Consultor
+                                      {repasseRev ? 'Estoque → Consultor (revertido)' : 'Estoque → Consultor'}
                                     </span>
                                   );
                                 }
@@ -7361,6 +8419,7 @@ export default function AdminLeadTransferPage() {
                               if (stockStatus === 'cancelado_total') return 'Pacote de estoque cancelado pelo admin: nenhum lead permanece ativo neste estoque.';
                               if (stockStatus === 'cancelado_parcial') return 'Pacote de estoque parcialmente cancelado: parte dos leads foi cancelada.';
                               if (stockStatus === 'revertido_total' || stockStatus === 'revertido_parcial') return 'Reserva de estoque encerrada: leads devolvidos ao consultor de origem (Zaploto/CRM conforme aplicável).';
+                              if (stockStatus === 'repasse_estoque_revertido') return 'Repasse estoque→consultor revertido: leads no CRM voltaram ao doador; reservas repassadas voltam a em estoque quando aplicável.';
                               if ((log as { devolvido_at?: string }).devolvido_at) return 'Leads desta transferência foram devolvidos ao consultor de origem.';
                               if (isReverse) return 'Transferência reverse (re-envio após devolução).';
                               if ((log as { resolution_status_log?: string }).resolution_status_log === 'resolvida') return 'Transferência expirada e já resolvida (vinculados/disponíveis para repasse).';
@@ -7401,6 +8460,14 @@ export default function AdminLeadTransferPage() {
                                       {stockStatus === 'revertido_parcial'
                                         ? `Devolvido parcial${revN > 0 ? ` (${revN})` : ''}`
                                         : 'Devolvido'}
+                                    </span>
+                                  );
+                                }
+                                if (stockStatus === 'repasse_estoque_revertido') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 text-sm text-orange-600 dark:text-orange-400 font-medium">
+                                      <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Repasse revertido
                                     </span>
                                   );
                                 }
@@ -7465,8 +8532,22 @@ export default function AdminLeadTransferPage() {
                                 return <span className="text-gray-400 dark:text-gray-500">—</span>;
                               })()}
                             </td>
+                            {activeTab === 'transfer_problems' && (
+                              <td className="py-3 px-2 text-center align-middle">
+                                {isTransferHistoryProblemLog(log as Record<string, unknown>) ? (
+                                  <span
+                                    className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-950 dark:bg-amber-900/55 dark:text-amber-100 border border-amber-400/60 dark:border-amber-600/50"
+                                    title="Pacote com indicação TP (expirada ou estoque admin→gerente em atraso/pendência)"
+                                  >
+                                    TP
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>
+                                )}
+                              </td>
+                            )}
                             <td className="py-3 px-4">
-                              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              <div className="flex flex-col items-stretch gap-1.5 w-full max-w-[220px] mx-auto">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -7479,10 +8560,10 @@ export default function AdminLeadTransferPage() {
                                       setModalSearch('');
                                     }
                                   }}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#8CD955]/15 text-[#6B8E3F] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors"
+                                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-[#8CD955]/15 text-[#6B8E3F] dark:text-[#B8E986] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors w-full"
                                   title="Ver detalhes dos leads transferidos"
                                 >
-                                  <Eye className="w-3.5 h-3.5" />
+                                  <Eye className="w-4 h-4 flex-shrink-0" />
                                   Ver leads
                                 </button>
                                 <button
@@ -7496,10 +8577,10 @@ export default function AdminLeadTransferPage() {
                                     setInitialEditDeadlineDays(days);
                                     setShowEditTransferTypeModal(true);
                                   }}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-500/15 text-blue-700 dark:text-blue-400 hover:bg-blue-500/25 border border-blue-500/40 transition-colors"
+                                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 hover:bg-blue-500/25 border border-blue-500/40 transition-colors w-full"
                                   title="Alterar tipo e/ou prazo da transferência (ao trocar o prazo, o timer dos leads reseta)"
                                 >
-                                  <Pencil className="w-3.5 h-3.5" />
+                                  <Pencil className="w-4 h-4 flex-shrink-0" />
                                   Editar
                                 </button>
                                 {((log as { transfer_kind?: string }).transfer_kind === 'admin_to_gerente_stock') && (
@@ -7531,13 +8612,53 @@ export default function AdminLeadTransferPage() {
                                         showToast('Erro ao devolver reserva ao consultor de origem.', 'error');
                                       }
                                     }}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-500/20 border border-emerald-500/40 transition-colors"
+                                    className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-teal-500/15 text-teal-800 dark:text-teal-200 hover:bg-teal-500/25 border border-teal-500/40 transition-colors w-full"
                                     title="Devolve todos os leads ao consultor de origem: repasses Estoque→Consultor revertidos no CRM; reserva em estoque sincronizada quando aplicável; pacote marcado como revertido no Zaploto"
                                   >
-                                    <RotateCcw className="w-3.5 h-3.5" />
+                                    <RotateCcw className="w-4 h-4 flex-shrink-0" />
                                     Devolver à origem
                                   </button>
                                 )}
+                                {((log as { transfer_kind?: string }).transfer_kind === 'admin_to_gerente_stock') &&
+                                  (() => {
+                                    const stockPendingTd =
+                                      Number((log as { stock_pending_count?: number }).stock_pending_count ?? 0) > 0;
+                                    const stockCanceledTd =
+                                      Number((log as { stock_cancelado_count?: number }).stock_cancelado_count ?? 0) > 0;
+                                    const stockLogTd = String((log as { stock_status_log?: string }).stock_status_log ?? '');
+                                    const leadsLenTd = Array.isArray((log as { leads_ids?: unknown[] }).leads_ids)
+                                      ? (log as { leads_ids: unknown[] }).leads_ids.length
+                                      : 0;
+                                    const isRevertedTd = stockLogTd.startsWith('revertido');
+                                    /** Só esconde quando repasse concluído e sem pendência/cancelado nas contagens. */
+                                    const fullyRepassadoTd =
+                                      stockLogTd === 'repassado' && !stockPendingTd && !stockCanceledTd;
+                                    const showTransferenciaDiretaTd =
+                                      !isRevertedTd &&
+                                      !fullyRepassadoTd &&
+                                      (stockPendingTd ||
+                                        stockCanceledTd ||
+                                        stockLogTd === 'em_estoque' ||
+                                        stockLogTd === 'cancelado_total' ||
+                                        stockLogTd === 'cancelado_parcial' ||
+                                        (leadsLenTd > 0 && (stockLogTd === 'none' || stockLogTd === '')));
+                                    if (!showTransferenciaDiretaTd) return null;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setLogSelectedForStockDirectSync(log);
+                                          setStockDirectSyncTargetEmail('');
+                                          setShowStockDirectSyncModal(true);
+                                        }}
+                                        className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-violet-600/20 text-violet-800 dark:text-violet-200 hover:bg-violet-600/30 border border-violet-500/50 transition-colors w-full"
+                                        title="Retira os leads do estoque do gerente no Zaploto e repassa no CRM (origem → consultor de destino definido na reserva / solicitação)."
+                                      >
+                                        <ArrowRightLeft className="w-4 h-4 flex-shrink-0" />
+                                        Transferência direta
+                                      </button>
+                                    );
+                                  })()}
                                 {((log as { transfer_kind?: string }).transfer_kind === 'admin_to_gerente_stock') &&
                                   (() => {
                                     const stockStatusRow = (log as { stock_status_log?: string }).stock_status_log;
@@ -7606,12 +8727,12 @@ export default function AdminLeadTransferPage() {
                                             setAdminRestoreCanceledLoadingLogId(null);
                                           }
                                         }}
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-900 dark:text-amber-100 hover:bg-amber-500/25 border border-amber-500/45 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-amber-500/15 text-amber-900 dark:text-amber-100 hover:bg-amber-500/25 border border-amber-500/45 transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full"
                                       >
                                         {adminRestoreCanceledLoadingLogId === log.id ? (
-                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
                                         ) : (
-                                          <RotateCcw className="w-3.5 h-3.5" />
+                                          <RotateCcw className="w-4 h-4 flex-shrink-0" />
                                         )}
                                         Reverter cancel.
                                       </button>
@@ -7619,7 +8740,6 @@ export default function AdminLeadTransferPage() {
                                   })()}
                                 {(() => {
                                   const transferKind = ((log as { transfer_kind?: string }).transfer_kind ?? 'standard').trim();
-                                  const isStockReservation = transferKind === 'admin_to_gerente_stock';
                                   if (transferKind === 'gerente_stock_to_consultant') {
                                     const reversed =
                                       filtersSnapshot != null &&
@@ -7675,18 +8795,8 @@ export default function AdminLeadTransferPage() {
                                       </button>
                                     );
                                   }
-                                  if (isStockReservation) {
-                                    return (
-                                      <button
-                                        type="button"
-                                        onClick={() => { setLogSelectedForApagar(log); setShowApagarModal(true); }}
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-700 dark:text-red-400 hover:bg-red-500/25 border border-red-500/40 transition-colors"
-                                        title="Tirar os leads deste pacote do estoque (sem devolver no CRM)"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                        Tirar do estoque
-                                      </button>
-                                    );
+                                  if (transferKind === 'admin_to_gerente_stock') {
+                                    return null;
                                   }
                                   const leadsComDestino = isReverse || !(log as { devolvido_at?: string }).devolvido_at;
                                   const leadsComOrigem = (filtersSnapshot != null && typeof filtersSnapshot === 'object' && (filtersSnapshot as { devolucao?: boolean }).devolucao === true) || ((log as { devolvido_at?: string }).devolvido_at && !isReverse);
@@ -9576,10 +10686,14 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       onClick={() => {
                         setMoveLeadsSelectedLog(null);
-                        setMoveLeadsEntriesLoadedForLogId(null);
+                        setMoveLeadsEntriesLoadedKey(null);
+                        setMoveLeadsOpenLogRows([]);
+                        setMoveLeadsIncludedLogIds([]);
                         setMoveLeadsSelectedRequest(null);
                         setMoveLeadsEnterFormDirectly(false);
                         setMoveLeadsSelectedSourceEmail('');
+                        setMoveLeadsModalOriginPickKeys([]);
+                        setMoveLeadsGerenteDestinoVia('crm_direto');
                         setMoveLeadsTargetEmail('');
                       }}
                       className="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors"
@@ -9620,7 +10734,9 @@ export default function AdminLeadTransferPage() {
                   onClick={() => {
                     setMoveLeadsModalOpen(false);
                     setMoveLeadsSelectedLog(null);
-                    setMoveLeadsEntriesLoadedForLogId(null);
+                    setMoveLeadsEntriesLoadedKey(null);
+                    setMoveLeadsOpenLogRows([]);
+                    setMoveLeadsIncludedLogIds([]);
                     setMoveLeadsPreselectedLogId(null);
                     setMoveLeadsEnterFormDirectly(false);
                     setMoveLeadsFixedRecipient(null);
@@ -9634,6 +10750,7 @@ export default function AdminLeadTransferPage() {
                     setProblematicCountBySource({});
                     setMoveLeadsEstoqueGerenteMode(false);
                     setMoveLeadsEstoqueGerenteId('');
+                    setMoveLeadsGerenteDestinoVia('crm_direto');
                   }}
                   className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-600 dark:text-gray-300"
                 >
@@ -9644,6 +10761,186 @@ export default function AdminLeadTransferPage() {
             <div className="flex-1 overflow-y-auto p-4">
               {moveLeadsSelectedLog ? (
                 <div className="space-y-4">
+                  {/* Panorama: timeline completa + coluna dedicada a alertas / problemas */}
+                  <div className="rounded-xl border-2 border-slate-500/35 bg-gradient-to-br from-slate-100/90 via-white to-indigo-50/50 dark:from-slate-950/80 dark:via-[#1c1c1c] dark:to-indigo-950/30 p-4 shadow-md space-y-3 ring-1 ring-slate-400/20 dark:ring-slate-600/30">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
+                          <BarChart3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          Panorama de transferências
+                        </p>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-snug">
+                          Titular atual dos leads:{' '}
+                          <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                            {moveLeadsSelectedLog.target_consultant_email || '—'}
+                          </span>
+                          . Esquerda: linhas recentes no sistema (até 200). Direita: com{' '}
+                          <strong>pending</strong> ou pacotes deste envio com falha nesta sessão.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={moveLeadsPanoramaLoading}
+                        onClick={() => void loadMoveLeadsPanorama()}
+                        className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-400/50 bg-indigo-600/90 text-white hover:bg-indigo-500 dark:border-indigo-500/40 disabled:opacity-50"
+                      >
+                        {moveLeadsPanoramaLoading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        Atualizar panorama
+                      </button>
+                    </div>
+                    {problematicLeadIds.size > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-400/40 bg-red-50/90 dark:bg-red-950/35 px-3 py-2">
+                        <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                        <span className="text-[11px] font-semibold text-red-800 dark:text-red-200">
+                          {problematicLeadIds.size} lead(s) com falha nesta sessão — ignorados no próximo «Confirmar» até
+                          revisar.
+                        </span>
+                      </div>
+                    )}
+                    {moveLeadsPanoramaLoading && !moveLeadsPanoramaData ? (
+                      <div className="flex items-center justify-center gap-2 py-8 text-sm text-slate-600 dark:text-slate-400">
+                        <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                        Carregando timeline do titular…
+                      </div>
+                    ) : moveLeadsPanoramaData ? (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        <div className="rounded-lg border border-slate-300/60 dark:border-slate-600/50 bg-white/90 dark:bg-gray-900/60 p-3 min-h-[120px]">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                            Todas as transferências (recentes)
+                          </p>
+                          <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                            {moveLeadsPanoramaData.timeline.map((t) => (
+                              <div
+                                key={t.log_id}
+                                className={`rounded border px-2 py-1.5 ${
+                                  leadTraceTimelineRowHasAlert(t)
+                                    ? 'border-amber-400/70 bg-amber-50/80 dark:bg-amber-950/30 dark:border-amber-600/40'
+                                    : 'border-slate-200 dark:border-gray-700 bg-slate-50/80 dark:bg-gray-800/60'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1 flex-wrap text-[11px]">
+                                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                                    {t.created_at
+                                      ? new Date(t.created_at).toLocaleDateString('pt-BR', {
+                                          day: '2-digit',
+                                          month: '2-digit',
+                                          year: '2-digit',
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                        })
+                                      : '—'}
+                                  </span>
+                                  <span className="text-slate-400">·</span>
+                                  <span className="font-mono text-blue-700 dark:text-blue-300 truncate max-w-[100px]">
+                                    {(t.source_consultant_email ?? '?').split('@')[0]}
+                                  </span>
+                                  <span className="text-slate-400">→</span>
+                                  <span className="font-mono text-emerald-700 dark:text-emerald-300 truncate max-w-[100px]">
+                                    {(t.target_consultant_email ?? '?').split('@')[0]}
+                                  </span>
+                                  <span className="text-slate-400 ml-auto">{t.transfer_type ?? 'TF'}</span>
+                                </div>
+                                {Object.keys(t.status_breakdown).length > 0 && (
+                                  <div className="flex gap-1.5 mt-1 flex-wrap">
+                                    {Object.entries(t.status_breakdown).map(([st, qty]) => (
+                                      <span
+                                        key={st}
+                                        className={`px-1 rounded text-[10px] font-medium ${
+                                          st === 'repassado'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                                            : st === 'disponivel_retransferencia'
+                                              ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200'
+                                              : st === 'vinculado'
+                                                ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700'
+                                                : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                                        }`}
+                                      >
+                                        {qty}{' '}
+                                        {st === 'disponivel_retransferencia'
+                                          ? 'disp.'
+                                          : st === 'repassado'
+                                            ? 'repass.'
+                                            : st === 'vinculado'
+                                              ? 'vinc.'
+                                              : st}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            {moveLeadsPanoramaData.timeline.length === 0 && (
+                              <p className="text-xs text-slate-500 italic">Nenhum log encontrado para este titular na banca.</p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border-2 border-rose-400/45 dark:border-rose-700/40 bg-rose-50/90 dark:bg-rose-950/25 p-3 min-h-[120px]">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-rose-800 dark:text-rose-200 mb-2 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            Transferências com alerta / problema
+                          </p>
+                          <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                            {moveLeadsPanoramaAlertRows.map((t) => (
+                              <div
+                                key={`panorama-alert-${t.log_id}`}
+                                className="rounded border border-rose-300/70 dark:border-rose-800/50 bg-white/90 dark:bg-gray-900/70 px-2 py-1.5"
+                              >
+                                <div className="flex items-center gap-1 flex-wrap text-[11px] text-rose-950 dark:text-rose-50">
+                                  <span className="font-medium">
+                                    {t.created_at
+                                      ? new Date(t.created_at).toLocaleDateString('pt-BR', {
+                                          day: '2-digit',
+                                          month: '2-digit',
+                                          year: '2-digit',
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                        })
+                                      : '—'}
+                                  </span>
+                                  <span className="text-rose-400">·</span>
+                                  <span className="font-mono truncate max-w-[200px]">
+                                    {t.source_consultant_email ?? '?'} → {t.target_consultant_email ?? '?'}
+                                  </span>
+                                  <span className="text-rose-500 dark:text-rose-300 ml-auto">{t.transfer_type ?? 'TF'}</span>
+                                </div>
+                                <div className="flex gap-1.5 mt-1 flex-wrap">
+                                  {Object.entries(t.status_breakdown).map(([st, qty]) => (
+                                    <span
+                                      key={`${t.log_id}-${st}`}
+                                      className={`px-1 rounded text-[10px] font-semibold ${
+                                        st === 'pending'
+                                          ? 'bg-rose-200 dark:bg-rose-900/50 text-rose-900 dark:text-rose-100'
+                                          : st === 'disponivel_retransferencia'
+                                            ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-100'
+                                            : 'bg-slate-200/80 dark:bg-gray-700 text-slate-800 dark:text-slate-200'
+                                      }`}
+                                    >
+                                      {qty} {st}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                            {moveLeadsPanoramaAlertRows.length === 0 && (
+                              <p className="text-xs text-rose-800/90 dark:text-rose-200/90 leading-relaxed">
+                                Nenhuma linha com <strong>pending</strong> nem pacote deste envio com falha nesta sessão.
+                                Use «Atualizar panorama» após um repasse ou o fluxo de desync para rastrear amostra de
+                                leads.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 py-2">
+                        Não foi possível carregar o panorama. Tente «Atualizar panorama».
+                      </p>
+                    )}
+                  </div>
                   {/* Banner de problema na transferência — exibido no topo para visibilidade imediata */}
                   {moveLeadsCrmDesyncPending && (
                     <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/40 p-4 space-y-3 shadow-md">
@@ -9770,13 +11067,31 @@ export default function AdminLeadTransferPage() {
                     {moveLeadsEstoqueGerenteMode ? (
                       <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-1">
                         Leads para reserva no estoque ·{' '}
-                        <span className="tabular-nums">{moveLeadsSelectedLog.disponivel}</span> disponível(is) · tipo{' '}
-                        {moveLeadsSelectedLog.transfer_type}
+                        {moveLeadsOpenLogRows.length > 1 ? (
+                          <>
+                            <span className="tabular-nums">{moveLeadsIncludedLogIds.length}</span> pacote(s) · até{' '}
+                            <span className="tabular-nums">{moveLeadsAvailableQty}</span> lead(s) neste envio
+                          </>
+                        ) : (
+                          <>
+                            <span className="tabular-nums">{moveLeadsSelectedLog.disponivel}</span> disponível(is) · tipo{' '}
+                            {moveLeadsSelectedLog.transfer_type}
+                          </>
+                        )}
                       </p>
                     ) : (
                       <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-1">
-                        Transferência {moveLeadsSelectedLog.log_id.slice(0, 8)}… • {moveLeadsSelectedLog.disponivel} lead(s) •{' '}
-                        {moveLeadsSelectedLog.transfer_type}
+                        {moveLeadsOpenLogRows.length > 1 ? (
+                          <>
+                            <span className="tabular-nums">{moveLeadsIncludedLogIds.length}</span> transferência(ões) selecionada(s) · até{' '}
+                            <span className="tabular-nums">{moveLeadsAvailableQty}</span> lead(s) neste envio
+                          </>
+                        ) : (
+                          <>
+                            Transferência {moveLeadsSelectedLog.log_id.slice(0, 8)}… · até{' '}
+                            <span className="tabular-nums">{moveLeadsAvailableQty}</span> lead(s) · {moveLeadsSelectedLog.transfer_type}
+                          </>
+                        )}
                       </p>
                     )}
                     {moveLeadsEstoqueGerenteMode ? (
@@ -9821,12 +11136,7 @@ export default function AdminLeadTransferPage() {
                       <>
                         <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 mb-0.5">Consultor que receberá os leads (solicitação)</p>
                         <p className="text-xs text-emerald-700 dark:text-emerald-300 break-all">
-                          {moveLeadsFixedRecipient?.email?.trim() ||
-                            moveLeadsSelectedRequest?.consultores?.[0]?.consultor_email?.trim() ||
-                            moveLeadsTargetEmail.trim()}
-                          {(moveLeadsFixedRecipient?.name || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_name)?.trim()
-                            ? ` · ${(moveLeadsFixedRecipient?.name || moveLeadsSelectedRequest?.consultores?.[0]?.consultor_name)?.trim()}`
-                            : ''}
+                          {moveLeadsSelectedConsultantLabel || moveLeadsDestinationEmail}
                         </p>
                       </>
                     ) : (
@@ -9834,39 +11144,238 @@ export default function AdminLeadTransferPage() {
                         <label className="block text-xs font-semibold text-emerald-800 dark:text-emerald-200 mb-1">
                           Consultor destino <span className="text-red-500">*</span>
                         </label>
-                        <input
-                          type="email"
-                          list="move-leads-consultants-list"
-                          value={moveLeadsTargetEmail}
-                          onChange={(e) => setMoveLeadsTargetEmail(e.target.value)}
-                          placeholder="Email do consultor que receberá os leads"
-                          className="w-full border border-emerald-400/60 dark:border-emerald-600/50 bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 placeholder-gray-400 dark:placeholder-gray-500"
-                        />
-                        <datalist id="move-leads-consultants-list">
-                          {moveLeadsConsultants.map((c) => (
-                            <option key={c.email} value={c.email ?? ''}>
-                              {c.full_name ? `${c.full_name} · ${c.email}` : c.email}
-                            </option>
-                          ))}
-                        </datalist>
-                        {!moveLeadsTargetEmail.trim() && (
-                          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">Informe o email do consultor destino para habilitar a transferência.</p>
+                        <p className="text-[10px] text-emerald-700/85 dark:text-emerald-300/80 mb-1.5">
+                          Lista apenas consultores da hierarquia desta banca no sistema (banca + subordinados dos gerentes).
+                        </p>
+                        {loadingMoveLeadsConsultants ? (
+                          <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2 py-2">
+                            <Loader2 className="w-4 h-4 animate-spin shrink-0" /> Carregando consultores da banca…
+                          </p>
+                        ) : (
+                          <div className="relative" ref={moveLeadsConsultantPickerRef}>
+                            <button
+                              type="button"
+                              id="move-leads-consultant-trigger"
+                              aria-haspopup="listbox"
+                              aria-expanded={moveLeadsConsultantPickerOpen}
+                              disabled={moveLeadsConsultantsSorted.length === 0}
+                              onClick={() => {
+                                setMoveLeadsConsultantPickerOpen((o) => {
+                                  const next = !o;
+                                  if (next) setMoveLeadsConsultantSearch('');
+                                  return next;
+                                });
+                              }}
+                              className="w-full flex items-center justify-between gap-2 text-left border border-emerald-400/60 dark:border-emerald-600/50 bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <span className={moveLeadsSelectedConsultantLabel ? 'truncate' : 'truncate text-gray-500 dark:text-gray-400'}>
+                                {moveLeadsSelectedConsultantLabel || 'Selecione o consultor…'}
+                              </span>
+                              <ChevronDown
+                                className={`w-4 h-4 shrink-0 text-emerald-700 dark:text-emerald-300 transition-transform ${moveLeadsConsultantPickerOpen ? 'rotate-180' : ''}`}
+                                aria-hidden
+                              />
+                            </button>
+                            {moveLeadsConsultantPickerOpen && moveLeadsConsultantsSorted.length > 0 && (
+                              <div
+                                role="listbox"
+                                aria-labelledby="move-leads-consultant-trigger"
+                                className="absolute z-[80] mt-1 w-full rounded-lg border border-emerald-400/50 dark:border-emerald-600/45 bg-white dark:bg-[#1f1f1f] shadow-xl flex flex-col max-h-[min(22rem,calc(100vh-12rem))] overflow-hidden"
+                              >
+                                <div className="p-2 border-b border-emerald-500/15 dark:border-emerald-600/25 shrink-0 bg-emerald-50/40 dark:bg-emerald-950/30">
+                                  <div className="relative">
+                                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-700/70 dark:text-emerald-300/60 pointer-events-none" aria-hidden />
+                                    <input
+                                      type="search"
+                                      autoComplete="off"
+                                      autoCorrect="off"
+                                      spellCheck={false}
+                                      placeholder="Pesquisar por nome ou e-mail…"
+                                      value={moveLeadsConsultantSearch}
+                                      onChange={(e) => setMoveLeadsConsultantSearch(e.target.value)}
+                                      className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-emerald-400/50 dark:border-emerald-600/40 bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                                    />
+                                  </div>
+                                  <p className="text-[10px] text-emerald-800/80 dark:text-emerald-200/70 mt-1.5 px-0.5">
+                                    {moveLeadsConsultantsFiltered.length} de {moveLeadsConsultantsSorted.length} na lista
+                                  </p>
+                                </div>
+                                <ul className="overflow-y-auto py-1 min-h-0 flex-1">
+                                  {moveLeadsConsultantsFiltered.map((c) => {
+                                    const em = (c.email ?? '').trim();
+                                    const nm = (c.full_name ?? '').trim();
+                                    const label = nm ? `${nm} · ${em}` : em;
+                                    const selected =
+                                      em.toLowerCase() === moveLeadsTargetEmail.trim().toLowerCase();
+                                    return (
+                                      <li key={c.id ?? em} role="none">
+                                        <button
+                                          type="button"
+                                          role="option"
+                                          aria-selected={selected}
+                                          className={`w-full text-left px-3 py-2 text-sm truncate hover:bg-emerald-100/70 dark:hover:bg-emerald-900/35 ${selected ? 'bg-emerald-100/90 dark:bg-emerald-900/50 font-medium' : ''}`}
+                                          onClick={() => {
+                                            setMoveLeadsTargetEmail(em);
+                                            setMoveLeadsConsultantPickerOpen(false);
+                                            setMoveLeadsConsultantSearch('');
+                                          }}
+                                        >
+                                          {label}
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                                {moveLeadsConsultantsFiltered.length === 0 && (
+                                  <p className="px-3 py-3 text-xs text-amber-700 dark:text-amber-300 text-center">
+                                    Nenhum consultor corresponde à pesquisa.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {!loadingMoveLeadsConsultants && moveLeadsConsultants.filter((c) => (c.email ?? '').trim()).length === 0 && (
+                          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                            Nenhum consultor com e-mail na hierarquia desta banca (gerentes e subordinados vinculados). Verifique user_bancas e vínculos enroller → gerente.
+                          </p>
+                        )}
+                        {!loadingMoveLeadsConsultants && moveLeadsConsultants.filter((c) => (c.email ?? '').trim()).length > 0 && !moveLeadsTargetEmail.trim() && (
+                          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                            Escolha o consultor destino na lista para habilitar a transferência.
+                          </p>
                         )}
                       </>
                     )}
                     {!moveLeadsEstoqueGerenteMode ? (
                       <p className="text-[10px] text-emerald-600/90 dark:text-emerald-400/90 mt-2 pt-2 border-t border-emerald-500/20">
-                        Leads atualmente na carteira de: <span className="font-mono">{moveLeadsSelectedLog.target_consultant_email || '—'}</span> (serão
-                        repassados a partir deste titular)
+                        {(() => {
+                          const targets = [
+                            ...new Set(
+                              moveLeadsOpenLogRows
+                                .filter((r) => moveLeadsIncludedLogIds.includes(r.log_id))
+                                .map((r) => (r.target_consultant_email ?? '').trim())
+                                .filter(Boolean)
+                            ),
+                          ];
+                          if (targets.length === 0) {
+                            return (
+                              <>
+                                Titular no CRM: <span className="font-mono">—</span>
+                              </>
+                            );
+                          }
+                          if (targets.length === 1) {
+                            return (
+                              <>
+                                Leads na carteira de: <span className="font-mono">{targets[0]}</span> (repasse a partir deste titular)
+                              </>
+                            );
+                          }
+                          return (
+                            <>
+                              Titulares no CRM ({targets.length}):{' '}
+                              {targets.map((t) => (
+                                <span key={t} className="font-mono block truncate">
+                                  {t}
+                                </span>
+                              ))}
+                            </>
+                          );
+                        })()}
                       </p>
                     ) : null}
+                    {!moveLeadsEstoqueGerenteMode &&
+                      moveLeadsDestinatarioIsGerente &&
+                      moveLeadsDestinationEmail.trim() && (
+                        <div className="mt-3 rounded-lg border border-amber-400/45 bg-amber-50/55 dark:bg-amber-950/35 dark:border-amber-500/35 px-3 py-2.5">
+                          <p className="text-xs font-semibold text-amber-950 dark:text-amber-100 mb-1">
+                            Destino é um gerente — como repassar?
+                          </p>
+                          <p className="text-[10px] text-amber-900/90 dark:text-amber-200/85 mb-2 leading-snug">
+                            Por padrão este envio usa <strong>repasse direto no CRM</strong> (titular passa ao e-mail escolhido). Só marque reserva no estoque se os leads <strong>não</strong> devem mudar de titular no CRM neste passo.
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            <label className="flex items-start gap-2 cursor-pointer text-xs text-gray-900 dark:text-gray-100">
+                              <input
+                                type="radio"
+                                name="move-leads-gerente-via"
+                                className="mt-0.5 text-emerald-600 shrink-0"
+                                checked={moveLeadsGerenteDestinoVia === 'estoque'}
+                                onChange={() => setMoveLeadsGerenteDestinoVia('estoque')}
+                              />
+                              <span>
+                                <strong>Reserva no estoque do gerente</strong> — titular permanece como hoje no CRM; o gerente redistribui depois (recomendado).
+                              </span>
+                            </label>
+                            <label className="flex items-start gap-2 cursor-pointer text-xs text-gray-900 dark:text-gray-100">
+                              <input
+                                type="radio"
+                                name="move-leads-gerente-via"
+                                className="mt-0.5 text-emerald-600 shrink-0"
+                                checked={moveLeadsGerenteDestinoVia === 'crm_direto'}
+                                onChange={() => setMoveLeadsGerenteDestinoVia('crm_direto')}
+                              />
+                              <span>
+                                <strong>Repasse direto no CRM</strong> — titular passa a ser o e-mail do gerente neste envio (chama o CRM como para um consultor).
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      )}
                   </div>
+                  {moveLeadsOpenLogRows.length > 1 && (
+                    <div className="rounded-xl border border-teal-500/35 bg-teal-50/40 dark:bg-teal-950/25 dark:border-teal-600/40 p-3">
+                      <p className="text-xs font-semibold text-teal-900 dark:text-teal-100 mb-1">Transferências resolvidas neste repasse</p>
+                      <p className="text-[11px] text-teal-800 dark:text-teal-200/90 mb-2">
+                        Por padrão todas as linhas agregadas para este doador estão incluídas. Desmarque as que não devem entrar neste envio (mantém ao menos uma).
+                      </p>
+                      <div className="max-h-48 overflow-y-auto divide-y divide-teal-200/60 dark:divide-teal-800/40 rounded-lg border border-teal-300/40 dark:border-teal-700/40">
+                        {moveLeadsOpenLogRows.map((row) => {
+                          const checked = moveLeadsIncludedLogIds.includes(row.log_id);
+                          return (
+                            <label
+                              key={row.log_id}
+                              className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-teal-100/40 dark:hover:bg-teal-900/20"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={loadingMoveLeadsEntries || loadingMoveLeadsConsultants || moveLeadsMoving}
+                                onChange={(e) => {
+                                  const want = e.target.checked;
+                                  setMoveLeadsIncludedLogIds((prev) => {
+                                    if (want) {
+                                      if (prev.includes(row.log_id)) return prev;
+                                      return [...prev, row.log_id];
+                                    }
+                                    const next = prev.filter((id) => id !== row.log_id);
+                                    if (next.length === 0) return prev;
+                                    return next;
+                                  });
+                                }}
+                                className="mt-1 rounded border-gray-400 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              <span className="text-xs text-gray-800 dark:text-gray-100 flex-1 min-w-0">
+                                <span className="font-mono text-[11px]">{row.log_id.slice(0, 8)}…</span>
+                                {' · '}
+                                <span className="tabular-nums">{row.disponivel}</span> na lista · {row.transfer_type}
+                                <span className="block text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 truncate" title={row.target_consultant_email ?? ''}>
+                                  Titular: {row.target_consultant_email || '—'}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-bold text-gray-800 dark:text-gray-200 mb-2">Consultores de origem</label>
                     <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
                       {moveLeadsEstoqueGerenteMode
-                        ? 'Cada origem agrupa os leads disponíveis por consultor doador nesta banca; ao clicar, carrega o lote usado para o envio ao estoque (prioriza o lote com mais leads quando houver mais de uma linha).'
-                        : 'Selecione o consultor doador para carregar a transferência resolvida com leads disponíveis nesta banca (usa a transferência com mais leads quando houver mais de uma).'}
+                        ? 'Cada origem agrupa os leads disponíveis por consultor doador nesta banca. Clique na linha para carregar só essa origem, ou marque várias e use «Carregar origens selecionadas juntas» para um envio em volume.'
+                        : 'Marque dois ou mais consultores e use «Carregar origens selecionadas juntas» para agregar pacotes no mesmo envio; ou clique na linha para carregar apenas uma origem.'}
                     </p>
                     {(() => {
                       const bancaId = moveLeadsSelectedLog.banca_id;
@@ -9922,57 +11431,121 @@ export default function AdminLeadTransferPage() {
                           </p>
                         );
                       }
-                      const currentSourceNorm = (moveLeadsSelectedLog.source_consultant_email ?? '').trim().toLowerCase();
+                      const openSourceKeys = new Set(
+                        moveLeadsOpenLogRows.map((r) => (r.source_consultant_email ?? '').trim().toLowerCase()).filter(Boolean)
+                      );
+                      const pickSumLeads = rows
+                        .filter((r) => moveLeadsModalOriginPickKeys.includes(r.email.toLowerCase()))
+                        .reduce((s, r) => s + r.totalDisponivel, 0);
                       return (
-                        <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[200px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
-                          {rows.map((row) => {
-                            const isSelected = currentSourceNorm === row.email.toLowerCase();
-                            const nameFromConsultants = moveLeadsConsultants.find(
-                              (c) => (c.email ?? '').trim().toLowerCase() === row.email.toLowerCase()
-                            )?.full_name?.trim();
-                            const displayName = (row.sourceConsultantName ?? '').trim() || nameFromConsultants || '';
-                            const titleLine = displayName
-                              ? `${displayName} · ${row.email} · ${bancaLabel}`
-                              : `${row.email} · ${bancaLabel}`;
-                            const tfBadgesInner =
-                              moveLeadsModalTfFilter === 'all' && row.transferTypes.size > 0
-                                ? sortMoveLeadsTfLabels(row.transferTypes)
-                                : [];
-                            return (
+                        <>
+                          {moveLeadsModalOriginPickKeys.length > 0 && (
+                            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/35 bg-emerald-50/50 dark:bg-emerald-950/30 px-3 py-2">
+                              <span className="text-xs text-emerald-900 dark:text-emerald-100">
+                                <strong className="tabular-nums">{moveLeadsModalOriginPickKeys.length}</strong> origem(ns) · até{' '}
+                                <strong className="tabular-nums">{pickSumLeads}</strong> lead(s)
+                              </span>
                               <button
-                                key={row.email}
                                 type="button"
-                                onClick={() => void handleMoveLeadsPickSource(row.email, bancaId, !!moveLeadsSelectedRequest)}
-                                className={`w-full flex flex-col items-start px-4 py-3 text-left hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 transition-colors rounded-lg ${isSelected ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-2 ring-emerald-500/60' : 'hover:ring-1 hover:ring-emerald-500/30'}`}
+                                onClick={() => setMoveLeadsModalOriginPickKeys([])}
+                                className="text-xs font-medium text-gray-600 dark:text-gray-300 underline hover:no-underline"
                               >
-                                <div className="flex flex-wrap items-center gap-1.5 w-full">
-                                  <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">
-                                    {titleLine}
-                                  </span>
-                                  {tfBadgesInner.map((tf) => (
-                                    <span
-                                      key={tf}
-                                      className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded border border-teal-500/35 bg-teal-500/10 text-teal-800 dark:text-teal-200 shrink-0"
-                                      title="Tipo de transferência (TF)"
-                                    >
-                                      {tf}
-                                    </span>
-                                  ))}
-                                </div>
-                                <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
-                                  {row.totalDisponivel} lead(s) disponível(is)
-                                  {row.logCount > 1 && (
-                                    <span className="block mt-1 font-medium text-emerald-700 dark:text-emerald-400">
-                                      {moveLeadsEstoqueGerenteMode
-                                        ? `${row.logCount} linhas agrupadas nesta origem`
-                                        : `${row.logCount} transferências resolvidas agregadas`}
-                                    </span>
-                                  )}
-                                </span>
+                                Limpar marcação
                               </button>
-                            );
-                          })}
-                        </div>
+                              {moveLeadsModalOriginPickKeys.length >= 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleMoveLeadsPickMultipleSources(moveLeadsModalOriginPickKeys, bancaId, !!moveLeadsSelectedRequest)
+                                  }
+                                  className="ml-auto inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                                >
+                                  <CheckSquare className="w-3.5 h-3.5" />
+                                  Carregar origens selecionadas juntas
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          <div className="rounded-xl border-2 border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-500/20 overflow-y-auto max-h-[200px] divide-y divide-emerald-200/50 dark:divide-emerald-800/30">
+                            {rows.map((row) => {
+                              const isActiveInForm = openSourceKeys.has(row.email.toLowerCase());
+                              const picked = moveLeadsModalOriginPickKeys.includes(row.email.toLowerCase());
+                              const nameFromConsultants = moveLeadsConsultants.find(
+                                (c) => (c.email ?? '').trim().toLowerCase() === row.email.toLowerCase()
+                              )?.full_name?.trim();
+                              const displayName = (row.sourceConsultantName ?? '').trim() || nameFromConsultants || '';
+                              const titleLine = displayName
+                                ? `${displayName} · ${row.email} · ${bancaLabel}`
+                                : `${row.email} · ${bancaLabel}`;
+                              const tfBadgesInner =
+                                moveLeadsModalTfFilter === 'all' && row.transferTypes.size > 0
+                                  ? sortMoveLeadsTfLabels(row.transferTypes)
+                                  : [];
+                              const problematicCountModal = problematicCountBySource[row.email.toLowerCase()] ?? 0;
+                              const hasProblematicModal = problematicCountModal > 0;
+                              const allProblematicModal =
+                                hasProblematicModal && problematicCountModal >= row.totalDisponivel;
+                              const originRowDisabled =
+                                loadingResolvedList ||
+                                moveLeadsMoving ||
+                                row.totalDisponivel <= 0 ||
+                                allProblematicModal;
+                              return (
+                                <div
+                                  key={row.email}
+                                  className={`flex items-start gap-2 px-3 py-2 sm:px-4 sm:py-3 transition-colors ${
+                                    isActiveInForm
+                                      ? 'bg-emerald-100/70 dark:bg-emerald-900/40 ring-1 ring-inset ring-emerald-500/50'
+                                      : picked
+                                      ? 'bg-emerald-50/80 dark:bg-emerald-900/25'
+                                      : 'hover:bg-emerald-100/40 dark:hover:bg-emerald-900/25'
+                                  } ${originRowDisabled ? 'opacity-50' : ''}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={picked}
+                                    disabled={originRowDisabled}
+                                    title="Marcar para carregar várias origens juntas"
+                                    onChange={() => toggleMoveLeadsModalOriginPick(row.email)}
+                                    className="mt-1.5 rounded border-gray-400 text-emerald-600 focus:ring-emerald-500 shrink-0 disabled:cursor-not-allowed"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={originRowDisabled}
+                                    className="min-w-0 flex-1 flex flex-col items-start text-left rounded-md outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    onClick={() => {
+                                      if (originRowDisabled) return;
+                                      void handleMoveLeadsPickSource(row.email, bancaId, !!moveLeadsSelectedRequest);
+                                    }}
+                                  >
+                                    <div className="flex flex-wrap items-center gap-1.5 w-full">
+                                      <span className="text-sm font-semibold text-gray-900 dark:text-white break-all">{titleLine}</span>
+                                      {tfBadgesInner.map((tf) => (
+                                        <span
+                                          key={tf}
+                                          className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded border border-teal-500/35 bg-teal-500/10 text-teal-800 dark:text-teal-200 shrink-0"
+                                          title="Tipo de transferência (TF)"
+                                        >
+                                          {tf}
+                                        </span>
+                                      ))}
+                                    </div>
+                                    <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                                      {row.totalDisponivel} lead(s) disponível(is)
+                                      {row.logCount > 1 && (
+                                        <span className="block mt-1 font-medium text-emerald-700 dark:text-emerald-400">
+                                          {moveLeadsEstoqueGerenteMode
+                                            ? `${row.logCount} linhas agrupadas nesta origem`
+                                            : `${row.logCount} transferências resolvidas agregadas`}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
                       );
                     })()}
                   </div>
@@ -9986,13 +11559,13 @@ export default function AdminLeadTransferPage() {
                   )}
                   {moveLeadsSelectedRequest &&
                     moveLeadsSelectedLog &&
-                    moveLeadsEntriesLoadedForLogId === moveLeadsSelectedLog.log_id &&
+                    moveLeadsEntriesLoadedKey === moveLeadsOpenLogsStableKey &&
                     (() => {
                       const totalRequested = (moveLeadsSelectedRequest.consultores ?? []).reduce((s, c) => s + c.quantity, 0);
                       const faltam = moveLeadsSelectedRequest.leads_still_needed ?? totalRequested;
-                      const disponiveis = moveLeadsEntries.length;
-                      const qtyToComplete = Math.min(faltam, disponiveis);
-                      const restantes = disponiveis - qtyToComplete;
+                      const disponiveis = moveLeadsEntriesForMove.length;
+                      const qtyToComplete = Math.min(faltam, moveLeadsAvailableQty);
+                      const restantes = Math.max(0, moveLeadsAvailableQty - qtyToComplete);
                       return (
                         <div className="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/20">
                           <p className="text-xs text-amber-800 dark:text-amber-200 mb-2">
@@ -10049,8 +11622,8 @@ export default function AdminLeadTransferPage() {
                 <>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                     {moveLeadsEstoqueGerenteMode
-                      ? 'Escolha a origem (consultor na lista abaixo) para abrir os leads que serão reservados no estoque do gerente. Priorizamos o lote com mais disponíveis quando houver mais de uma linha.'
-                      : 'Selecione o consultor de origem para carregar automaticamente a melhor transferência resolvida com leads disponíveis.'}
+                      ? 'Escolha a origem (consultor na lista abaixo) para abrir todos os pacotes resolvidos desse doador com leads ao estoque. Marque várias origens e use «Carregar juntas» quando a banca estiver filtrada no histórico.'
+                      : 'Clique em um consultor para carregar só essa origem, ou marque várias e use «Carregar origens selecionadas juntas» (é necessário filtrar uma banca no histórico quando houver mais de uma banca no recorte).'}
                   </p>
                   {/* Solicitações pendentes: selecionar vincula o destino automaticamente */}
                   {(() => {
@@ -10221,6 +11794,49 @@ export default function AdminLeadTransferPage() {
                         });
                       }
 
+                      const mergeBancaId = (bancaIdFiltro || selectedReqBancaId || '').trim();
+                      const pickBatchLeadSum = allRows
+                        .filter((row) => moveLeadsModalOriginPickKeys.includes(row.email.toLowerCase()))
+                        .reduce((s, row) => s + row.totalDisponivel, 0);
+
+                      const batchOriginStrip =
+                        moveLeadsModalOriginPickKeys.length > 0 ? (
+                          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/35 bg-emerald-50/50 dark:bg-emerald-950/30 px-3 py-2">
+                            <span className="text-xs text-emerald-900 dark:text-emerald-100">
+                              <strong className="tabular-nums">{moveLeadsModalOriginPickKeys.length}</strong> origem(ns) · até{' '}
+                              <strong className="tabular-nums">{pickBatchLeadSum}</strong> lead(s)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setMoveLeadsModalOriginPickKeys([])}
+                              className="text-xs font-medium text-gray-600 dark:text-gray-300 underline hover:no-underline"
+                            >
+                              Limpar marcação
+                            </button>
+                            {moveLeadsModalOriginPickKeys.length >= 2 && mergeBancaId ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleMoveLeadsPickMultipleSources(
+                                    moveLeadsModalOriginPickKeys,
+                                    mergeBancaId,
+                                    !!moveLeadsSelectedRequest
+                                  )
+                                }
+                                className="ml-auto inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                              >
+                                <CheckSquare className="w-3.5 h-3.5" />
+                                Carregar origens selecionadas juntas
+                              </button>
+                            ) : null}
+                            {moveLeadsModalOriginPickKeys.length >= 2 && !mergeBancaId ? (
+                              <span className="text-[11px] text-amber-700 dark:text-amber-300 ml-auto max-w-[14rem] text-right">
+                                Filtre uma banca no histórico (ou selecione uma solicitação com banca) para agrupar várias origens.
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null;
+
                       const toolbar = (
                         <div className="mb-3 flex flex-col sm:flex-row gap-2 sm:items-end">
                           <div className="relative flex-1 min-w-0">
@@ -10265,6 +11881,7 @@ export default function AdminLeadTransferPage() {
                           <div>
                             {recoBanner}
                             {toolbar}
+                            {batchOriginStrip}
                             <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
                               {moveLeadsEstoqueGerenteMode
                                 ? moveLeadsModalTfFilter !== 'all'
@@ -10283,6 +11900,7 @@ export default function AdminLeadTransferPage() {
                           <div>
                             {recoBanner}
                             {toolbar}
+                            {batchOriginStrip}
                             <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">
                               Nenhum consultor corresponde à pesquisa. Limpe o campo ou ajuste o termo.
                             </p>
@@ -10326,20 +11944,50 @@ export default function AdminLeadTransferPage() {
                         const hasProblematic = problematicCount > 0;
                         // Considera "todos problemáticos" quando o nº de falhas cobre todos os disponíveis
                         const allProblematic = hasProblematic && problematicCount >= row.totalDisponivel;
+                        const originRowDisabled =
+                          loadingResolvedList ||
+                          moveLeadsMoving ||
+                          row.totalDisponivel <= 0 ||
+                          allProblematic;
+
+                        const picked = moveLeadsModalOriginPickKeys.includes(row.email.toLowerCase());
 
                         return (
-                          <button
+                          <div
                             key={row.email}
-                            type="button"
-                            onClick={() => void handleMoveLeadsPickSource(row.email, isNeon ? selectedReqBancaId : bancaIdFiltro, !!moveLeadsSelectedRequest)}
-                            className={`w-full flex flex-col items-start px-4 py-3 text-left transition-all ${
+                            className={`flex w-full items-start gap-2 px-3 py-2 sm:px-4 sm:py-3 text-left transition-all ${
                               isNeon
                                 ? 'hover:bg-[#8CD955]/15 dark:hover:bg-[#8CD955]/10'
                                 : allProblematic
                                 ? 'bg-red-50/40 dark:bg-red-950/20 hover:bg-red-100/50 dark:hover:bg-red-900/30 opacity-80'
+                                : picked
+                                ? 'bg-emerald-50/70 dark:bg-emerald-900/20'
                                 : 'hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 opacity-60 hover:opacity-100'
-                            }`}
+                            } ${originRowDisabled ? 'opacity-50' : ''}`}
                           >
+                            <input
+                              type="checkbox"
+                              checked={picked}
+                              disabled={originRowDisabled}
+                              title="Marcar para carregar várias origens juntas"
+                              onChange={() => toggleMoveLeadsModalOriginPick(row.email)}
+                              className="mt-1.5 rounded border-gray-400 text-emerald-600 focus:ring-emerald-500 shrink-0 disabled:cursor-not-allowed"
+                            />
+                            <button
+                              type="button"
+                              disabled={originRowDisabled}
+                              className={`min-w-0 flex-1 flex flex-col items-start text-left outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-md disabled:cursor-not-allowed disabled:opacity-60 ${
+                                isNeon ? 'focus-visible:ring-[#8CD955]' : ''
+                              }`}
+                              onClick={() => {
+                                if (originRowDisabled) return;
+                                void handleMoveLeadsPickSource(
+                                  row.email,
+                                  isNeon ? selectedReqBancaId : bancaIdFiltro,
+                                  !!moveLeadsSelectedRequest
+                                );
+                              }}
+                            >
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={`text-sm font-semibold break-all ${isNeon ? 'text-[#8CD955]' : allProblematic ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
                                 {titleLine}
@@ -10376,7 +12024,8 @@ export default function AdminLeadTransferPage() {
                                   ? ` em ${row.logCount} transferências resolvidas`
                                   : ' em 1 transferência resolvida'}
                             </span>
-                          </button>
+                            </button>
+                          </div>
                         );
                       };
 
@@ -10384,6 +12033,7 @@ export default function AdminLeadTransferPage() {
                         <div>
                           {recoBanner}
                           {toolbar}
+                          {batchOriginStrip}
                           {/* Header label */}
                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
                             {moveLeadsEstoqueGerenteMode
@@ -11577,6 +13227,143 @@ export default function AdminLeadTransferPage() {
         </div>
       )}
 
+      {/* Modal: enviar reserva de estoque ao consultor (CRM) */}
+      {showStockDirectSyncModal && logSelectedForStockDirectSync && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-stock-direct-sync-title"
+        >
+          <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-md w-full border border-gray-200 dark:border-[#404040] overflow-hidden">
+            <div className="p-4 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-violet-500/10 dark:bg-violet-500/20">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-violet-600 dark:text-violet-400 flex-shrink-0" />
+                <h2 id="modal-stock-direct-sync-title" className="text-lg font-bold text-gray-900 dark:text-white">
+                  Transferência direta
+                </h2>
+              </div>
+              {!stockDirectSyncLoading && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStockDirectSyncModal(false);
+                    setLogSelectedForStockDirectSync(null);
+                    setStockDirectSyncTargetEmail('');
+                  }}
+                  className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 dark:hover:bg-[#404040] transition-colors"
+                  aria-label="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+            <div className="p-4">
+              {stockDirectSyncLoading ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-violet-500" />
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Enviando ao CRM e atualizando o estoque…</p>
+                </div>
+              ) : (
+                <>
+                  {(() => {
+                    const planned = getStockCrmPlannedTargetFromLog(logSelectedForStockDirectSync);
+                    const lastT = getStockDirectCrmLastTargetFromLog(logSelectedForStockDirectSync);
+                    const fromCol = getStockCrmTargetFromLogTargetColumn(logSelectedForStockDirectSync);
+                    const effective = planned || lastT || fromCol;
+                    const needsManual = !effective;
+                    return (
+                      <>
+                        <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                          Os leads deste pacote saem do <strong>estoque do gerente</strong> no Zaploto e são repassados no <strong>CRM</strong> do
+                          consultor de <strong>origem</strong> para o <strong>consultor de destino</strong> já definido quando os leads foram enviados
+                          ao estoque (recebedor da solicitação). As linhas passam a <strong>repassado</strong>.
+                        </p>
+                        {effective ? (
+                          <div className="rounded-xl border border-violet-400/40 bg-violet-50/60 dark:bg-violet-950/35 dark:border-violet-600/40 px-3 py-2.5 mb-3">
+                            <p className="text-[10px] font-bold text-violet-800 dark:text-violet-200 uppercase tracking-wide">Destino no CRM</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white break-all mt-1">{effective}</p>
+                            {planned && lastT && planned !== lastT ? (
+                              <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5">
+                                Última execução de transferência direta usou outro e-mail ({lastT}); confirmar usa o destino da reserva se você não
+                                preencher o campo opcional abaixo.
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {needsManual ? (
+                          <>
+                            <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5" htmlFor="stock-direct-sync-email">
+                              E-mail do consultor destino (CRM)
+                            </label>
+                            <input
+                              id="stock-direct-sync-email"
+                              type="email"
+                              autoComplete="email"
+                              value={stockDirectSyncTargetEmail}
+                              onChange={(e) => setStockDirectSyncTargetEmail(e.target.value)}
+                              placeholder="consultor@exemplo.com"
+                              className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-[#555] bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white text-sm mb-2"
+                            />
+                            <p className="text-[11px] text-amber-700 dark:text-amber-300/95 mb-4">
+                              Este pacote não guardou o recebedor na reserva. Informe o e-mail ou refaça o envio ao estoque a partir da solicitação.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3">
+                            Opcional: preencha abaixo apenas se quiser <strong>substituir</strong> o destino por outro consultor da banca.
+                          </p>
+                        )}
+                        {!needsManual ? (
+                          <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5" htmlFor="stock-direct-sync-email-override">
+                            Substituir destino (opcional)
+                          </label>
+                        ) : null}
+                        {!needsManual ? (
+                          <input
+                            id="stock-direct-sync-email-override"
+                            type="email"
+                            autoComplete="email"
+                            value={stockDirectSyncTargetEmail}
+                            onChange={(e) => setStockDirectSyncTargetEmail(e.target.value)}
+                            placeholder="Deixe em branco para usar o destino da reserva"
+                            className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-[#555] bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white text-sm mb-4"
+                          />
+                        ) : null}
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                          Origem no CRM: {(logSelectedForStockDirectSync as { source_consultant_email?: string }).source_consultant_email ?? '—'}
+                        </p>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowStockDirectSyncModal(false);
+                              setLogSelectedForStockDirectSync(null);
+                              setStockDirectSyncTargetEmail('');
+                            }}
+                            className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] font-medium transition-colors"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={confirmStockDirectSync}
+                            className="flex-1 px-4 py-2.5 rounded-xl bg-violet-600 text-white hover:bg-violet-700 font-medium transition-colors inline-flex items-center justify-center gap-2"
+                          >
+                            <ArrowRightLeft className="w-4 h-4" />
+                            Confirmar
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Devolver: confirmação para devolver leads do destino para a origem */}
       {showDevolverModal && logSelectedForDevolver && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-devolver-title">
@@ -11630,7 +13417,7 @@ export default function AdminLeadTransferPage() {
         </div>
       )}
 
-      {/* Modal Apagar: transferência normal devolve; estoque apenas remove/cancela reserva */}
+      {/* Modal Apagar: devolver transferência normal ao consultor de origem */}
       {showApagarModal && logSelectedForApagar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-apagar-title">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl max-w-md w-full border border-gray-200 dark:border-[#404040] overflow-hidden">
@@ -11638,9 +13425,7 @@ export default function AdminLeadTransferPage() {
               <div className="flex items-center gap-2">
                 <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
                 <h2 id="modal-apagar-title" className="text-lg font-bold text-gray-900 dark:text-white">
-                  {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
-                    ? 'Tirar do estoque'
-                    : 'Apagar transferência'}
+                  Apagar transferência
                 </h2>
               </div>
               {!apagarLoading && (
@@ -11654,32 +13439,17 @@ export default function AdminLeadTransferPage() {
                 <div className="flex flex-col items-center justify-center py-8 gap-4">
                   <Loader2 className="w-10 h-10 animate-spin text-red-500" />
                   <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                    {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
-                      ? 'Removendo leads do estoque…'
-                      : 'Apagando transferência e devolvendo leads…'}
+                    Apagando transferência e devolvendo leads…
                   </p>
                 </div>
               ) : (
                 <>
-                  {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock') ? (
-                    <>
-                      <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
-                        Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão removidos do estoque do gerente. <strong>Não haverá devolução no CRM</strong>, pois essa reserva foi apenas lógica.
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                        Esta ação marca a reserva como cancelada no histórico.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
-                        Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão devolvidos ao consultor de <strong>origem</strong>. A transferência será registrada como encerrada no histórico.
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                        Esta ação é irreversível. Os leads voltarão a aparecer para o consultor de origem na banca.
-                      </p>
-                    </>
-                  )}
+                  <p className="text-sm text-gray-700 dark:text-gray-200 mb-3">
+                    Os <strong>{Array.isArray((logSelectedForApagar as { leads_ids?: unknown[] }).leads_ids) ? (logSelectedForApagar as { leads_ids: unknown[] }).leads_ids.length : 0} lead(s)</strong> serão devolvidos ao consultor de <strong>origem</strong>. A transferência será registrada como encerrada no histórico.
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                    Esta ação é irreversível. Os leads voltarão a aparecer para o consultor de origem na banca.
+                  </p>
                   <div className="flex gap-3">
                     <button
                       type="button"
@@ -11694,9 +13464,7 @@ export default function AdminLeadTransferPage() {
                       className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 text-white hover:bg-red-600 font-medium transition-colors inline-flex items-center justify-center gap-2"
                     >
                       <Trash2 className="w-4 h-4" />
-                      {(((logSelectedForApagar as { transfer_kind?: string }).transfer_kind ?? 'standard').trim() === 'admin_to_gerente_stock')
-                        ? 'Tirar do estoque'
-                        : 'Apagar e devolver'}
+                      Apagar e devolver
                     </button>
                   </div>
                 </>

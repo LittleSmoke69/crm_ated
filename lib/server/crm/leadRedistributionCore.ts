@@ -3,11 +3,98 @@
  * Usado por /api/admin/crm/redistribute-leads e /api/gerente/crm/redistribute-leads.
  */
 
-import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
+import { createCrmRedistributionClient, type RedistributeLeadsResponse } from '@/lib/server/crm/crmRedistributionClient';
+import { buildLeadIdSetUnderConsultant, leadIdMatchKey, normalizeCrmLeadIdForRedistribute } from '@/lib/server/crm/crmLeadIdsForCrmApi';
 import { isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const LOG_PREFIX = '[lead-transfer][core]';
+
+/**
+ * E-mails nas entries do pacote que podem ser o titular no CRM (repasse pós-resolução / estoque).
+ * Ordem: original_source (doador real na reserva) → source → target da entry.
+ */
+async function fetchEntryEmailCandidatesForCrmSource(
+  transferLogId: string,
+  bancaId: string,
+  leadIds: Array<string | number>
+): Promise<string[]> {
+  const CHUNK = 200;
+  const uniqueIds = [...new Set(leadIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!transferLogId?.trim() || !bancaId?.trim() || uniqueIds.length === 0) return [];
+
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string | null | undefined) => {
+    const em = (raw ?? '').trim();
+    const low = em.toLowerCase();
+    if (!low.includes('@')) return;
+    if (seen.has(low)) return;
+    seen.add(low);
+    ordered.push(em);
+  };
+
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const chunk = uniqueIds.slice(i, i + CHUNK);
+    const { data, error } = await supabaseServiceRole
+      .from('admin_lead_transfer_entries')
+      .select('original_source_consultant_email, source_consultant_email, target_consultant_email')
+      .eq('transfer_log_id', transferLogId.trim())
+      .eq('banca_id', bancaId.trim())
+      .in('lead_id', chunk);
+    if (error) {
+      console.warn(`${LOG_PREFIX} fetchEntryEmailCandidates: ${error.message}`);
+      continue;
+    }
+    for (const row of data ?? []) {
+      const r = row as {
+        original_source_consultant_email?: string | null;
+        source_consultant_email?: string | null;
+        target_consultant_email?: string | null;
+      };
+      push(r.original_source_consultant_email);
+      push(r.source_consultant_email);
+      push(r.target_consultant_email);
+    }
+  }
+  return ordered;
+}
+
+/** Agrupa lead_ids por `original_source_consultant_email` nas entries (CRM titular real por lead). */
+async function groupLeadIdsByEntryOriginalSource(
+  transferLogId: string,
+  bancaId: string,
+  leadIds: Array<string | number>
+): Promise<Map<string, (string | number)[]>> {
+  const out = new Map<string, (string | number)[]>();
+  const CHUNK = 200;
+  const uniqueIds = [...new Set(leadIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!transferLogId?.trim() || !bancaId?.trim() || uniqueIds.length === 0) return out;
+
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const chunk = uniqueIds.slice(i, i + CHUNK);
+    const { data, error } = await supabaseServiceRole
+      .from('admin_lead_transfer_entries')
+      .select('lead_id, original_source_consultant_email')
+      .eq('transfer_log_id', transferLogId.trim())
+      .eq('banca_id', bancaId.trim())
+      .in('lead_id', chunk);
+    if (error) {
+      console.warn(`${LOG_PREFIX} groupLeadIdsByEntryOriginalSource: ${error.message}`);
+      continue;
+    }
+    for (const row of data ?? []) {
+      const lid = (row as { lead_id?: string | number }).lead_id;
+      const orig = String((row as { original_source_consultant_email?: string | null }).original_source_consultant_email ?? '').trim();
+      if (lid == null || lid === '') continue;
+      if (!orig.toLowerCase().includes('@')) continue;
+      const arr = out.get(orig) ?? [];
+      arr.push(lid);
+      out.set(orig, arr);
+    }
+  }
+  return out;
+}
 
 /** Normaliza e-mail do lead para persistir em admin_lead_transfer_entries.lead_email (busca no histórico). */
 export function normalizeLeadEmailForDb(raw: unknown): string | null {
@@ -174,14 +261,7 @@ export async function executeLeadRedistributionCore(
     return { ok: false, status: 400, error: 'Nenhum lead_id válido para transferir. Informe leads_ids ou use um log que possua entries.' };
   }
 
-  const crmLeadIds = normalizedLeadIds.map((id) => {
-    if (typeof id === 'number') return id;
-    const s = String(id);
-    if (!s.includes('-')) return id;
-    const last = s.split('-').pop() ?? '';
-    const n = Number(last);
-    return Number.isFinite(n) && n > 0 ? n : id;
-  });
+  const crmLeadIds = normalizedLeadIds.map((id) => normalizeCrmLeadIdForRedistribute(id));
 
   const fs = filters_snapshot != null && typeof filters_snapshot === 'object' ? filters_snapshot : null;
   const isDevolucao = fs != null && 'devolucao' in fs && 'log_origem_id' in fs;
@@ -219,95 +299,205 @@ export async function executeLeadRedistributionCore(
     return { ok: false, status: 400, error: 'Consultor destino não pertence à banca selecionada.' };
   }
 
-  console.log(
-    `${LOG_PREFIX} calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, n=${normalizedLeadIds.length} kind=${transferKind}`
-  );
   const client = createCrmRedistributionClient(ctx.crmBaseUrl);
-  const result = force_db_only
-    ? (() => {
-        console.warn(
-          `${LOG_PREFIX} [FORCE_DB_ONLY] CRM skipped. source=${source_consultant_email}, target=${target_consultant_email}, leads=${normalizedLeadIds.length}`
+
+  let preSkippedAlreadyAtTarget: (string | number)[] = [];
+  let crmLeadIdsToSend = crmLeadIds;
+  if (!force_db_only && crmLeadIds.length > 0) {
+    try {
+      const atTargetSet = await buildLeadIdSetUnderConsultant(client, target_consultant_email);
+      preSkippedAlreadyAtTarget = crmLeadIds.filter((id) => atTargetSet.has(leadIdMatchKey(id)));
+      crmLeadIdsToSend = crmLeadIds.filter((id) => !atTargetSet.has(leadIdMatchKey(id)));
+      if (preSkippedAlreadyAtTarget.length > 0) {
+        const sample = JSON.stringify(preSkippedAlreadyAtTarget.slice(0, 20));
+        const tail = preSkippedAlreadyAtTarget.length > 20 ? '…' : '';
+        console.log(
+          `${LOG_PREFIX} ${preSkippedAlreadyAtTarget.length} lead(s) já no consultor de destino no CRM — omitidos do redistributeLeads. sample=${sample}${tail}`
         );
-        return { success: true as const, count: normalizedLeadIds.length, message: 'force_db_only — CRM skipped by admin' };
-      })()
-    : await client.redistributeLeads({
-        source_consultant_email,
-        target_consultant_email,
-        leads_ids: crmLeadIds,
-      });
+      }
+    } catch (e) {
+      console.warn(`${LOG_PREFIX} falha ao listar indicados do destino; enviando todos os leads ao redistributeLeads.`, e);
+      preSkippedAlreadyAtTarget = [];
+      crmLeadIdsToSend = crmLeadIds;
+    }
+  }
 
-  console.log(`${LOG_PREFIX} CRM response: success=${result.success}, full=${JSON.stringify(result)}`);
+  console.log(
+    `${LOG_PREFIX} calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, n=${crmLeadIdsToSend.length} total=${normalizedLeadIds.length} preSkipped=${preSkippedAlreadyAtTarget.length} kind=${transferKind}`
+  );
 
-  if (!result.success) {
-    const rawMessage = (result.error ?? result.message ?? 'Erro ao redistribuir leads no CRM').trim();
+  /** Objeto + propriedade mutável: evita reassignment a `let` que o Turbopack trata como const. */
+  const crmLast: { r: RedistributeLeadsResponse } = {
+    r: force_db_only
+      ? (() => {
+          console.warn(
+            `${LOG_PREFIX} [FORCE_DB_ONLY] CRM skipped. source=${source_consultant_email}, target=${target_consultant_email}, leads=${normalizedLeadIds.length}`
+          );
+          return { success: true as const, count: normalizedLeadIds.length, message: 'force_db_only — CRM skipped by admin' };
+        })()
+      : crmLeadIdsToSend.length === 0
+        ? {
+            success: true as const,
+            count: preSkippedAlreadyAtTarget.length,
+            message: 'Todos os leads já estavam no consultor de destino no CRM (POST redistribute omitido).',
+          }
+        : await client.redistributeLeads({
+            source_consultant_email,
+            target_consultant_email,
+            leads_ids: crmLeadIdsToSend,
+          }),
+  };
+
+  console.log(`${LOG_PREFIX} CRM response: success=${crmLast.r.success}, full=${JSON.stringify(crmLast.r)}`);
+
+  if (!crmLast.r.success) {
+    const rawMessage = (crmLast.r.error ?? crmLast.r.message ?? 'Erro ao redistribuir leads no CRM').trim();
     const userMessage = rawMessage.toLowerCase() === 'consultant not found' ? 'Consultor Destino não cadastrado na banca' : rawMessage;
     return { ok: false, status: 400, error: userMessage };
   }
 
-  let count = result.count ?? ('data' in result ? result.data?.count : undefined) ?? normalizedLeadIds.length;
-  if ((isDevolucao || isReverse) && normalizedLeadIds.length > 0 && (count == null || Number(count) === 0)) {
+  const rawCrmCount =
+    crmLeadIdsToSend.length === 0 ? undefined : (crmLast.r.count ?? ('data' in crmLast.r ? crmLast.r.data?.count : undefined));
+  /** CRM declarou 0 leads movidos no POST (ainda pode haver leads pré-omitidos por já estarem no destino). */
+  const crmExplicitZero =
+    crmLeadIdsToSend.length > 0 &&
+    rawCrmCount !== undefined &&
+    rawCrmCount !== null &&
+    String(rawCrmCount).trim() !== '' &&
+    Number(rawCrmCount) === 0;
+
+  let count: number;
+  if (crmLeadIdsToSend.length === 0) {
+    count = Number(rawCrmCount ?? preSkippedAlreadyAtTarget.length);
+  } else if (rawCrmCount != null && Number.isFinite(Number(rawCrmCount))) {
+    count = Number(rawCrmCount) + preSkippedAlreadyAtTarget.length;
+  } else {
+    count = crmLeadIdsToSend.length + preSkippedAlreadyAtTarget.length;
+  }
+  if ((isDevolucao || isReverse) && normalizedLeadIds.length > 0 && count === 0) {
     count = normalizedLeadIds.length;
   }
 
   const skipOriginalFallback = transferKind === 'gerente_stock_to_consultant';
 
-  if (!isDevolucao && !isReverse && !skipOriginalFallback && Number(count) === 0 && normalizedLeadIds.length > 0) {
-    const fallbackSource = original_source_consultant_email?.trim();
-    if (
-      fallbackSource &&
-      fallbackSource.toLowerCase() !== source_consultant_email.toLowerCase() &&
-      fallbackSource.toLowerCase() !== target_consultant_email.toLowerCase()
-    ) {
-      console.warn(`${LOG_PREFIX} CRM count=0 — fallback original_source=${fallbackSource}`);
-      const fallbackResult = await client.redistributeLeads({
-        source_consultant_email: fallbackSource,
+  if (!isDevolucao && !isReverse && !skipOriginalFallback && crmExplicitZero && crmLeadIdsToSend.length > 0) {
+    const targetLow = target_consultant_email.trim().toLowerCase();
+    const primaryLow = source_consultant_email.trim().toLowerCase();
+
+    const altSources: string[] = [];
+    const pushSrc = (em: string | null | undefined) => {
+      const t = (em ?? '').trim();
+      const low = t.toLowerCase();
+      if (!low.includes('@') || low === targetLow) return;
+      if (low === primaryLow) return;
+      if (altSources.some((x) => x.toLowerCase() === low)) return;
+      altSources.push(t);
+    };
+
+    pushSrc(original_source_consultant_email);
+    if (source_transfer_log_id) {
+      const fromDb = await fetchEntryEmailCandidatesForCrmSource(
+        source_transfer_log_id,
+        ctx.bancaId,
+        normalizedLeadIds
+      );
+      for (const x of fromDb) pushSrc(x);
+    }
+
+    let recovered = false;
+    for (const alt of altSources) {
+      console.warn(`${LOG_PREFIX} CRM count=0 — tentativa origem alternativa: ${alt}`);
+      const r = await client.redistributeLeads({
+        source_consultant_email: alt,
         target_consultant_email,
-        leads_ids: crmLeadIds,
+        leads_ids: crmLeadIdsToSend,
       });
-      const fallbackCount = Number(fallbackResult.count ?? fallbackResult.data?.count ?? 0);
-      if (fallbackResult.success && fallbackCount > 0) {
-        count = fallbackCount;
-        source_consultant_email = fallbackSource;
-      } else {
-        let dbDiag = 'n/a';
-        if (source_transfer_log_id) {
-          try {
-            const { data: diagEntries } = await supabaseServiceRole
-              .from('admin_lead_transfer_entries')
-              .select('target_consultant_email, resolution_status')
-              .eq('transfer_log_id', source_transfer_log_id)
-              .eq('banca_id', ctx.bancaId)
-              .in('resolution_status', ['disponivel_retransferencia', 'pending']);
-            if (diagEntries && diagEntries.length > 0) {
-              const counts: Record<string, number> = {};
-              for (const e of diagEntries) {
-                const key = `${e.target_consultant_email ?? 'null'}|${e.resolution_status ?? 'null'}`;
-                counts[key] = (counts[key] ?? 0) + 1;
-              }
-              dbDiag = JSON.stringify(counts);
+      const c = Number(r.count ?? r.data?.count ?? 0);
+      if (r.success && c > 0) {
+        count = c + preSkippedAlreadyAtTarget.length;
+        source_consultant_email = alt;
+        crmLast.r = r;
+        recovered = true;
+        break;
+      }
+    }
+
+    if (!recovered) {
+      if (source_transfer_log_id && crmLeadIdsToSend.length > 0) {
+        const groups = await groupLeadIdsByEntryOriginalSource(source_transfer_log_id, ctx.bancaId, crmLeadIdsToSend);
+        if (groups.size > 1) {
+          let subtotal = 0;
+          let lastOk: RedistributeLeadsResponse | null = null;
+          let lastSourceUsed = source_consultant_email;
+          for (const [srcEmail, ids] of groups) {
+            const sl = srcEmail.trim().toLowerCase();
+            if (!sl.includes('@') || sl === targetLow || ids.length === 0) continue;
+            const crmIds = ids.map((id) => normalizeCrmLeadIdForRedistribute(id));
+            console.warn(
+              `${LOG_PREFIX} CRM count=0 — repasse segmentado por original_source: ${srcEmail} → ${target_consultant_email} (n=${crmIds.length})`
+            );
+            const r = await client.redistributeLeads({
+              source_consultant_email: srcEmail.trim(),
+              target_consultant_email,
+              leads_ids: crmIds,
+            });
+            const c = Number(r.count ?? r.data?.count ?? 0);
+            if (r.success && c > 0) {
+              subtotal += c;
+              lastOk = r;
+              lastSourceUsed = srcEmail.trim();
             }
-          } catch {
-            /* ignore */
+          }
+          if (subtotal > 0) {
+            count = subtotal + preSkippedAlreadyAtTarget.length;
+            source_consultant_email = lastSourceUsed;
+            if (lastOk) crmLast.r = lastOk;
+            recovered = true;
           }
         }
+      }
+    }
+
+    if (!recovered) {
+      if (altSources.length === 0) {
         return {
           ok: false,
-          status: 409,
-          error:
-            'Os leads não foram encontrados com nenhum dos consultores do chain no CRM. Isso indica um desync entre o sistema e o CRM (os leads podem ter sido movidos manualmente). Clique em "Forçar transferência" para registrar a transferência apenas no sistema, assumindo que o CRM já está correto.',
-          extra: { code: 'CRM_DESYNC', diag: dbDiag },
+          status: 400,
+          error: `CRM não redistribuiu nenhum lead (count=0). Verifique se o consultor de origem (${source_consultant_email}) ainda possui os leads na banca.`,
         };
       }
-    } else {
+      let dbDiag = 'n/a';
+      if (source_transfer_log_id) {
+        try {
+          const { data: diagEntries } = await supabaseServiceRole
+            .from('admin_lead_transfer_entries')
+            .select('target_consultant_email, resolution_status, original_source_consultant_email')
+            .eq('transfer_log_id', source_transfer_log_id)
+            .eq('banca_id', ctx.bancaId)
+            .in('resolution_status', ['disponivel_retransferencia', 'pending']);
+          if (diagEntries && diagEntries.length > 0) {
+            const counts: Record<string, number> = {};
+            for (const e of diagEntries) {
+              const key = `${e.target_consultant_email ?? 'null'}|${e.resolution_status ?? 'null'}|orig=${(e as { original_source_consultant_email?: string }).original_source_consultant_email ?? 'null'}`;
+              counts[key] = (counts[key] ?? 0) + 1;
+            }
+            dbDiag = JSON.stringify(counts);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       return {
         ok: false,
-        status: 400,
-        error: `CRM não redistribuiu nenhum lead (count=0). Verifique se o consultor de origem (${source_consultant_email}) ainda possui os leads na banca.`,
+        status: 409,
+        error:
+          'O CRM devolveu 0 leads movidos para todas as origens tentadas (titular do pacote, doador do log e e-mails nas entries). Os leads podem estar com outro consultor no CRM ou os IDs não coincidem. Confira titular no CRM ou use «Forçar registro» se o CRM já estiver correto.',
+        extra: { code: 'CRM_DESYNC', diag: dbDiag, attempted_sources: [primaryLow, ...altSources.map((s) => s.toLowerCase())] },
       };
     }
   }
 
-  if (!isDevolucao && !isReverse && skipOriginalFallback && Number(count) === 0 && normalizedLeadIds.length > 0) {
+  if (!isDevolucao && !isReverse && skipOriginalFallback && crmExplicitZero && normalizedLeadIds.length > 0) {
     return {
       ok: false,
       status: 400,
@@ -407,7 +597,15 @@ export async function executeLeadRedistributionCore(
     transfer_type,
     deadline_days: transfer_deadline_days,
     filters_snapshot: filters_snapshot ?? null,
-    crm_response: result as unknown as Record<string, unknown>,
+    crm_response: {
+      ...(crmLast.r as unknown as Record<string, unknown>),
+      ...(preSkippedAlreadyAtTarget.length > 0
+        ? {
+            skipped_already_at_target: preSkippedAlreadyAtTarget.length,
+            skipped_lead_ids: preSkippedAlreadyAtTarget,
+          }
+        : {}),
+    },
     transfer_kind: transferKind,
   };
 
@@ -545,12 +743,12 @@ export async function executeLeadRedistributionCore(
     }
   }
 
-  const crmReportedCount = result.count ?? ('data' in result ? result.data?.count : undefined) ?? count;
+  const crmReportedCount = crmLast.r.count ?? ('data' in crmLast.r ? crmLast.r.data?.count : undefined) ?? count;
   return {
     ok: true,
     count,
     crm_count: crmReportedCount,
     transfer_log_id: insertedLog?.id ?? null,
-    message: result.message ?? `${count} lead(s) transferido(s) com sucesso.`,
+    message: crmLast.r.message ?? `${count} lead(s) transferido(s) com sucesso.`,
   };
 }

@@ -38,7 +38,11 @@ export async function fetchConsultantsForBanca(
   bancaId: string
 ): Promise<{ id: string; full_name: string | null; email: string | null }[]> {
   let ubRows: { user_id: string }[] | null = null;
-  const q1 = await supabaseServiceRole.from('user_bancas').select('user_id').contains('banca_ids', [bancaId]);
+  /** jsonb @> — ver getUserIdsOnBanca em consultants: não usar .contains(..., [uuid]) (gera JSON inválido). */
+  const q1 = await supabaseServiceRole
+    .from('user_bancas')
+    .select('user_id')
+    .filter('banca_ids', 'cs', JSON.stringify([bancaId]));
   if (!q1.error) {
     ubRows = (q1.data ?? []) as { user_id: string }[];
   } else {

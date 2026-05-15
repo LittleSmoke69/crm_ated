@@ -167,7 +167,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
         body: JSON.stringify({
           // lista vazia = backend auto-seleciona toda a rede elegível
           participant_evolution_instance_ids: [],
-          // intervalo definido pelo backend (aleatório 5–15 min por ciclo)
+          // intervalo definido pelo backend (aleatório 1–3 min por ciclo)
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -244,9 +244,10 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
   const finishedCampaigns = campaigns.filter((c) => c.status !== 'running' && c.status !== 'paused');
   const hasRunning = activeCampaigns.some((c) => c.status === 'running');
 
-  // Chips visuais — quando rodando, usa participants da campanha; caso contrário usa elegíveis
+  // Chips visuais — quando rodando, usa participants da campanha; caso contrário usa elegíveis.
+  // Deduplica por id (master_instance / evolution_instance): a lista da API pode repetir o mesmo nó.
   const animChips = useMemo(() => {
-    const source: Array<{ id: string; name: string }> = activeCampaigns.length
+    const raw: Array<{ id: string; name: string }> = activeCampaigns.length
       ? activeCampaigns[0].participants.map((p) => ({
           id: p.master_instance_id,
           name: p.instance_name || '?',
@@ -255,7 +256,14 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
           id: e.evolution_instance_id,
           name: e.instance_name,
         }));
-    return source.slice(0, ANIM_MAX_CHIPS);
+    const seen = new Set<string>();
+    const deduped: Array<{ id: string; name: string }> = [];
+    for (const c of raw) {
+      if (!c.id || seen.has(c.id)) continue;
+      seen.add(c.id);
+      deduped.push(c);
+    }
+    return deduped.slice(0, ANIM_MAX_CHIPS);
   }, [activeCampaigns, eligibleInstances]);
 
   function formatNextCycle(c: MeshCampaign): string {
@@ -574,7 +582,7 @@ function NetworkAnimation({
         })}
 
         {/* Chips */}
-        {positions.map((p) => {
+        {positions.map((p, chipIdx) => {
           const initials = p.name
             .split(/\s+/)
             .map((s) => s[0])
@@ -583,7 +591,7 @@ function NetworkAnimation({
             .join('')
             .toUpperCase() || '?';
           return (
-            <g key={p.id} filter="url(#chipShadow)">
+            <g key={`mesh-chip-${chipIdx}-${p.id}`} filter="url(#chipShadow)">
               {active && (
                 <circle cx={p.x} cy={p.y} r={26} fill="#8CD955" opacity={0.18}>
                   <animate
@@ -741,7 +749,7 @@ function CampaignRow({
             Último envio: {lastSenderNames}
           </div>
           <div className="text-xs text-slate-500 dark:text-[#888] mt-0.5">
-            Intervalo: <strong>aleatório (5–15 min)</strong>
+            Intervalo: <strong>aleatório (1–3 min)</strong>
           </div>
         </div>
         {(canControlLifecycle || canDelete) && (

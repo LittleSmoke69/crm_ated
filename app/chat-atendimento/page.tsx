@@ -13,6 +13,7 @@ import {
 } from '@/lib/chat/broadcast-delay';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
+import { mergeEvolutionConversationsForAtendimento } from '@/lib/chat/merge-evolution-atendimento-conversations';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import {
   MessageSquare,
@@ -61,6 +62,7 @@ import {
 
 interface Message {
   id: string;
+  conversation_id?: string | null;
   message_id?: string | null;
   text: string | null;
   direction: 'in' | 'out';
@@ -92,6 +94,8 @@ interface Conversation {
   resolved_at?: string | null;
   assigned_at?: string | null;
   tags?: string[] | null;
+  /** Instância Evolution dona da linha (lista unificada entre canais). */
+  instance_id?: string | null;
 }
 
 interface ChannelEvolution {
@@ -851,6 +855,25 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
+  const selectedConversationIdRef = useRef('');
+  const conversationsSnapshotRef = useRef<Conversation[]>([]);
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+  useEffect(() => {
+    conversationsSnapshotRef.current = conversations;
+  }, [conversations]);
+  /** Lista unificada Evolution: instâncias + canal preferido para merge e realtime. */
+  const atendimentoEvolutionMergeRef = useRef<{ evolution: ChannelEvolution[]; preferredId: string }>({
+    evolution: [],
+    preferredId: '',
+  });
+  useEffect(() => {
+    atendimentoEvolutionMergeRef.current = {
+      evolution: channels.evolution,
+      preferredId: selectedChannel?.type === 'evolution' ? selectedChannel.id : '',
+    };
+  }, [channels.evolution, selectedChannel]);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -922,6 +945,7 @@ export default function ChatPage() {
     total: number;
     contact?: BroadcastContact;
     lastSent?: BroadcastContact;
+    lastSkipReason?: string;
     messageStep?: number;
     messageStepsTotal?: number;
     sameContactContinue?: boolean;
@@ -1022,6 +1046,44 @@ export default function ChatPage() {
   }, [broadcastPickerOpenStep]);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
+
+  const loadEvolutionChannels = useCallback(async () => {
+    if (!userId) return;
+    setChannelsLoading(true);
+    try {
+      const r = await fetch('/api/chat/channels', { headers: authHeaders() });
+      const result = await r.json();
+      if (result.success && result.data) {
+        const evo: ChannelEvolution[] = result.data.evolution || [];
+        setChannels({ evolution: evo, whatsapp_official: [] });
+        const firstChannel: Channel | null = evo.length > 0 ? evo[0] : null;
+        setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
+        const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
+          ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
+        ];
+        allChannels.forEach(({ id, type }) => {
+          const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
+          fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
+            .then((res) => res.json())
+            .then((res) => {
+              if (res.success) {
+                conversationsCacheRef.current[id] = res.data || [];
+                setSelectedChannel((ch) => {
+                  if (ch?.id === id) setConversations(res.data || []);
+                  return ch;
+                });
+              }
+            })
+            .catch(() => {});
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] canais:', e);
+    } finally {
+      setChannelsLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const loadGerenteGateAtendimento = useCallback(async () => {
     if (!userId || userStatus !== 'gerente') return;
@@ -1336,42 +1398,8 @@ export default function ChatPage() {
   // ── Canais ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return;
-    setChannelsLoading(true);
-    fetch('/api/chat/channels', { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((result) => {
-        if (result.success && result.data) {
-          const evo: ChannelEvolution[] = result.data.evolution || [];
-          // Chat-atendimento usa exclusivamente Evolution — WhatsApp Oficial fica no /chat
-          setChannels({ evolution: evo, whatsapp_official: [] });
-          const firstChannel: Channel | null = evo.length > 0 ? evo[0] : null;
-          // Pré-seleção na tela de instância (antes de abrir o chat); não define selectedChannel aqui
-          setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
-          // Pré-carrega conversas de todas as instâncias Evolution em paralelo
-          const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
-            ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
-          ];
-          allChannels.forEach(({ id, type }) => {
-            const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
-            fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
-              .then((r) => r.json())
-              .then((res) => {
-                if (res.success) {
-                  conversationsCacheRef.current[id] = res.data || [];
-                  // Se este canal já está selecionado, popula imediatamente
-                  setSelectedChannel((ch) => {
-                    if (ch?.id === id) setConversations(res.data || []);
-                    return ch;
-                  });
-                }
-              })
-              .catch(() => {});
-          });
-        }
-      })
-      .catch((e) => console.error('[Chat] canais:', e))
-      .finally(() => setChannelsLoading(false));
-  }, [userId]);
+    void loadEvolutionChannels();
+  }, [userId, loadEvolutionChannels]);
 
   /** Enquanto o gate está aberto, sincroniza contatos/chats via Evolution API (servidor) para o canal Evolution em foco. */
   const pendingEvolutionInstanceIdForGate =
@@ -1442,11 +1470,64 @@ export default function ChatPage() {
   };
 
   // ── Carregar Conversas ─────────────────────────────────────────────────────
+  const evolutionChannelIdsKey = useMemo(
+    () => channels.evolution.map((c) => c.id).join(','),
+    [channels.evolution]
+  );
+
   const loadConversationsFromApi = useCallback(
     async (keepSelectionIfPresent = false) => {
       if (!selectedChannel) return;
 
-      // Exibe do cache imediatamente (sem spinner) se disponível
+      const prevSelId = selectedConversationIdRef.current;
+      const prevRemoteJid = conversationsSnapshotRef.current.find((c) => c.id === prevSelId)?.remote_jid;
+
+      const isEvolutionMerge = selectedChannel.type === 'evolution' && channels.evolution.length > 0;
+
+      if (isEvolutionMerge) {
+        const evoList = channels.evolution;
+        const hasAnyList = evoList.some((ch) => Array.isArray(conversationsCacheRef.current[ch.id]));
+        if (!hasAnyList) {
+          setConversationsLoading(true);
+        }
+
+        try {
+          const results = await Promise.all(
+            evoList.map(async (ch) => {
+              const response = await fetch(`/api/chat/conversations?instance_id=${ch.id}`, {
+                headers: authHeaders(),
+              });
+              const result = await response.json();
+              const list: Conversation[] = result.success ? result.data || [] : [];
+              return [ch.id, list] as const;
+            })
+          );
+
+          for (const [id, list] of results) {
+            conversationsCacheRef.current[id] = list;
+          }
+
+          const map = new Map<string, Conversation[]>(results);
+          const merged = mergeEvolutionConversationsForAtendimento(map, selectedChannel.id);
+
+          setConversations(merged);
+
+          setSelectedConversationId(() => {
+            if (prevSelId && merged.some((c) => c.id === prevSelId)) return prevSelId;
+            if (prevRemoteJid) {
+              const next = merged.find((c) => !c.is_group && c.remote_jid === prevRemoteJid);
+              if (next) return next.id;
+            }
+            return '';
+          });
+        } catch (error) {
+          console.error('[Chat] carregar conversas:', error);
+        } finally {
+          setConversationsLoading(false);
+        }
+        return;
+      }
+
       const cached = conversationsCacheRef.current[selectedChannel.id];
       if (cached && cached.length > 0) {
         setConversations(cached);
@@ -1482,13 +1563,14 @@ export default function ChatPage() {
         setConversationsLoading(false);
       }
     },
-    [selectedChannel]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedChannel, channels.evolution]
   );
 
   useEffect(() => {
     if (!selectedChannel) return;
     loadConversationsFromApi(false);
-  }, [selectedChannel, loadConversationsFromApi]);
+  }, [selectedChannel, loadConversationsFromApi, evolutionChannelIdsKey]);
 
   // Reprocessa eventos pendentes de webhook a cada 5 minutos
   // para garantir que mensagens faltantes sejam persistidas em chat_messages.
@@ -1757,7 +1839,13 @@ export default function ChatPage() {
         message_step_index?: number;
         message_steps_total?: number;
         same_contact_continue?: boolean;
+        evolution_session_dropped?: boolean;
+        error?: string;
       };
+
+      if (data?.evolution_session_dropped || data?.instanceDown) {
+        void loadEvolutionChannels();
+      }
 
       if (!result.success || data?.instanceDown) {
         setBroadcastInstanceDown(true);
@@ -1781,6 +1869,11 @@ export default function ChatPage() {
         total: data.total_count ?? (prev?.total ?? 0),
         contact: data.contact ?? prev?.contact,
         lastSent: data.success ? data.contact ?? prev?.lastSent : prev?.lastSent,
+        lastSkipReason: (() => {
+          if (data.success) return undefined;
+          if (data.skipped && typeof data.error === 'string' && data.error.trim()) return data.error.trim();
+          return prev?.lastSkipReason;
+        })(),
         messageStep: data.message_step_index,
         messageStepsTotal: data.message_steps_total,
         sameContactContinue: data.same_contact_continue,
@@ -1809,7 +1902,7 @@ export default function ChatPage() {
 
     run();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [userId, loadEvolutionChannels]);
 
   const stopBroadcastRunner = () => {
     broadcastRunnerRef.current.stop = true;
@@ -2348,8 +2441,6 @@ export default function ChatPage() {
   useEffect(() => {
     if (!selectedChannel) return;
 
-    const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
-    const filterVal = selectedChannel.id;
     const canNotify =
       userStatus === 'super_admin' ||
       userStatus === 'admin' ||
@@ -2357,70 +2448,153 @@ export default function ChatPage() {
       userStatus === 'gerente' ||
       userStatus === 'consultor';
 
-    const channel = supabase
-      .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'chat_conversations',
-          filter: `${filterCol}=eq.${filterVal}`,
-        },
-        (payload) => {
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            const newConv = payload.new as Conversation;
-            const isNew = payload.eventType === 'INSERT';
+    if (selectedChannel.type === 'whatsapp_official') {
+      const filterCol = 'whatsapp_config_id';
+      const filterVal = selectedChannel.id;
+      const channel = supabase
+        .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'chat_conversations',
+            filter: `${filterCol}=eq.${filterVal}`,
+          },
+          (payload) => {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const newConv = payload.new as Conversation;
+              const isNew = payload.eventType === 'INSERT';
 
-            setConversations((prev) => {
-              const w24 = (c: Conversation) =>
-                !!c.whatsapp_config_id &&
-                !!c.last_customer_message_at &&
-                Date.now() - new Date(c.last_customer_message_at).getTime() < 86_400_000;
-              const sort24 = (arr: Conversation[]) =>
-                [...arr].sort((a, b) => {
-                  const a24 = w24(a), b24 = w24(b);
-                  if (a24 && !b24) return -1;
-                  if (!a24 && b24) return 1;
-                  return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
-                });
-              const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
-                ? prev.map((c) => (c.id === newConv.id ? newConv : c))
-                : [newConv, ...prev];
-              const next = sort24(updated);
-              conversationsCacheRef.current[filterVal] = next;
-              return next;
-            });
-
-            if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
-              const convTitle = newConv.title || 'Nova conversa';
-              const preview = (newConv.last_message_preview || '').slice(0, 60);
-              if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
-                try {
-                  new Notification('Nova conversa no Chat Atendimento — Zaploto', {
-                    body: preview
-                      ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
-                      : convTitle,
-                    icon: '/favicon.ico',
+              setConversations((prev) => {
+                const w24 = (c: Conversation) =>
+                  !!c.whatsapp_config_id &&
+                  !!c.last_customer_message_at &&
+                  Date.now() - new Date(c.last_customer_message_at).getTime() < 86_400_000;
+                const sort24 = (arr: Conversation[]) =>
+                  [...arr].sort((a, b) => {
+                    const a24 = w24(a), b24 = w24(b);
+                    if (a24 && !b24) return -1;
+                    if (!a24 && b24) return 1;
+                    return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
                   });
-                } catch (_) {}
-              }
-            }
-          } else if (payload.eventType === 'DELETE') {
-            const removedId = (payload.old as Conversation).id;
-            if (!removedId) return;
-            setConversations((prev) => {
-              const next = prev.filter((c) => c.id !== removedId);
-              conversationsCacheRef.current[filterVal] = next;
-              return next;
-            });
-          }
-        }
-      )
-      .subscribe();
+                const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
+                  ? prev.map((c) => (c.id === newConv.id ? newConv : c))
+                  : [newConv, ...prev];
+                const next = sort24(updated);
+                conversationsCacheRef.current[filterVal] = next;
+                return next;
+              });
 
-    return () => { supabase.removeChannel(channel); };
-  }, [selectedChannel, userStatus]);
+              if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+                const convTitle = newConv.title || 'Nova conversa';
+                const preview = (newConv.last_message_preview || '').slice(0, 60);
+                if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
+                  try {
+                    new Notification('Nova conversa no Chat Atendimento — Zaploto', {
+                      body: preview
+                        ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
+                        : convTitle,
+                      icon: '/favicon.ico',
+                    });
+                  } catch (_) {}
+                }
+              }
+            } else if (payload.eventType === 'DELETE') {
+              const removedId = (payload.old as Conversation).id;
+              if (!removedId) return;
+              setConversations((prev) => {
+                const next = prev.filter((c) => c.id !== removedId);
+                conversationsCacheRef.current[filterVal] = next;
+                return next;
+              });
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+
+    const evoList = channels.evolution;
+    if (evoList.length === 0) return;
+
+    const applyEvolutionConversationPayload = (
+      instanceId: string,
+      payload: { eventType: string; new?: Record<string, unknown>; old?: Record<string, unknown> }
+    ) => {
+      const { evolution: evoRows, preferredId } = atendimentoEvolutionMergeRef.current;
+      const list = conversationsCacheRef.current[instanceId] || [];
+      let isInsert = false;
+
+      if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+        const newConv = payload.new as unknown as Conversation;
+        isInsert = payload.eventType === 'INSERT';
+        const idx = list.findIndex((c) => c.id === newConv.id);
+        const nextList =
+          idx >= 0 ? list.map((c) => (c.id === newConv.id ? newConv : c)) : [newConv, ...list];
+        conversationsCacheRef.current[instanceId] = nextList;
+      } else if (payload.eventType === 'DELETE') {
+        const removedId = (payload.old as unknown as Conversation | undefined)?.id;
+        if (!removedId) return;
+        conversationsCacheRef.current[instanceId] = list.filter((c) => c.id !== removedId);
+      } else {
+        return;
+      }
+
+      const map = new Map<string, Conversation[]>();
+      for (const ch of evoRows) {
+        map.set(ch.id, conversationsCacheRef.current[ch.id] || []);
+      }
+      const merged = mergeEvolutionConversationsForAtendimento(map, preferredId || instanceId);
+      setConversations(merged);
+
+      if (
+        isInsert &&
+        canNotify &&
+        typeof window !== 'undefined' &&
+        'Notification' in window
+      ) {
+        const newConv = payload.new as unknown as Conversation;
+        const convTitle = newConv.title || 'Nova conversa';
+        const preview = (newConv.last_message_preview || '').slice(0, 60);
+        if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
+          try {
+            new Notification('Nova conversa no Chat Atendimento — Zaploto', {
+              body: preview
+                ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
+                : convTitle,
+              icon: '/favicon.ico',
+            });
+          } catch (_) {}
+        }
+      }
+    };
+
+    const created = evoList.map((evo) =>
+      supabase
+        .channel(`chat_conversations_evo_${evo.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'chat_conversations',
+            filter: `instance_id=eq.${evo.id}`,
+          },
+          (payload) => applyEvolutionConversationPayload(evo.id, payload)
+        )
+        .subscribe()
+    );
+
+    return () => {
+      created.forEach((c) => {
+        supabase.removeChannel(c);
+      });
+    };
+  }, [selectedChannel, channels.evolution, evolutionChannelIdsKey, userStatus]);
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
@@ -2888,22 +3062,32 @@ export default function ChatPage() {
           setMessageText('');
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
-          const saved = (result as { data?: { message?: Message | null } }).data?.message;
+          const saved = (result as { data?: { message?: (Message & { conversation_id?: string }) | null } }).data
+            ?.message;
+          const savedConvId =
+            saved?.conversation_id && String(saved.conversation_id).trim()
+              ? String(saved.conversation_id).trim()
+              : '';
           if (saved && saved.id) {
-            const msg: Message = {
-              ...saved,
-              timestamp:
-                typeof saved.timestamp === 'string'
-                  ? parseInt(saved.timestamp, 10)
-                  : saved.timestamp,
-            };
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === msg.id)) return prev;
-              const mid = msg.message_id;
-              if (mid && prev.some((m) => m.message_id === mid)) return prev;
-              return sortMessagesChronological([...prev, msg]);
-            });
+            if (savedConvId && savedConvId !== selectedConversationIdRef.current) {
+              setSelectedConversationId(savedConvId);
+            } else {
+              const msg: Message = {
+                ...saved,
+                timestamp:
+                  typeof saved.timestamp === 'string'
+                    ? parseInt(saved.timestamp, 10)
+                    : saved.timestamp,
+              };
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === msg.id)) return prev;
+                const mid = msg.message_id;
+                if (mid && prev.some((m) => m.message_id === mid)) return prev;
+                return sortMessagesChronological([...prev, msg]);
+              });
+            }
           }
+          void loadConversationsFromApi(true);
         } else if (result.code === EVOLUTION_INSTANCE_UNREACHABLE_CODE) {
           reopenAtendimentoInstancePickerWithNotice(
             result.error ||
@@ -3043,18 +3227,11 @@ export default function ChatPage() {
       }
 
       const newConversation = data.data as Conversation;
-      setConversations((prev) => {
-        const withoutCurrent = prev.filter((c) => c.id !== newConversation.id);
-        const next = [newConversation, ...withoutCurrent];
-        if (selectedChannel) {
-          conversationsCacheRef.current[selectedChannel.id] = next;
-        }
-        return next;
-      });
       setSelectedConversationId(newConversation.id);
       setActiveView('chat');
       setShowStartConversationModal(false);
       setStartConversationPhone('');
+      void loadConversationsFromApi(true);
     } catch {
       setStartConversationError('Falha na conexão. Tente novamente.');
     } finally {
@@ -3958,6 +4135,11 @@ export default function ChatPage() {
                   {activeBroadcastProgress.lastSent && (
                     <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
                       Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                    </p>
+                  )}
+                  {activeBroadcastProgress.lastSkipReason && (
+                    <p className="text-xs text-amber-700 dark:text-amber-300/95 leading-snug">
+                      {activeBroadcastProgress.lastSkipReason}
                     </p>
                   )}
                   {activeBroadcastProgress.messageStepsTotal != null &&
@@ -4913,6 +5095,12 @@ export default function ChatPage() {
                     className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
                   />
                 </div>
+                {selectedChannel?.type === 'evolution' && channels.evolution.length > 1 && (
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400 mb-2 leading-snug">
+                    Lista unificada das suas instâncias. Mensagens enviadas usam sempre a instância selecionada no menu
+                    lateral.
+                  </p>
+                )}
                 {tagOptions.length > 0 && (
                   <div className="mb-3">
                     <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Filtrar por etiqueta</label>
@@ -5109,6 +5297,17 @@ export default function ChatPage() {
                               <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">
                                 {conv.last_message_preview || '—'}
                               </p>
+                              {selectedChannel?.type === 'evolution' &&
+                                channels.evolution.length > 1 &&
+                                conv.instance_id &&
+                                conv.instance_id !== selectedChannel.id && (
+                                  <p className="text-[10px] text-amber-800/95 dark:text-amber-200/90 mb-1 leading-snug">
+                                    Thread em «
+                                    {channels.evolution.find((e) => e.id === conv.instance_id)?.instance_name ||
+                                      'outra instância'}
+                                    » — envio pela instância do menu
+                                  </p>
+                                )}
                               <div className="flex items-center justify-end">
                                 {conv.attendance_status !== 'resolvido' &&
                                   (userStatus === 'suporte' ||
