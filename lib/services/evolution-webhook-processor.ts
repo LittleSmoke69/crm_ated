@@ -13,6 +13,7 @@ import {
   extractEvolutionWebhookInstanceName,
   normalizeEvolutionChatWebhookEvent,
 } from '@/lib/server/evolution-chat-webhook-config';
+import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
 
 /** Tipos de evento da Evolution que são relevantes para o chat. */
 const CHAT_EVENT_TYPES = new Set([
@@ -82,10 +83,17 @@ async function handleMessageUpsert(
 
   if (!remoteJid) return;
 
+  const resolvedUserId = await resolveEvolutionConversationUserIdForUpsert(
+    supabaseServiceRole,
+    instance.id,
+    remoteJid,
+    instance.user_id
+  );
+
   const conversationData = {
     instance_id: instance.id,
     workspace_id: instance.workspace_id ?? undefined,
-    user_id: instance.user_id ?? undefined,
+    user_id: resolvedUserId,
     remote_jid: remoteJid,
     title: String(data.pushName ?? remoteJid.split('@')[0]),
     is_group: remoteJid.endsWith('@g.us'),
@@ -99,7 +107,7 @@ async function handleMessageUpsert(
   await chatService.saveMessage({
     instance_id: instance.id,
     workspace_id: instance.workspace_id ?? undefined,
-    user_id: instance.user_id ?? undefined,
+    user_id: resolvedUserId,
     conversation_id: conversation.id,
     message_id: String(key.id ?? data.id ?? data.messageId ?? ''),
     direction: messageFromMe ? 'out' : 'in',

@@ -29,6 +29,7 @@ import {
   orderedBroadcastInstanceIds,
 } from '@/lib/chat/broadcast-instance-failover';
 import { publicBroadcastSendErrorMessage } from '@/lib/chat/broadcast-send-user-message';
+import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from '@/lib/chat/broadcast-step-claim';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -39,13 +40,85 @@ function normalizePhone(phone: string): string {
   return `${withCountry}@s.whatsapp.net`;
 }
 
+/** Atualiza índice do job após envio; repara se o UPDATE com claim não afetar linhas (ex.: token divergente). */
+async function persistBroadcastProgressAfterSend(
+  jobId: string,
+  claimToken: string,
+  patch: {
+    message_step_index?: number;
+    current_index?: number;
+    last_sent_at: string;
+    status: string;
+    last_error: null;
+    completed_at?: string | null;
+    updated_at: string;
+  },
+  expectedBefore: { current_index: number; message_step_index: number }
+): Promise<{ ok: boolean; current_index: number; message_step_index: number }> {
+  const rowUpdate = {
+    ...patch,
+    step_claim_token: null as string | null,
+    step_claim_at: null as string | null,
+  };
+  const { data: byToken, error: errByToken } = await supabaseServiceRole
+    .from('chat_broadcasts')
+    .update(rowUpdate)
+    .eq('id', jobId)
+    .eq('step_claim_token', claimToken)
+    .select('current_index, message_step_index');
+
+  if (!errByToken && byToken && byToken.length > 0) {
+    const r = byToken[0] as { current_index: number; message_step_index: number };
+    return {
+      ok: true,
+      current_index: Number(r.current_index),
+      message_step_index: Number(r.message_step_index),
+    };
+  }
+
+  const { data: byCursor, error: errByCursor } = await supabaseServiceRole
+    .from('chat_broadcasts')
+    .update(rowUpdate)
+    .eq('id', jobId)
+    .eq('current_index', expectedBefore.current_index)
+    .eq('message_step_index', expectedBefore.message_step_index)
+    .select('current_index, message_step_index');
+
+  if (!errByCursor && byCursor && byCursor.length > 0) {
+    const r = byCursor[0] as { current_index: number; message_step_index: number };
+    return {
+      ok: true,
+      current_index: Number(r.current_index),
+      message_step_index: Number(r.message_step_index),
+    };
+  }
+
+  const { data: fresh } = await supabaseServiceRole
+    .from('chat_broadcasts')
+    .select('current_index, message_step_index')
+    .eq('id', jobId)
+    .single();
+
+  const cur = Number(fresh?.current_index ?? expectedBefore.current_index);
+  const st = Number(fresh?.message_step_index ?? expectedBefore.message_step_index);
+  console.error('[broadcast/process-next] UPDATE pós-envio não aplicou', {
+    jobId,
+    errByToken: errByToken?.message,
+    errByCursor: errByCursor?.message,
+    fresh,
+    expectedBefore,
+  });
+  return { ok: false, current_index: cur, message_step_index: st };
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
+  const { jobId } = await params;
+  let stepClaimToken: string | undefined;
   try {
     const { userId } = await requireAuth(req);
-    const { jobId } = await params;
 
     const { data: job, error: jobError } = await supabaseServiceRole
       .from('chat_broadcasts')
@@ -139,6 +212,24 @@ export async function POST(
     const singleInstanceBroadcast = baseRotation.length <= 1;
     let evolutionSessionDropped = false;
 
+    const claimTry = await tryClaimBroadcastStep(supabaseServiceRole, jobId, idx, stepIdx);
+    if (!claimTry.ok) {
+      return successResponse(
+        {
+          done: false,
+          duplicateSuppressed: true,
+          current_index: idx,
+          total_count: job.total_count,
+          message_step_index: stepIdx,
+          message_steps_total: steps.length,
+          same_contact_continue: stepIdx > 0,
+          next_delay_seconds: 0,
+        },
+        'Passo já em processamento'
+      );
+    }
+    stepClaimToken = claimTry.claimToken;
+
     type InstanceRow = {
       id: string;
       instance_name: string;
@@ -164,14 +255,20 @@ export async function POST(
         .single();
 
       if (!inst) {
-        if (singleInstanceBroadcast) return errorResponse('Instância não encontrada', 404);
+        if (singleInstanceBroadcast) {
+          await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
+          return errorResponse('Instância não encontrada', 404);
+        }
         continue;
       }
 
       const evolutionApi = Array.isArray(inst.evolution_apis) ? inst.evolution_apis[0] : inst.evolution_apis;
 
       if (!evolutionApi?.base_url || !inst.apikey) {
-        if (singleInstanceBroadcast) return errorResponse('Configuração incompleta da Evolution API', 400);
+        if (singleInstanceBroadcast) {
+          await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
+          return errorResponse('Configuração incompleta da Evolution API', 400);
+        }
         continue;
       }
 
@@ -234,9 +331,12 @@ export async function POST(
             current_index: idx + 1,
             message_step_index: 0,
             last_error: displaySendError || sendError,
+            step_claim_token: null,
+            step_claim_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', jobId);
+          .eq('id', jobId)
+          .eq('step_claim_token', stepClaimToken);
         return successResponse({
           done: false,
           skipped: true,
@@ -256,9 +356,12 @@ export async function POST(
           .update({
             status: 'paused',
             last_error: sendError,
+            step_claim_token: null,
+            step_claim_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', jobId);
+          .eq('id', jobId)
+          .eq('step_claim_token', stepClaimToken);
         return successResponse({
           done: false,
           instanceDown: true,
@@ -272,10 +375,12 @@ export async function POST(
       }
 
       if (!sendError && !singleInstanceBroadcast) {
+        await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
         return errorResponse('Nenhuma instância válida na rotação', 400);
       }
 
       if (!sendError) {
+        await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
         return errorResponse('Instância não encontrada', 404);
       }
 
@@ -285,9 +390,12 @@ export async function POST(
           current_index: idx + 1,
           message_step_index: 0,
           last_error: displaySendError || sendError,
+          step_claim_token: null,
+          step_claim_at: null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', jobId);
+        .eq('id', jobId)
+        .eq('step_claim_token', stepClaimToken);
       return successResponse({
         done: false,
         skipped: true,
@@ -309,10 +417,16 @@ export async function POST(
         mediaLabels[msgConfig.type] ||
         '[Mídia]';
 
+      /** Dono do job de disparo (quem vê em "Minhas" no atendimento), não o dono da instância. */
+      const broadcastAttributionUserId =
+        typeof job.user_id === 'string' && job.user_id.length > 0
+          ? job.user_id
+          : (instance.user_id ?? undefined);
+
       const conversation = await chatService.upsertConversation({
         instance_id: instance.id,
         workspace_id: instance.workspace_id ?? undefined,
-        user_id: instance.user_id ?? undefined,
+        user_id: broadcastAttributionUserId,
         remote_jid: remoteJid,
         title: contact.name || remoteJid.replace('@s.whatsapp.net', ''),
         is_group: false,
@@ -330,7 +444,7 @@ export async function POST(
         await chatService.saveMessage({
           instance_id: instance.id,
           workspace_id: instance.workspace_id ?? undefined,
-          user_id: instance.user_id ?? undefined,
+          user_id: broadcastAttributionUserId,
           conversation_id: conversation.id,
           message_id: String(returnedMessageId),
           direction: 'out',
@@ -353,16 +467,31 @@ export async function POST(
 
     if (moreStepsOnSameContact) {
       const nextStep = stepIdx + 1;
-      await supabaseServiceRole
-        .from('chat_broadcasts')
-        .update({
+      const persist = await persistBroadcastProgressAfterSend(
+        jobId,
+        stepClaimToken,
+        {
           message_step_index: nextStep,
           last_sent_at: nowIso,
           status: 'running',
           last_error: null,
           updated_at: nowIso,
-        })
-        .eq('id', jobId);
+        },
+        { current_index: idx, message_step_index: stepIdx }
+      );
+
+      if (!persist.ok) {
+        const st = persist.message_step_index;
+        const ci = persist.current_index;
+        const advancedMid = st > stepIdx || ci > idx;
+        if (!advancedMid) {
+          await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
+          return errorResponse(
+            'Não foi possível registrar o progresso do disparo após o envio. Aguarde alguns segundos e use Retomar se o job ficou inconsistente.',
+            503
+          );
+        }
+      }
 
       return successResponse({
         done: false,
@@ -370,7 +499,7 @@ export async function POST(
         contact: { phone: contact.phone, name: contact.name },
         current_index: idx,
         total_count: job.total_count,
-        message_step_index: nextStep,
+        message_step_index: persist.message_step_index,
         message_steps_total: steps.length,
         same_contact_continue: true,
         evolution_session_dropped: evolutionSessionDropped,
@@ -381,9 +510,10 @@ export async function POST(
     const nextContactIdx = idx + 1;
     const isDone = nextContactIdx >= job.total_count;
 
-    await supabaseServiceRole
-      .from('chat_broadcasts')
-      .update({
+    const persistLast = await persistBroadcastProgressAfterSend(
+      jobId,
+      stepClaimToken,
+      {
         current_index: nextContactIdx,
         message_step_index: 0,
         last_sent_at: nowIso,
@@ -391,22 +521,43 @@ export async function POST(
         completed_at: isDone ? nowIso : null,
         last_error: null,
         updated_at: nowIso,
-      })
-      .eq('id', jobId);
+      },
+      { current_index: idx, message_step_index: stepIdx }
+    );
+
+    const pciLast = persistLast.current_index;
+    if (!persistLast.ok) {
+      const pst = persistLast.message_step_index;
+      const advancedLast =
+        pciLast > idx || (pciLast === nextContactIdx && pst === 0);
+      if (!advancedLast) {
+        await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
+        return errorResponse(
+          'Não foi possível registrar o progresso do disparo após o envio. Aguarde alguns segundos e use Retomar se o job ficou inconsistente.',
+          503
+        );
+      }
+    }
+
+    const doneEffective =
+      persistLast.ok ? isDone : pciLast >= job.total_count;
 
     return successResponse({
-      done: isDone,
+      done: doneEffective,
       success: true,
       contact: { phone: contact.phone, name: contact.name },
-      current_index: nextContactIdx,
+      current_index: persistLast.current_index,
       total_count: job.total_count,
-      message_step_index: 0,
+      message_step_index: persistLast.message_step_index,
       message_steps_total: steps.length,
       same_contact_continue: false,
       evolution_session_dropped: evolutionSessionDropped,
       ...delayBetweenContacts(),
-    }, isDone ? 'Disparo concluído' : 'Mensagem enviada');
+    }, doneEffective ? 'Disparo concluído' : 'Mensagem enviada');
   } catch (err) {
+    if (stepClaimToken) {
+      await releaseBroadcastStepClaim(supabaseServiceRole, jobId, stepClaimToken);
+    }
     return serverErrorResponse(err as Error);
   }
 }

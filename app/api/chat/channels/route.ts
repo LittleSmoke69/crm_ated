@@ -17,6 +17,7 @@ type EvolutionChannelRow = {
   created_at?: string;
   is_master?: boolean;
   is_chat_instance?: boolean;
+  phone_number?: string | null;
 };
 
 type WhatsAppOfficialConfigRow = {
@@ -34,6 +35,7 @@ export type ChannelEvolution = {
   status: string;
   is_master?: boolean;
   is_chat_instance?: boolean;
+  phone_number?: string | null;
 };
 
 export type ChannelWhatsAppOfficial = {
@@ -49,11 +51,26 @@ async function buildEvolutionChannels(
 ): Promise<EvolutionChannelRow[]> {
   const normalizedStatus = (userStatus || '').trim().toLowerCase();
 
+  // Super admin / admin / suporte: acesso a todas as instâncias ativas da plataforma
+  if (normalizedStatus === 'super_admin' || normalizedStatus === 'admin' || normalizedStatus === 'suporte') {
+    const { data: rows } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    return ((rows || []) as EvolutionChannelRow[]).map((r) => ({
+      ...r,
+      is_master: !!r.is_master,
+      is_chat_instance: !!r.is_chat_instance,
+    }));
+  }
+
   // Gerente: instâncias da própria conta + qualquer instância já vinculada a ele em atendimento_chat_assignments
   if (normalizedStatus === 'gerente') {
     const { data: ownedRows } = await supabaseServiceRole
       .from('evolution_instances')
-      .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+      .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
       .eq('user_id', userId)
       .eq('is_active', true);
 
@@ -77,7 +94,7 @@ async function buildEvolutionChannels(
     if (extraIds.length > 0) {
       const { data: fetched } = await supabaseServiceRole
         .from('evolution_instances')
-        .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+        .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
         .in('id', extraIds)
         .eq('is_active', true);
       extraRows = (fetched || []) as EvolutionChannelRow[];
@@ -117,7 +134,7 @@ async function buildEvolutionChannels(
 
     const { data: rows } = await supabaseServiceRole
       .from('evolution_instances')
-      .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+      .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
       .in('id', assignedInstanceIds)
       .eq('is_active', true)
       .order('created_at', { ascending: false });
@@ -131,7 +148,7 @@ async function buildEvolutionChannels(
 
   const { data: rows } = await supabaseServiceRole
     .from('evolution_instances')
-    .select('id, instance_name, status, created_at, is_master, is_chat_instance')
+    .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
     .eq('user_id', userId)
     .eq('is_active', true)
     .order('created_at', { ascending: false });
@@ -203,6 +220,7 @@ export async function GET(req: NextRequest) {
       status: row.status || 'unknown',
       ...(row.is_master ? { is_master: true } : {}),
       ...(row.is_chat_instance ? { is_chat_instance: true } : {}),
+      ...(row.phone_number ? { phone_number: row.phone_number } : {}),
     }));
 
     const whatsapp_official: ChannelWhatsAppOfficial[] = waOfficialConfigs.map((row) => ({

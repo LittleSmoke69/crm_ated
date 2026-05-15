@@ -56,6 +56,7 @@ import {
   RefreshCw,
   History,
   ListFilter,
+  Pencil,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ interface BroadcastJob {
   delay_mode?: 'fixed' | 'random' | string;
   delay_min_seconds?: number | null;
   delay_max_seconds?: number | null;
-  broadcast_instances?: { id: string; name: string }[] | null;
+  broadcast_instances?: { id: string; name?: string }[] | null;
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   started_at: string | null;
   completed_at: string | null;
@@ -166,6 +167,27 @@ interface BroadcastJob {
   message_steps_count?: number;
   /** Contatos por instância antes de alternar na rotação (derivado de message_config). */
   rotation_size?: number;
+}
+
+function formatBroadcastInstancesLine(
+  job: Pick<BroadcastJob, 'broadcast_instances' | 'instance_name'>,
+  evolutionChannels: { id: string; name?: string }[]
+): string {
+  const rows = job.broadcast_instances;
+  if (Array.isArray(rows) && rows.length > 0) {
+    return rows
+      .map((row) => {
+        const n = typeof row.name === 'string' ? row.name.trim() : '';
+        if (n) return n;
+        const ch = evolutionChannels.find((c) => c.id === row.id);
+        const cn = ch?.name && String(ch.name).trim();
+        if (cn) return cn;
+        return `Inst. ${String(row.id).slice(0, 8)}…`;
+      })
+      .join(' · ');
+  }
+  const single = typeof job.instance_name === 'string' ? job.instance_name.trim() : '';
+  return single || '—';
 }
 
 interface BroadcastMessage {
@@ -960,6 +982,8 @@ export default function ChatPage() {
   const [broadcastRetryLoadingId, setBroadcastRetryLoadingId] = useState<string | null>(null);
   /** Quando true, não resetamos instâncias/intervalo ao abrir o formulário (valores vêm do job). */
   const [broadcastRetryMode, setBroadcastRetryMode] = useState(false);
+  /** Job em edição (PATCH); null = novo disparo ou refazer como novo job. */
+  const [broadcastEditJobId, setBroadcastEditJobId] = useState<string | null>(null);
   /** Contatos por instância antes de alternar (rotação por bloco). Padrão 1 = round-robin por contato. */
   const [broadcastRotationSize, setBroadcastRotationSize] = useState(1);
   /** Seletor de template com busca (qual passo da sequência está aberto). */
@@ -1708,6 +1732,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!showBroadcastForm || selectedChannel?.type !== 'evolution') return;
     if (broadcastRetryMode) return;
+    if (broadcastEditJobId) return;
     setBroadcastInstanceIds(new Set([selectedChannel.id]));
     setBroadcastDelayMode('random');
     setBroadcastDelayMin(BROADCAST_DELAY_PRESETS.padrao.min);
@@ -1715,7 +1740,7 @@ export default function ChatPage() {
     setBroadcastStepMessageIds(['']);
     setBroadcastSequenceDelay(15);
     setBroadcastRotationSize(1);
-  }, [showBroadcastForm, selectedChannel?.id, selectedChannel?.type, broadcastRetryMode]);
+  }, [showBroadcastForm, selectedChannel?.id, selectedChannel?.type, broadcastRetryMode, broadcastEditJobId]);
 
   useEffect(() => {
     if (selectedChannel?.type === 'evolution') {
@@ -1830,97 +1855,111 @@ export default function ChatPage() {
     setActiveBroadcastProgress(null);
     setActiveBroadcastCountdown(0);
 
-    const run = async (): Promise<void> => {
-      if (cancelled) return;
-      let result: Record<string, unknown>;
-      try {
-        const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
-          method: 'POST',
-          headers: authHeaders(),
-        });
-        result = await res.json();
-      } catch {
-        // Rede offline — para o runner
-        setBroadcastInstanceDown(true);
-        broadcastRunnerRef.current.cancel = null;
-        broadcastRunnerRef.current.jobId = null;
-        setActiveBroadcastJobId(null);
-        loadBroadcasts();
-        return;
-      }
+    const runLoop = async (): Promise<void> => {
+      while (!cancelled) {
+        let result: Record<string, unknown>;
+        try {
+          const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
+            method: 'POST',
+            headers: authHeaders(),
+          });
+          result = await res.json();
+          if (!res.ok && res.status === 503) {
+            const errMsg =
+              typeof (result as { error?: string }).error === 'string'
+                ? (result as { error: string }).error
+                : 'Não foi possível registrar o progresso do disparo. Aguarde e use Retomar.';
+            setBroadcastError(errMsg);
+            broadcastRunnerRef.current.cancel = null;
+            broadcastRunnerRef.current.jobId = null;
+            setActiveBroadcastJobId(null);
+            loadBroadcasts();
+            return;
+          }
+        } catch {
+          setBroadcastInstanceDown(true);
+          broadcastRunnerRef.current.cancel = null;
+          broadcastRunnerRef.current.jobId = null;
+          setActiveBroadcastJobId(null);
+          loadBroadcasts();
+          return;
+        }
 
-      const data = result.data as {
-        done?: boolean; paused?: boolean; instanceDown?: boolean; skipped?: boolean;
-        current_index?: number; total_count?: number;
-        contact?: BroadcastContact; success?: boolean;
-        next_delay_seconds?: number;
-        message_step_index?: number;
-        message_steps_total?: number;
-        same_contact_continue?: boolean;
-        evolution_session_dropped?: boolean;
-        error?: string;
-      };
+        const data = result.data as {
+          done?: boolean; paused?: boolean; instanceDown?: boolean; skipped?: boolean;
+          current_index?: number; total_count?: number;
+          contact?: BroadcastContact; success?: boolean;
+          next_delay_seconds?: number;
+          message_step_index?: number;
+          message_steps_total?: number;
+          same_contact_continue?: boolean;
+          evolution_session_dropped?: boolean;
+          duplicateSuppressed?: boolean;
+          error?: string;
+        };
 
-      if (data?.evolution_session_dropped || data?.instanceDown) {
-        void loadEvolutionChannels();
-      }
+        if (data?.evolution_session_dropped || data?.instanceDown) {
+          void loadEvolutionChannels();
+        }
 
-      if (!result.success || data?.instanceDown) {
-        setBroadcastInstanceDown(true);
-        broadcastRunnerRef.current.cancel = null;
-        broadcastRunnerRef.current.jobId = null;
-        setActiveBroadcastJobId(null);
-        loadBroadcasts();
-        return;
-      }
+        if (!result.success || data?.instanceDown) {
+          setBroadcastInstanceDown(true);
+          broadcastRunnerRef.current.cancel = null;
+          broadcastRunnerRef.current.jobId = null;
+          setActiveBroadcastJobId(null);
+          loadBroadcasts();
+          return;
+        }
 
-      if (data?.paused || data?.done) {
-        broadcastRunnerRef.current.cancel = null;
-        broadcastRunnerRef.current.jobId = null;
-        setActiveBroadcastJobId(null);
-        setActiveBroadcastProgress(null);
+        if (data?.paused || data?.done) {
+          broadcastRunnerRef.current.cancel = null;
+          broadcastRunnerRef.current.jobId = null;
+          setActiveBroadcastJobId(null);
+          setActiveBroadcastProgress(null);
+          setActiveBroadcastCountdown(0);
+          loadBroadcasts();
+          return;
+        }
+
+        setActiveBroadcastProgress((prev) => ({
+          current: data.current_index ?? (prev?.current ?? 0),
+          total: data.total_count ?? (prev?.total ?? 0),
+          contact: data.contact ?? prev?.contact,
+          lastSent: data.success ? data.contact ?? prev?.lastSent : prev?.lastSent,
+          lastSkipReason: (() => {
+            if (data.success) return undefined;
+            if (data.skipped && typeof data.error === 'string' && data.error.trim()) return data.error.trim();
+            return prev?.lastSkipReason;
+          })(),
+          messageStep: data.message_step_index,
+          messageStepsTotal: data.message_steps_total,
+          sameContactContinue: data.same_contact_continue,
+        }));
+
+        // duplicateSuppressed: API devolve next_delay_seconds=0 — não usar delay entre contatos como fallback
+        // (isso atrasava o próximo passo e aumentava janela de corrida com o cron / outra aba).
+        const waitSecs = data?.duplicateSuppressed
+          ? 0
+          : typeof data.next_delay_seconds === 'number' && data.next_delay_seconds >= 0
+            ? data.next_delay_seconds
+            : computeNextDelaySeconds(
+                jobConfig ?? {
+                  delay_mode: 'random',
+                  delay_min_seconds: BROADCAST_DEFAULT_RANDOM_MIN_SEC,
+                  delay_max_seconds: BROADCAST_DEFAULT_RANDOM_MAX_SEC,
+                }
+              );
+
+        for (let i = waitSecs; i > 0; i--) {
+          if (cancelled) return;
+          setActiveBroadcastCountdown(i);
+          await new Promise<void>((r) => setTimeout(r, 1000));
+        }
         setActiveBroadcastCountdown(0);
-        loadBroadcasts();
-        return;
       }
-
-      setActiveBroadcastProgress((prev) => ({
-        current: data.current_index ?? (prev?.current ?? 0),
-        total: data.total_count ?? (prev?.total ?? 0),
-        contact: data.contact ?? prev?.contact,
-        lastSent: data.success ? data.contact ?? prev?.lastSent : prev?.lastSent,
-        lastSkipReason: (() => {
-          if (data.success) return undefined;
-          if (data.skipped && typeof data.error === 'string' && data.error.trim()) return data.error.trim();
-          return prev?.lastSkipReason;
-        })(),
-        messageStep: data.message_step_index,
-        messageStepsTotal: data.message_steps_total,
-        sameContactContinue: data.same_contact_continue,
-      }));
-
-      const waitSecs =
-        typeof data.next_delay_seconds === 'number' && data.next_delay_seconds > 0
-          ? data.next_delay_seconds
-          : computeNextDelaySeconds(
-              jobConfig ?? {
-                delay_mode: 'random',
-                delay_min_seconds: BROADCAST_DEFAULT_RANDOM_MIN_SEC,
-                delay_max_seconds: BROADCAST_DEFAULT_RANDOM_MAX_SEC,
-              }
-            );
-
-      for (let i = waitSecs; i > 0; i--) {
-        if (cancelled) return;
-        setActiveBroadcastCountdown(i);
-        await new Promise<void>((r) => setTimeout(r, 1000));
-      }
-      setActiveBroadcastCountdown(0);
-
-      if (!cancelled) run();
     };
 
-    run();
+    void runLoop();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, loadEvolutionChannels]);
 
@@ -2068,6 +2107,120 @@ export default function ChatPage() {
     [userId, channels.evolution, selectedChannel?.id, selectedChannel?.type, loadBroadcastMessages]
   );
 
+  const openBroadcastEditFromJob = useCallback(
+    async (job: BroadcastJob) => {
+      if (!userId) {
+        setBroadcastError('Faça login para editar a campanha');
+        return;
+      }
+      if (channels.evolution.length === 0) {
+        setBroadcastError('Nenhuma instância Evolution disponível');
+        return;
+      }
+      setBroadcastRetryLoadingId(job.id);
+      setBroadcastError(null);
+      setBroadcastRetryMode(false);
+      setBroadcastEditJobId(null);
+      setBroadcastPickerOpenStep(null);
+      setBroadcastPickerQuery('');
+      try {
+        const res = await fetch(`/api/chat/broadcast/${job.id}`, {
+          headers: authHeaders(),
+          credentials: 'include',
+        });
+        const result = await res.json();
+        if (!result.success || !result.data) {
+          setBroadcastError(result.error ?? 'Não foi possível carregar o disparo');
+          return;
+        }
+        const row = result.data as {
+          contacts: unknown;
+          current_index?: number;
+          title?: string | null;
+          instance_id?: string;
+          broadcast_instances?: { id: string; name?: string }[] | null;
+          delay_mode?: string | null;
+          delay_seconds?: number | null;
+          delay_min_seconds?: number | null;
+          delay_max_seconds?: number | null;
+          message_config?: unknown;
+        };
+
+        const rawList = Array.isArray(row.contacts) ? row.contacts : [];
+        const normalized: BroadcastContact[] = rawList
+          .map((c: unknown) => {
+            const o = c as { phone?: string; name?: string };
+            const digits = String(o.phone ?? '').replace(/\D/g, '');
+            return { phone: normalizeBroadcastPhoneDigits(digits), name: o.name };
+          })
+          .filter((c) => c.phone.length >= 8);
+
+        if (normalized.length === 0) {
+          setBroadcastError('Lista de contatos vazia');
+          return;
+        }
+
+        const allowedEvolutionIds = new Set(channels.evolution.map((c) => c.id));
+        const fromJob =
+          Array.isArray(row.broadcast_instances) && row.broadcast_instances.length > 0
+            ? row.broadcast_instances.map((i) => i.id).filter(Boolean)
+            : row.instance_id
+              ? [row.instance_id]
+              : [];
+        let picked = new Set(fromJob.filter((id) => allowedEvolutionIds.has(id)));
+        if (picked.size === 0 && selectedChannel?.type === 'evolution') {
+          picked = new Set([selectedChannel.id]);
+        } else if (picked.size === 0 && channels.evolution[0]) {
+          picked = new Set([channels.evolution[0].id]);
+        }
+        if (picked.size === 0) {
+          setBroadcastError('Nenhuma instância desta campanha está disponível na sua lista; selecione canais e tente de novo.');
+          return;
+        }
+
+        setBroadcastTitle((typeof row.title === 'string' && row.title.trim() ? row.title : job.title) || '');
+        setBroadcastContacts(normalized);
+        setBroadcastSelectedIndices(new Set(normalized.map((_, i) => i)));
+        setBroadcastContactsFileName(`campanha-${job.id.slice(0, 8)}.csv`);
+        setBroadcastSequenceDelay(getSequenceDelaySeconds(row.message_config));
+        setBroadcastRotationSize(getRotationSize(row.message_config));
+        const stepsFromJob = parseBroadcastSteps(row.message_config);
+        setBroadcastStepMessageIds(
+          stepsFromJob.length > 0
+            ? stepsFromJob.map((s) => (typeof s.source_message_id === 'string' ? s.source_message_id : ''))
+            : ['']
+        );
+        setBroadcastInstanceIds(picked);
+        setBroadcastCustomQtyInput('');
+
+        const dm = row.delay_mode === 'random' ? 'random' : 'fixed';
+        setBroadcastDelayMode(dm);
+        if (dm === 'random') {
+          const lo =
+            row.delay_min_seconds != null ? Number(row.delay_min_seconds) : BROADCAST_DELAY_PRESETS.padrao.min;
+          const hi =
+            row.delay_max_seconds != null ? Number(row.delay_max_seconds) : BROADCAST_DELAY_PRESETS.padrao.max;
+          setBroadcastDelayMin(Math.max(1, Math.min(7200, lo)));
+          setBroadcastDelayMax(Math.max(1, Math.min(7200, hi)));
+        } else {
+          const d = row.delay_seconds != null ? Number(row.delay_seconds) : job.delay_seconds ?? 120;
+          setBroadcastDelay(Math.max(10, Math.min(7200, d)));
+        }
+
+        setBroadcastEditJobId(job.id);
+        setShowBroadcastForm(true);
+        setActiveView('broadcast');
+        void loadBroadcastMessages();
+      } catch {
+        setBroadcastError('Erro de rede ao carregar campanha');
+      } finally {
+        setBroadcastRetryLoadingId(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [userId, channels.evolution, selectedChannel?.id, selectedChannel?.type, loadBroadcastMessages]
+  );
+
   // ── Criar Broadcast ────────────────────────────────────────────────────────
   const handleCreateBroadcast = async () => {
     if (!selectedChannel || selectedChannel.type !== 'evolution') return;
@@ -2119,30 +2272,67 @@ export default function ChatPage() {
 
     const firstMsg = broadcastMessages.find((m) => m.id === broadcastStepMessageIds[0]);
 
+    const editPayload = {
+      title: broadcastTitle || firstMsg?.title || 'Disparo',
+      message_steps,
+      sequence_delay_seconds: broadcastFilledStepCount > 1 ? broadcastSequenceDelay : 15,
+      rotation_size: broadcastInstanceIds.size > 1 ? broadcastRotationSize : 1,
+      contacts: contactsToSend,
+      delay_mode: broadcastDelayMode,
+      delay_seconds: broadcastDelay,
+      delay_min_seconds: broadcastDelayMode === 'random' ? Math.min(broadcastDelayMin, broadcastDelayMax) : undefined,
+      delay_max_seconds: broadcastDelayMode === 'random' ? Math.max(broadcastDelayMin, broadcastDelayMax) : undefined,
+      instance_ids: instanceIds,
+    };
+
     setBroadcastCreating(true);
     setBroadcastError(null);
     try {
+      if (broadcastEditJobId) {
+        const res = await fetch(`/api/chat/broadcast/${broadcastEditJobId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(editPayload),
+        });
+        const result = await res.json();
+        if (!result.success) {
+          setBroadcastError(result.error ?? 'Erro ao salvar campanha');
+          return;
+        }
+        setShowBroadcastForm(false);
+        setBroadcastRetryMode(false);
+        setBroadcastEditJobId(null);
+        setBroadcastPickerOpenStep(null);
+        setBroadcastPickerQuery('');
+        setBroadcastTitle('');
+        setBroadcastStepMessageIds(['']);
+        setBroadcastSequenceDelay(15);
+        setBroadcastContacts([]);
+        setBroadcastContactsFileName('');
+        setBroadcastSelectedIndices(new Set());
+        setBroadcastCustomQtyInput('');
+        setBroadcastDelay(120);
+        setBroadcastDelayMode('random');
+        setBroadcastDelayMin(BROADCAST_DELAY_PRESETS.padrao.min);
+        setBroadcastDelayMax(BROADCAST_DELAY_PRESETS.padrao.max);
+        setBroadcastRotationSize(1);
+        loadBroadcasts();
+        return;
+      }
+
       const res = await fetch('/api/chat/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
-          instance_ids: instanceIds,
+          ...editPayload,
           instance_id: instanceIds[0],
-          title: broadcastTitle || firstMsg?.title || 'Disparo',
-          message_steps,
-          sequence_delay_seconds: broadcastFilledStepCount > 1 ? broadcastSequenceDelay : 15,
-          rotation_size: broadcastInstanceIds.size > 1 ? broadcastRotationSize : 1,
-          contacts: contactsToSend,
-          delay_mode: broadcastDelayMode,
-          delay_seconds: broadcastDelay,
-          delay_min_seconds: broadcastDelayMode === 'random' ? Math.min(broadcastDelayMin, broadcastDelayMax) : undefined,
-          delay_max_seconds: broadcastDelayMode === 'random' ? Math.max(broadcastDelayMin, broadcastDelayMax) : undefined,
         }),
       });
       const result = await res.json();
       if (!result.success) { setBroadcastError(result.error ?? 'Erro ao criar disparo'); return; }
       setShowBroadcastForm(false);
       setBroadcastRetryMode(false);
+      setBroadcastEditJobId(null);
       setBroadcastPickerOpenStep(null);
       setBroadcastPickerQuery('');
       setBroadcastTitle('');
@@ -4204,13 +4394,18 @@ export default function ChatPage() {
                     <div className="flex-shrink-0 space-y-3">
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">
-                          {broadcastRetryMode ? 'Refazer disparo' : 'Novo Disparo'}
+                          {broadcastEditJobId
+                            ? 'Editar campanha'
+                            : broadcastRetryMode
+                              ? 'Refazer disparo'
+                              : 'Novo Disparo'}
                         </p>
                         <button
                           type="button"
                           onClick={() => {
                             setShowBroadcastForm(false);
                             setBroadcastRetryMode(false);
+                            setBroadcastEditJobId(null);
                             setBroadcastPickerOpenStep(null);
                             setBroadcastPickerQuery('');
                             setBroadcastStepMessageIds(['']);
@@ -4226,6 +4421,14 @@ export default function ChatPage() {
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200">
                           Escolha o <strong>template de mensagem</strong> abaixo para manter ou alterar texto e mídia.
                           Instâncias e intervalos foram copiados do disparo anterior; ajuste se precisar e crie um novo job.
+                        </div>
+                      )}
+
+                      {broadcastEditJobId && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-[11px] text-blue-900 dark:border-blue-800 dark:bg-blue-900/25 dark:text-blue-200">
+                          Você está editando esta campanha no mesmo job. Ao salvar, o status continua{' '}
+                          <strong>pendente ou pausado</strong> — use <strong>Iniciar</strong> ou <strong>Retomar</strong> no
+                          histórico quando quiser enviar.
                         </div>
                       )}
 
@@ -4733,7 +4936,22 @@ export default function ChatPage() {
                         className="flex-1 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 flex items-center justify-center gap-2"
                         style={{ backgroundColor: '#8CD955' }}
                       >
-                        {broadcastCreating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Criando...</> : <><Megaphone className="w-3.5 h-3.5" />Criar e Iniciar</>}
+                        {broadcastCreating ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            {broadcastEditJobId ? 'Salvando…' : 'Criando...'}
+                          </>
+                        ) : broadcastEditJobId ? (
+                          <>
+                            <Pencil className="w-3.5 h-3.5" />
+                            Salvar campanha
+                          </>
+                        ) : (
+                          <>
+                            <Megaphone className="w-3.5 h-3.5" />
+                            Criar e Iniciar
+                          </>
+                        )}
                       </button>
                       <button
                         type="button"
@@ -4741,6 +4959,7 @@ export default function ChatPage() {
                           setShowBroadcastForm(false);
                           setBroadcastError(null);
                           setBroadcastRetryMode(false);
+                          setBroadcastEditJobId(null);
                           setBroadcastPickerOpenStep(null);
                           setBroadcastPickerQuery('');
                           setBroadcastStepMessageIds(['']);
@@ -4857,6 +5076,7 @@ export default function ChatPage() {
                           };
                           const pct = job.total_count > 0 ? Math.round((job.current_index / job.total_count) * 100) : 0;
                           const isActive = activeBroadcastJobId === job.id;
+                          const instLine = formatBroadcastInstancesLine(job, channels.evolution);
                           return (
                             <div
                               key={job.id}
@@ -4890,10 +5110,12 @@ export default function ChatPage() {
                                   {statusLabel[job.status] ?? job.status}
                                 </span>
                               </div>
-                              <p className={`mb-2 text-[11px] leading-relaxed ${statusColor[job.status] ?? 'text-gray-600 dark:text-gray-400'}`}>
-                                {(job.broadcast_instances?.length ?? 0) > 1
-                                  ? `${job.broadcast_instances?.length ?? 0} instâncias (rotação)`
-                                  : job.instance_name}
+                              <p
+                                className={`mb-2 text-[11px] leading-relaxed ${statusColor[job.status] ?? 'text-gray-600 dark:text-gray-400'}`}
+                                title={instLine}
+                              >
+                                <span className="text-gray-500 dark:text-gray-500">Inst.: </span>
+                                <span className="font-medium text-gray-800 dark:text-gray-200">{instLine}</span>
                                 <span className="text-gray-400 dark:text-gray-500"> · </span>
                                 {job.current_index}/{job.total_count} contatos
                                 {(job.message_steps_count ?? 1) > 1 ? (
@@ -4963,6 +5185,21 @@ export default function ChatPage() {
                                   >
                                     <Play className="h-3 w-3" />
                                     Retomar
+                                  </button>
+                                ) : null}
+                                {(job.status === 'pending' || job.status === 'paused') && !isActive ? (
+                                  <button
+                                    type="button"
+                                    disabled={broadcastRetryLoadingId === job.id}
+                                    onClick={() => void openBroadcastEditFromJob(job)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-violet-400 px-2 py-1 text-[11px] text-violet-700 hover:bg-violet-50 dark:border-violet-500 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                                  >
+                                    {broadcastRetryLoadingId === job.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Pencil className="h-3 w-3" />
+                                    )}
+                                    Editar
                                   </button>
                                 ) : null}
                                 {(job.status === 'pending' || job.status === 'running' || job.status === 'paused' || isActive) ? (

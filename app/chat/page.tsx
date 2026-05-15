@@ -982,6 +982,7 @@ export default function ChatPage() {
           total_count?: number;
           error?: string;
           next_delay_seconds?: number;
+          duplicateSuppressed?: boolean;
         };
 
         if (d?.paused) { setBroadcastRunning(false); break; }
@@ -1030,7 +1031,9 @@ export default function ChatPage() {
         if (d?.success) {
           loadConversationsFromApi(false).catch(() => {});
         }
-        if (typeof d?.next_delay_seconds === 'number' && d.next_delay_seconds > 0) {
+        if (d?.duplicateSuppressed) {
+          nextWaitMs = 0;
+        } else if (typeof d?.next_delay_seconds === 'number' && d.next_delay_seconds >= 0) {
           nextWaitMs = d.next_delay_seconds * 1000;
         } else {
           nextWaitMs = (broadcastDelay || 30) * 1000;

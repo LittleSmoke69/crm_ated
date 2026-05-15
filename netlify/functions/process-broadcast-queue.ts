@@ -19,6 +19,7 @@ import { maybeMarkEvolutionInstanceDisconnected } from '../../lib/evolution/mark
 import { broadcastSendErrorIsInstanceUnreachable, orderedBroadcastInstanceIds } from '../../lib/chat/broadcast-instance-failover';
 import { computeNextDelaySeconds } from '../../lib/chat/broadcast-delay';
 import { getSequenceDelaySeconds, parseBroadcastSteps } from '../../lib/chat/broadcast-sequence';
+import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from '../../lib/chat/broadcast-step-claim';
 import { coerceEvolutionSendMediaFields } from '../../lib/crm/evolution-send-media-meta';
 
 interface HandlerResponse {
@@ -189,6 +190,15 @@ async function processOneBroadcast(
     const orderedIds = orderedBroadcastInstanceIds(rotation, idx);
     const tryInstanceIds = orderedIds.length > 0 ? orderedIds : [String(fallbackInstanceId)].filter(Boolean);
 
+    const claimTry = await tryClaimBroadcastStep(supabase, job.id, idx, stepIdx);
+    if (!claimTry.ok) {
+      console.log(
+        `${logPrefix} Passo já em processamento por outro runner (ex.: UI) — aguardando próximo ciclo`,
+      );
+      break;
+    }
+    const stepClaimToken = claimTry.claimToken;
+
     let instance: {
       id: string;
       instance_name: string;
@@ -212,6 +222,7 @@ async function processOneBroadcast(
       if (!inst) {
         if (tryInstanceIds.length === 1) {
           console.error(`${logPrefix} Instância não encontrada: ${tryId}`);
+          await releaseBroadcastStepClaim(supabase, job.id, stepClaimToken);
           return { sent, done: false, error: 'Instância não encontrada' };
         }
         continue;
@@ -221,6 +232,7 @@ async function processOneBroadcast(
 
       if (!evolutionApi?.base_url || !inst.apikey) {
         if (tryInstanceIds.length === 1) {
+          await releaseBroadcastStepClaim(supabase, job.id, stepClaimToken);
           return { sent, done: false, error: 'Configuração incompleta da Evolution API' };
         }
         continue;
@@ -256,9 +268,12 @@ async function processOneBroadcast(
             current_index: idx,
             message_step_index: 0,
             last_error: lastSendError,
+            step_claim_token: null,
+            step_claim_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('step_claim_token', stepClaimToken);
         delayMs = computeNextDelaySeconds(job) * 1000;
         console.warn(`${logPrefix} Contato ${idx} pulado: ${lastSendError}`);
         continue;
@@ -267,18 +282,26 @@ async function processOneBroadcast(
       if (lastSendError && broadcastSendErrorIsInstanceUnreachable(lastSendError)) {
         await supabase
           .from('chat_broadcasts')
-          .update({ last_error: lastSendError, updated_at: new Date().toISOString() })
-          .eq('id', job.id);
+          .update({
+            last_error: lastSendError,
+            step_claim_token: null,
+            step_claim_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.id)
+          .eq('step_claim_token', stepClaimToken);
         console.error(`${logPrefix} Todas instâncias da rotação offline: ${lastSendError}`);
         return { sent, done: false, error: lastSendError };
       }
 
       if (!lastSendError && tryInstanceIds.length > 1) {
         console.error(`${logPrefix} Nenhuma instância válida na rotação`);
+        await releaseBroadcastStepClaim(supabase, job.id, stepClaimToken);
         return { sent, done: false, error: 'Nenhuma instância válida na rotação' };
       }
 
       console.error(`${logPrefix} Instância não encontrada`);
+      await releaseBroadcastStepClaim(supabase, job.id, stepClaimToken);
       return { sent, done: false, error: 'Instância não encontrada' };
     }
 
@@ -296,6 +319,11 @@ async function processOneBroadcast(
         mediaLabels[msgConfig.type] ||
         '[Mídia]';
 
+      const broadcastAttributionUserId =
+        typeof job.user_id === 'string' && job.user_id.length > 0
+          ? job.user_id
+          : (instance.user_id ?? undefined);
+
       try {
         const { data: conversation } = await supabase
           .from('chat_conversations')
@@ -303,7 +331,7 @@ async function processOneBroadcast(
             {
               instance_id: instance.id,
               workspace_id: instance.workspace_id ?? undefined,
-              user_id: instance.user_id ?? undefined,
+              user_id: broadcastAttributionUserId,
               remote_jid: remoteJid,
               title: contact.name || remoteJid.replace('@s.whatsapp.net', ''),
               is_group: false,
@@ -326,7 +354,7 @@ async function processOneBroadcast(
             {
               instance_id: instance.id,
               workspace_id: instance.workspace_id ?? undefined,
-              user_id: instance.user_id ?? undefined,
+              user_id: broadcastAttributionUserId,
               conversation_id: conversation.id,
               message_id: String(returnedMessageId),
               direction: 'out',
@@ -363,9 +391,12 @@ async function processOneBroadcast(
             last_sent_at: now,
             status: 'running',
             last_error: null,
+            step_claim_token: null,
+            step_claim_at: null,
             updated_at: now,
           })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('step_claim_token', stepClaimToken);
         delayMs = getSequenceDelaySeconds(job.message_config) * 1000;
         sent += 1;
         console.log(
@@ -384,9 +415,12 @@ async function processOneBroadcast(
             status: isDone ? 'completed' : 'running',
             completed_at: isDone ? now : null,
             last_error: null,
+            step_claim_token: null,
+            step_claim_at: null,
             updated_at: now,
           })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('step_claim_token', stepClaimToken);
         delayMs = computeNextDelaySeconds(job) * 1000;
         sent += 1;
         console.log(
@@ -397,6 +431,7 @@ async function processOneBroadcast(
     } catch (err: any) {
       const msg = err?.message || String(err);
       console.warn(`${logPrefix} Pós-envio: ${msg}`);
+      await releaseBroadcastStepClaim(supabase, job.id, stepClaimToken);
     }
   }
 

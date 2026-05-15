@@ -18,6 +18,7 @@ import {
   extractEvolutionWebhookInstanceName,
   normalizeEvolutionChatWebhookEvent,
 } from '@/lib/server/evolution-chat-webhook-config';
+import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 
@@ -135,11 +136,18 @@ async function handleMessageUpsert(
     return;
   }
 
+  const resolvedUserId = await resolveEvolutionConversationUserIdForUpsert(
+    supabaseServiceRole,
+    instance.id,
+    remoteJid,
+    instance.user_id
+  );
+
   // 1. Upsert da conversa no chat
   const conversation = await chatService.upsertConversation({
     instance_id: instance.id,
     workspace_id: instance.workspace_id,
-    user_id: instance.user_id,
+    user_id: resolvedUserId,
     remote_jid: remoteJid,
     title: data.pushName || remoteJid.split('@')[0],
     profile_pic_url: pickProfilePicUrl(data) || undefined,
@@ -152,7 +160,7 @@ async function handleMessageUpsert(
   await chatService.saveMessage({
     instance_id: instance.id,
     workspace_id: instance.workspace_id,
-    user_id: instance.user_id,
+    user_id: resolvedUserId,
     conversation_id: conversation.id,
     message_id: key.id || data.id || data.messageId,
     direction: ((key.fromMe || fromMe) ? 'out' : 'in') as 'in' | 'out',
