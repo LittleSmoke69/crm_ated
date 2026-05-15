@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { ApiHttpError, successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { requireAdminLeadTransferContext } from '@/lib/server/crm/adminLeadTransferContext';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -375,7 +375,20 @@ export async function GET(req: NextRequest) {
     );
     return successResponse({ consultants });
   } catch (err: unknown) {
+    if (err instanceof ApiHttpError) {
+      return errorResponse(err.message, err.statusCode);
+    }
     const message = err instanceof Error ? err.message : String(err);
+    if (
+      message === 'Não autenticado' ||
+      message === 'Usuário inválido' ||
+      message === 'Perfil não encontrado'
+    ) {
+      return errorResponse(message, 401);
+    }
+    if (message.startsWith('Acesso negado')) {
+      return errorResponse(message, 403);
+    }
     if (message.includes('não tem permissão') || message.includes('obrigatório')) {
       return errorResponse(message, 403);
     }

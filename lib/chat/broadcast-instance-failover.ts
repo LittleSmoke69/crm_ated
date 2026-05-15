@@ -10,16 +10,19 @@ export function broadcastSendErrorIsInstanceUnreachable(message: string): boolea
 }
 
 /**
- * Ordem de tentativa para o contato `contactIndex`: começa em `contactIndex % n`
- * e percorre o restante da rotação (sem repetir o mesmo `id`).
+ * Ordem de tentativa para o contato `contactIndex`:
+ * Com rotationSize=1 (padrão), troca de instância a cada contato (round-robin).
+ * Com rotationSize=N, cada instância envia para N contatos antes de alternar.
  */
 export function orderedBroadcastInstanceIds(
   rotation: { id: string; name?: string }[],
-  contactIndex: number
+  contactIndex: number,
+  rotationSize = 1
 ): string[] {
   if (!Array.isArray(rotation) || rotation.length === 0) return [];
   const n = rotation.length;
-  const start = Math.max(0, Math.floor(contactIndex)) % n;
+  const size = Math.max(1, Math.floor(rotationSize));
+  const start = Math.floor(Math.max(0, contactIndex) / size) % n;
   const seen = new Set<string>();
   const out: string[] = [];
   for (let k = 0; k < n; k++) {

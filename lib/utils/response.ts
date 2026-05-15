@@ -40,6 +40,17 @@ export function successResponse<T>(
   );
 }
 
+/** Erro HTTP explícito para rotas (evita logar stack trace como falha de servidor em 401/403 esperados). */
+export class ApiHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = 'ApiHttpError';
+    this.statusCode = statusCode;
+  }
+}
+
 export function errorResponse(
   error: string | Error,
   status: number = 400,
@@ -63,10 +74,15 @@ const AUTH_ERROR_MESSAGES = ['Não autenticado', 'Usuário inválido', 'Perfil n
 const FORBIDDEN_MESSAGES = ['Acesso negado'];
 
 export function serverErrorResponse(error: string | Error | any): NextResponse {
+  if (error instanceof ApiHttpError) {
+    return errorResponse(error.message, error.statusCode);
+  }
+
   const err = typeof error === 'object' && error !== null && 'statusCode' in error
     ? (error as any)
     : null;
-  let status = err?.statusCode === 503 ? 503 : 500;
+  let status =
+    err?.statusCode === 503 ? 503 : err?.statusCode === 401 || err?.statusCode === 403 ? err.statusCode : 500;
 
   let message: string;
   if (error instanceof Error) {

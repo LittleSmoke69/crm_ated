@@ -29,6 +29,8 @@ import {
   UserPlus,
   Ban,
   Share2,
+  CheckSquare,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { supabase } from '@/lib/supabase';
@@ -198,7 +200,11 @@ const InstancesPage = () => {
   const pendingVirginPhoneAfterQrRef = useRef<{ id: string; instance_name: string } | null>(null);
   /** `instance_name` enquanto PATCH de blocked_from_maturation está em voo */
   const [maturationBlockSaving, setMaturationBlockSaving] = useState<string | null>(null);
-  
+  /** Seleção para troca em massa do tipo virgem / maturado (chave = id da instância ou nome). */
+  const [selectedMaturationKeys, setSelectedMaturationKeys] = useState<Set<string>>(new Set());
+  const [maturationTypeSavingKey, setMaturationTypeSavingKey] = useState<string | null>(null);
+  const [maturationTypeBulkSaving, setMaturationTypeBulkSaving] = useState(false);
+
   // Função helper para verificar se o modal de extrair grupos já foi mostrado para uma instância
   const hasShownExtractGroupsModal = (instanceName: string): boolean => {
     if (typeof window === 'undefined') return false;
@@ -1295,6 +1301,105 @@ const InstancesPage = () => {
   const endInstanceIndex = startInstanceIndex + instanceItemsPerPage;
   const paginatedInstances = filteredInstances.slice(startInstanceIndex, endInstanceIndex);
 
+  const instanceStableKey = (inst: WhatsAppInstance) => String(inst.id ?? inst.instance_name);
+  const canSelectInstanceForMaturationType = (inst: WhatsAppInstance) =>
+    inst.shared_with_me !== true && Boolean((inst.instance_name ?? '').trim());
+
+  const patchInstanceMaturationType = async (inst: WhatsAppInstance, nextType: 'virgem' | 'maturado') => {
+    if (!userId || !inst.instance_name) return false;
+    const res = await fetch(`/api/instances/${encodeURIComponent(inst.instance_name)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userId,
+        ...getWlSlugHeadersForApi(),
+      },
+      body: JSON.stringify({ maturation_type: nextType }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return true;
+    showToast(typeof data.error === 'string' ? data.error : 'Erro ao alterar tipo da instância', 'error');
+    return false;
+  };
+
+  const handleMaturationTypeChange = async (inst: WhatsAppInstance, nextType: 'virgem' | 'maturado') => {
+    const cur = inst.maturation_type === 'virgem' ? 'virgem' : 'maturado';
+    if (cur === nextType) return;
+    const key = instanceStableKey(inst);
+    setMaturationTypeSavingKey(key);
+    try {
+      const ok = await patchInstanceMaturationType(inst, nextType);
+      if (ok) {
+        showToast(
+          nextType === 'virgem'
+            ? 'Tipo: Virgem (maturação / rede).'
+            : 'Tipo: Maturador — fluxo normal.',
+          'success'
+        );
+        await loadInitialData();
+      }
+    } finally {
+      setMaturationTypeSavingKey(null);
+    }
+  };
+
+  const toggleMaturationSelection = (inst: WhatsAppInstance) => {
+    if (!canSelectInstanceForMaturationType(inst)) return;
+    const k = instanceStableKey(inst);
+    setSelectedMaturationKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  };
+
+  const selectAllMaturationOnPage = () => {
+    setSelectedMaturationKeys((prev) => {
+      const next = new Set(prev);
+      for (const inst of paginatedInstances) {
+        if (canSelectInstanceForMaturationType(inst)) next.add(instanceStableKey(inst));
+      }
+      return next;
+    });
+  };
+
+  const clearMaturationSelection = () => setSelectedMaturationKeys(new Set());
+
+  const handleBulkMaturationType = async (nextType: 'virgem' | 'maturado') => {
+    if (!userId || selectedMaturationKeys.size === 0) return;
+    const targets = filteredInstances.filter((inst) => {
+      if (!canSelectInstanceForMaturationType(inst)) return false;
+      if (!selectedMaturationKeys.has(instanceStableKey(inst))) return false;
+      const cur = inst.maturation_type === 'virgem' ? 'virgem' : 'maturado';
+      return cur !== nextType;
+    });
+    if (targets.length === 0) {
+      showToast('Nenhuma instância selecionada precisa ser alterada.', 'info');
+      return;
+    }
+    setMaturationTypeBulkSaving(true);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const inst of targets) {
+        const success = await patchInstanceMaturationType(inst, nextType);
+        if (success) ok++;
+        else fail++;
+      }
+      if (ok > 0) await loadInitialData();
+      showToast(
+        fail === 0
+          ? `${ok} instância(s) alterada(s) para ${nextType === 'virgem' ? 'Virgem' : 'Maturador (fluxo normal)'}.`
+          : `${ok} ok · ${fail} falha(s).`,
+        fail === 0 ? 'success' : 'error'
+      );
+      clearMaturationSelection();
+    } finally {
+      setMaturationTypeBulkSaving(false);
+    }
+  };
+
   // Resetar página quando o filtro ou a busca mudar
   useEffect(() => {
     setInstanceCurrentPage(1);
@@ -1491,7 +1596,61 @@ const InstancesPage = () => {
                     </button>
                   )}
                 </div>
-                
+
+                {filteredInstances.some((i) => canSelectInstanceForMaturationType(i)) && (
+                  <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-200/80 dark:border-amber-800/50 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-3 sm:px-4">
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                      <ArrowRightLeft className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
+                      <span className="font-semibold">Tipo da instância (Virgem ↔ Maturador)</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        Virgem entra na maturação/rede; Maturador é o fluxo normal. Instâncias compartilhadas não podem ser alteradas aqui.
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllMaturationOnPage}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#555] hover:bg-gray-50 dark:hover:bg-[#333]"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5" />
+                        Selecionar página
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearMaturationSelection}
+                        disabled={selectedMaturationKeys.size === 0}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#555] hover:bg-gray-50 dark:hover:bg-[#333] disabled:opacity-40"
+                      >
+                        Limpar seleção
+                      </button>
+                      {selectedMaturationKeys.size > 0 && (
+                        <>
+                          <span className="text-xs font-medium text-gray-600 dark:text-gray-300 tabular-nums">
+                            {selectedMaturationKeys.size} selecionada(s)
+                          </span>
+                          <button
+                            type="button"
+                            disabled={maturationTypeBulkSaving}
+                            onClick={() => void handleBulkMaturationType('virgem')}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            {maturationTypeBulkSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                            Virgem (em massa)
+                          </button>
+                          <button
+                            type="button"
+                            disabled={maturationTypeBulkSaving}
+                            onClick={() => void handleBulkMaturationType('maturado')}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            Maturador — fluxo normal (em massa)
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredInstances.length === 0 ? (
                     <div className="col-span-full">
@@ -1526,6 +1685,16 @@ const InstancesPage = () => {
                         return (
                           <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition-all duration-200 bg-white dark:bg-[#333] flex flex-col h-full shadow-sm">
                             <div className="flex justify-between items-start mb-3">
+                              <div className="flex gap-2 flex-1 min-w-0">
+                                {canSelectInstanceForMaturationType(inst) && (
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1.5 h-4 w-4 shrink-0 rounded border-gray-300 dark:border-gray-500 text-amber-600 focus:ring-amber-500"
+                                    checked={selectedMaturationKeys.has(instanceStableKey(inst))}
+                                    onChange={() => toggleMaturationSelection(inst)}
+                                    aria-label={`Selecionar ${inst.instance_name} para troca de tipo em massa`}
+                                  />
+                                )}
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                                   <span className="font-semibold text-gray-800 dark:text-white truncate">{inst.instance_name}</span>
@@ -1639,6 +1808,7 @@ const InstancesPage = () => {
                                   )}
                                 </div>
                               </div>
+                              </div>
                               <div className="flex gap-1 flex-shrink-0 ml-2">
                                 {canManageShare && (
                                   <button
@@ -1660,6 +1830,49 @@ const InstancesPage = () => {
                                   </button>
                                 )}
                               </div>
+                            </div>
+                            <div className="mb-3 rounded-lg border border-gray-100 dark:border-[#444] bg-gray-50/90 dark:bg-[#262626] px-3 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                  Tipo
+                                </span>
+                                <span
+                                  className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                                    inst.maturation_type === 'virgem'
+                                      ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200'
+                                      : 'bg-emerald-100 dark:bg-emerald-900/35 text-emerald-900 dark:text-emerald-200'
+                                  }`}
+                                >
+                                  {inst.maturation_type === 'virgem' ? 'Virgem (maturação)' : 'Maturador (fluxo normal)'}
+                                </span>
+                                {sharedMe && (
+                                  <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    Compartilhada: apenas o dono altera o tipo.
+                                  </span>
+                                )}
+                              </div>
+                              {!sharedMe && (
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {maturationTypeSavingKey === instanceStableKey(inst) ? (
+                                    <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" aria-hidden />
+                                  ) : null}
+                                  <select
+                                    value={inst.maturation_type === 'virgem' ? 'virgem' : 'maturado'}
+                                    disabled={
+                                      maturationTypeSavingKey === instanceStableKey(inst) || maturationTypeBulkSaving
+                                    }
+                                    onChange={(e) => {
+                                      const v = e.target.value as 'virgem' | 'maturado';
+                                      void handleMaturationTypeChange(inst, v);
+                                    }}
+                                    className="text-xs font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#2a2a2a] text-gray-800 dark:text-gray-100 px-2 py-1.5 min-w-[11rem] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/40 disabled:opacity-50"
+                                    aria-label={`Tipo da instância ${inst.instance_name}`}
+                                  >
+                                    <option value="virgem">Virgem (maturação / rede)</option>
+                                    <option value="maturado">Maturador — fluxo normal</option>
+                                  </select>
+                                </div>
+                              )}
                             </div>
                             <div className="flex gap-2 mt-auto">
                               {!connected && (

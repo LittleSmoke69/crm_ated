@@ -81,17 +81,65 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { phone_number, blocked_from_maturation } = body;
+    const { phone_number, blocked_from_maturation, maturation_type: maturationTypeRaw } = body;
     const hasPhone = 'phone_number' in body;
     const hasBlock = 'blocked_from_maturation' in body;
+    const hasMaturationType = 'maturation_type' in body;
 
-    if (!hasPhone && !hasBlock) {
-      return errorResponse('Informe phone_number e/ou blocked_from_maturation', 400);
+    if (!hasPhone && !hasBlock && !hasMaturationType) {
+      return errorResponse(
+        'Informe phone_number, blocked_from_maturation e/ou maturation_type (virgem | maturado).',
+        400
+      );
     }
 
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (hasPhone) patch.phone_number = phone_number;
     if (hasBlock) patch.blocked_from_maturation = Boolean(blocked_from_maturation);
+
+    if (hasMaturationType) {
+      const maturationType =
+        maturationTypeRaw === 'virgem' ? 'virgem' : maturationTypeRaw === 'maturado' ? 'maturado' : null;
+      if (!maturationType) {
+        return errorResponse('maturation_type deve ser "virgem" ou "maturado".', 400);
+      }
+
+      const { data: row, error: rowErr } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id, status, maturation_status, maturation_type, instance_name')
+        .eq('instance_name', instanceName)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (rowErr || !row) {
+        return errorResponse('Instância não encontrada', 404);
+      }
+
+      patch.maturation_type = maturationType;
+      if (maturationType === 'maturado') {
+        patch.maturation_status = null;
+        patch.maturation_started_at = null;
+        patch.maturation_ends_at = null;
+        patch.maturation_phase_started_at = null;
+        patch.maturation_paused_at = null;
+        patch.current_day = null;
+        patch.is_locked = false;
+      } else {
+        const st = String((row as { status?: string }).status ?? '').toLowerCase();
+        const isConnected = st === 'ok' || st === 'connected';
+        const ms = (row as { maturation_status?: string | null }).maturation_status;
+        if (isConnected && (ms == null || ms === '')) {
+          const now = new Date();
+          const endsAt = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+          patch.maturation_status = 'waiting_connection_test';
+          patch.maturation_started_at = now.toISOString();
+          patch.maturation_ends_at = endsAt.toISOString();
+          patch.maturation_phase_started_at = now.toISOString();
+          patch.current_day = 1;
+          patch.is_locked = true;
+        }
+      }
+    }
 
     const { data, error } = await supabaseServiceRole
       .from('evolution_instances')

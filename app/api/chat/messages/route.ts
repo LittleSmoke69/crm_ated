@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const conversation_id = searchParams.get('conversation_id');
     const before_timestamp = searchParams.get('before_timestamp');
+    const include_siblings = searchParams.get('include_siblings') === 'true';
     const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
 
     if (!conversation_id) {
@@ -74,18 +75,40 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado.', 403);
     }
 
-    // 2. Buscar mensagens com cursor-based pagination
+    // 2. Montar lista de conversation_ids (inclui irmãs da mesma linha quando solicitado)
+    let conversationIds: string[] = [conversation_id!];
+    if (include_siblings && !before_timestamp && conversation.instance_id && conversation.user_id) {
+      // Busca conversas com o mesmo remote_jid (mesmo telefone) do mesmo usuário
+      const { data: conv } = await supabaseServiceRole
+        .from('chat_conversations')
+        .select('remote_jid')
+        .eq('id', conversation_id)
+        .single();
+      if (conv?.remote_jid) {
+        const { data: siblings } = await supabaseServiceRole
+          .from('chat_conversations')
+          .select('id')
+          .eq('user_id', conversation.user_id)
+          .eq('remote_jid', conv.remote_jid)
+          .eq('is_group', false)
+          .neq('id', conversation_id);
+        if (siblings && siblings.length > 0) {
+          conversationIds = [conversation_id!, ...siblings.map((s) => s.id)];
+        }
+      }
+    }
+
+    // 3. Buscar mensagens com cursor-based pagination
     //    - Sempre ordena DESC para pegar as mais recentes (ou as anteriores ao cursor)
     //    - Depois reverte para exibição cronológica (mais antiga primeiro)
     let query = supabaseServiceRole
       .from('chat_messages')
       .select('*')
-      .eq('conversation_id', conversation_id)
+      .in('conversation_id', conversationIds)
       .order('timestamp', { ascending: false })
-      .limit(limit);
+      .limit(conversationIds.length > 1 ? Math.min(limit * 2, 200) : limit);
 
     if (before_timestamp) {
-      // Carregar mensagens mais antigas que o cursor
       query = query.lt('timestamp', parseInt(before_timestamp, 10));
     }
 
@@ -96,7 +119,7 @@ export async function GET(req: NextRequest) {
     }
 
     const result = (messages || []).reverse(); // ordem cronológica para exibição
-    const hasMore = (messages || []).length === limit;
+    const hasMore = conversationIds.length === 1 && (messages || []).length === limit;
 
     // 3. Zerar contador de não lidas ao abrir a conversa (apenas na carga inicial, sem cursor)
     if (!before_timestamp) {

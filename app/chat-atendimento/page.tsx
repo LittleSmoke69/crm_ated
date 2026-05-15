@@ -12,7 +12,7 @@ import {
   computeNextDelaySeconds,
 } from '@/lib/chat/broadcast-delay';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
-import { getSequenceDelaySeconds, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
+import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import { mergeEvolutionConversationsForAtendimento } from '@/lib/chat/merge-evolution-atendimento-conversations';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import {
@@ -164,6 +164,8 @@ interface BroadcastJob {
   message_step_index?: number;
   /** Quantidade de mensagens na sequência por contato (derivado do job). */
   message_steps_count?: number;
+  /** Contatos por instância antes de alternar na rotação (derivado de message_config). */
+  rotation_size?: number;
 }
 
 interface BroadcastMessage {
@@ -938,7 +940,9 @@ export default function ChatPage() {
   const [broadcastCustomQtyInput, setBroadcastCustomQtyInput] = useState('');
   const broadcastFileInputRef = useRef<HTMLInputElement>(null);
   // Runner (execução em tempo real)
-  const broadcastRunnerRef = useRef<{ stop: boolean; jobId: string | null }>({ stop: false, jobId: null });
+  // cancel: token de cancelamento isolado por invocação — evita que um runner "zombie"
+  // continue após stopBroadcastRunner() + startBroadcastRunner() em sequência rápida.
+  const broadcastRunnerRef = useRef<{ cancel: (() => void) | null; jobId: string | null }>({ cancel: null, jobId: null });
   const [activeBroadcastJobId, setActiveBroadcastJobId] = useState<string | null>(null);
   const [activeBroadcastProgress, setActiveBroadcastProgress] = useState<{
     current: number;
@@ -956,6 +960,8 @@ export default function ChatPage() {
   const [broadcastRetryLoadingId, setBroadcastRetryLoadingId] = useState<string | null>(null);
   /** Quando true, não resetamos instâncias/intervalo ao abrir o formulário (valores vêm do job). */
   const [broadcastRetryMode, setBroadcastRetryMode] = useState(false);
+  /** Contatos por instância antes de alternar (rotação por bloco). Padrão 1 = round-robin por contato. */
+  const [broadcastRotationSize, setBroadcastRotationSize] = useState(1);
   /** Seletor de template com busca (qual passo da sequência está aberto). */
   const [broadcastPickerOpenStep, setBroadcastPickerOpenStep] = useState<number | null>(null);
   const [broadcastPickerQuery, setBroadcastPickerQuery] = useState('');
@@ -1708,6 +1714,7 @@ export default function ChatPage() {
     setBroadcastDelayMax(BROADCAST_DELAY_PRESETS.padrao.max);
     setBroadcastStepMessageIds(['']);
     setBroadcastSequenceDelay(15);
+    setBroadcastRotationSize(1);
   }, [showBroadcastForm, selectedChannel?.id, selectedChannel?.type, broadcastRetryMode]);
 
   useEffect(() => {
@@ -1722,7 +1729,7 @@ export default function ChatPage() {
     const running = broadcasts.find((b) => b.status === 'running');
     if (!running) return;
     // Evita segundo loop: create já chama startBroadcastRunner e activeBroadcastJobId pode estar stale aqui
-    if (broadcastRunnerRef.current.jobId === running.id && !broadcastRunnerRef.current.stop) return;
+    if (broadcastRunnerRef.current.jobId === running.id) return;
     startBroadcastRunner(running.id, running);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [broadcasts, selectedChannel]);
@@ -1805,16 +1812,26 @@ export default function ChatPage() {
 
   // ── Runner do Disparo (loop cliente) ──────────────────────────────────────
   const startBroadcastRunner = useCallback(async (jobId: string, jobConfig: BroadcastJob | null) => {
-    if (broadcastRunnerRef.current.jobId === jobId && !broadcastRunnerRef.current.stop) return;
-    broadcastRunnerRef.current.stop = false;
+    // Já existe um runner ativo para este job — não inicia um segundo.
+    if (broadcastRunnerRef.current.jobId === jobId) return;
+
+    // Cancela qualquer runner anterior (de outro job ou de uma tentativa anterior).
+    // O token `cancelled` é uma closure isolada: não pode ser acidentalmente
+    // "des-cancelado" por uma chamada subsequente a startBroadcastRunner.
+    broadcastRunnerRef.current.cancel?.();
+
+    let cancelled = false;
+    const cancel = () => { cancelled = true; };
+    broadcastRunnerRef.current.cancel = cancel;
     broadcastRunnerRef.current.jobId = jobId;
+
     setBroadcastInstanceDown(false);
     setActiveBroadcastJobId(jobId);
     setActiveBroadcastProgress(null);
     setActiveBroadcastCountdown(0);
 
     const run = async (): Promise<void> => {
-      if (broadcastRunnerRef.current.stop) return;
+      if (cancelled) return;
       let result: Record<string, unknown>;
       try {
         const res = await fetch(`/api/chat/broadcast/${jobId}/process-next`, {
@@ -1825,6 +1842,7 @@ export default function ChatPage() {
       } catch {
         // Rede offline — para o runner
         setBroadcastInstanceDown(true);
+        broadcastRunnerRef.current.cancel = null;
         broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         loadBroadcasts();
@@ -1849,6 +1867,7 @@ export default function ChatPage() {
 
       if (!result.success || data?.instanceDown) {
         setBroadcastInstanceDown(true);
+        broadcastRunnerRef.current.cancel = null;
         broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         loadBroadcasts();
@@ -1856,6 +1875,7 @@ export default function ChatPage() {
       }
 
       if (data?.paused || data?.done) {
+        broadcastRunnerRef.current.cancel = null;
         broadcastRunnerRef.current.jobId = null;
         setActiveBroadcastJobId(null);
         setActiveBroadcastProgress(null);
@@ -1891,13 +1911,13 @@ export default function ChatPage() {
             );
 
       for (let i = waitSecs; i > 0; i--) {
-        if (broadcastRunnerRef.current.stop) return;
+        if (cancelled) return;
         setActiveBroadcastCountdown(i);
         await new Promise<void>((r) => setTimeout(r, 1000));
       }
       setActiveBroadcastCountdown(0);
 
-      if (!broadcastRunnerRef.current.stop) run();
+      if (!cancelled) run();
     };
 
     run();
@@ -1905,7 +1925,8 @@ export default function ChatPage() {
   }, [userId, loadEvolutionChannels]);
 
   const stopBroadcastRunner = () => {
-    broadcastRunnerRef.current.stop = true;
+    broadcastRunnerRef.current.cancel?.();
+    broadcastRunnerRef.current.cancel = null;
     broadcastRunnerRef.current.jobId = null;
     setActiveBroadcastJobId(null);
     setActiveBroadcastProgress(null);
@@ -2009,6 +2030,7 @@ export default function ChatPage() {
           scope === 'pending' ? `pendentes-${job.id.slice(0, 8)}.csv` : `lista-${job.id.slice(0, 8)}.csv`
         );
         setBroadcastSequenceDelay(getSequenceDelaySeconds(row.message_config));
+        setBroadcastRotationSize(getRotationSize(row.message_config));
         const stepsFromJob = parseBroadcastSteps(row.message_config);
         setBroadcastStepMessageIds(
           stepsFromJob.length > 0
@@ -2084,9 +2106,12 @@ export default function ChatPage() {
     }
 
     if (broadcastDelayMode === 'random') {
-      let lo = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMin)));
-      let hi = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMax)));
-      if (lo > hi) [lo, hi] = [hi, lo];
+      const lo = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMin)));
+      const hi = Math.max(1, Math.min(7200, Math.floor(broadcastDelayMax)));
+      if (lo < 1 || hi < 1 || lo > 7200 || hi > 7200) {
+        setBroadcastError('Intervalo aleatório: use valores entre 1 e 7200 segundos');
+        return;
+      }
     } else if (broadcastDelay < 10 || broadcastDelay > 7200) {
       setBroadcastError('Intervalo entre contatos (fixo): use entre 10 e 7200 segundos');
       return;
@@ -2106,6 +2131,7 @@ export default function ChatPage() {
           title: broadcastTitle || firstMsg?.title || 'Disparo',
           message_steps,
           sequence_delay_seconds: broadcastFilledStepCount > 1 ? broadcastSequenceDelay : 15,
+          rotation_size: broadcastInstanceIds.size > 1 ? broadcastRotationSize : 1,
           contacts: contactsToSend,
           delay_mode: broadcastDelayMode,
           delay_seconds: broadcastDelay,
@@ -2130,6 +2156,7 @@ export default function ChatPage() {
       setBroadcastDelayMode('random');
       setBroadcastDelayMin(BROADCAST_DELAY_PRESETS.padrao.min);
       setBroadcastDelayMax(BROADCAST_DELAY_PRESETS.padrao.max);
+      setBroadcastRotationSize(1);
       const newJob = result.data as BroadcastJob;
       loadBroadcasts();
       startBroadcastRunner(newJob.id, newJob);
@@ -2243,8 +2270,14 @@ export default function ChatPage() {
     const loadMessages = async () => {
       setMessagesLoading(true);
       try {
+        // include_siblings=true: carrega mensagens de conversas irmãs (mesmo telefone,
+        // outras instâncias) — permite ver histórico cross-instância no atendimento.
+        const siblingParam =
+          selectedChannel?.type === 'evolution' && channels.evolution.length > 1
+            ? '&include_siblings=true'
+            : '';
         const response = await fetch(
-          `/api/chat/messages?conversation_id=${convId}&limit=${MESSAGES_PAGE_SIZE}`,
+          `/api/chat/messages?conversation_id=${convId}&limit=${MESSAGES_PAGE_SIZE}${siblingParam}`,
           { headers: authHeaders() }
         );
         const result = await response.json();
@@ -4166,7 +4199,7 @@ export default function ChatPage() {
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* Novo Disparo: altura limitada para não empurrar o histórico para fora da tela */}
               {showBroadcastForm && (
-                <div className="relative z-20 flex min-h-0 w-full max-h-[min(50vh,520px)] flex-shrink-0 flex-col overflow-y-auto overscroll-y-contain border-b border-gray-200 bg-white dark:border-[#404040] dark:bg-[#2a2a2a]">
+                <div className="relative z-20 flex min-h-0 w-full max-h-[min(82vh,780px)] flex-shrink-0 flex-col overflow-y-auto overscroll-y-contain border-b border-gray-200 bg-white dark:border-[#404040] dark:bg-[#2a2a2a]">
                   <div className="flex flex-col gap-3 p-3">
                     <div className="flex-shrink-0 space-y-3">
                       <div className="flex items-center justify-between">
@@ -4428,6 +4461,26 @@ export default function ChatPage() {
                             ))
                           )}
                         </div>
+                        {broadcastInstanceIds.size > 1 && (
+                          <div className="mt-2">
+                            <label className="mb-1 block text-[11px] font-medium text-gray-600 dark:text-gray-400">
+                              Contatos por instância (rotação por bloco)
+                            </label>
+                            <p className="mb-1 text-[10px] text-gray-500 dark:text-gray-500">
+                              Ex: 5 → instância A envia para 5 contatos, depois instância B envia para 5, e assim por diante.
+                            </p>
+                            <input
+                              type="number"
+                              min={1}
+                              max={9999}
+                              value={broadcastRotationSize}
+                              onChange={(e) =>
+                                setBroadcastRotationSize(Math.max(1, Math.min(9999, parseInt(e.target.value) || 1)))
+                              }
+                              className="w-full rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-[#8CD955]"
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -5259,6 +5312,26 @@ export default function ChatPage() {
                               <div className="flex items-center justify-between mb-1">
                                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5 flex-wrap">
                                   {conv.title || 'Sem nome'}
+                                  {selectedChannel?.type === 'evolution' &&
+                                    channels.evolution.length > 1 &&
+                                    conv.instance_id &&
+                                    (() => {
+                                      const instName = channels.evolution.find((e) => e.id === conv.instance_id)?.instance_name;
+                                      if (!instName) return null;
+                                      const isCurrent = conv.instance_id === selectedChannel?.id;
+                                      return (
+                                        <span
+                                          title={`Disparo via ${instName}`}
+                                          className={`flex-shrink-0 max-w-[80px] truncate text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                                            isCurrent
+                                              ? 'bg-[#8CD955]/20 text-[#4a7c25] dark:text-[#8CD955]'
+                                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                          }`}
+                                        >
+                                          {instName}
+                                        </span>
+                                      );
+                                    })()}
                                   {selectedChannel?.type === 'whatsapp_official' &&
                                     conv.whatsapp_config_id && (
                                       <span
@@ -5300,12 +5373,9 @@ export default function ChatPage() {
                               {selectedChannel?.type === 'evolution' &&
                                 channels.evolution.length > 1 &&
                                 conv.instance_id &&
-                                conv.instance_id !== selectedChannel.id && (
-                                  <p className="text-[10px] text-amber-800/95 dark:text-amber-200/90 mb-1 leading-snug">
-                                    Thread em «
-                                    {channels.evolution.find((e) => e.id === conv.instance_id)?.instance_name ||
-                                      'outra instância'}
-                                    » — envio pela instância do menu
+                                conv.instance_id !== selectedChannel?.id && (
+                                  <p className="text-[10px] text-amber-700 dark:text-amber-300 mb-1 leading-snug">
+                                    Resposta enviada pela instância selecionada no menu
                                   </p>
                                 )}
                               <div className="flex items-center justify-end">

@@ -12,6 +12,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   parseBroadcastSteps,
   wrapMessageConfigForInsert,
+  getRotationSize,
   type BroadcastStepConfig,
 } from '@/lib/chat/broadcast-sequence';
 import {
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest) {
       return {
         ...rest,
         message_steps_count: parseBroadcastSteps(mc).length,
+        rotation_size: getRotationSize(mc),
       };
     });
     return successResponse(rows);
@@ -79,6 +81,8 @@ export async function POST(req: NextRequest) {
       delay_mode?: 'fixed' | 'random';
       delay_min_seconds?: number;
       delay_max_seconds?: number;
+      /** Contatos por instância antes de alternar na rotação (padrão 1). */
+      rotation_size?: number;
     };
 
     const {
@@ -93,6 +97,7 @@ export async function POST(req: NextRequest) {
       delay_mode: rawMode,
       delay_min_seconds: rawMin,
       delay_max_seconds: rawMax,
+      rotation_size: rawRotationSize,
     } = body;
 
     const delayMode: 'fixed' | 'random' = rawMode === 'random' ? 'random' : 'fixed';
@@ -119,7 +124,8 @@ export async function POST(req: NextRequest) {
     if (steps.length === 0) return errorResponse('Informe ao menos uma mensagem (message_steps ou message_config)', 400);
 
     const seqDelay = Math.min(7200, Math.max(1, Math.floor(Number(rawSeqDelay) || 15)));
-    const message_config_stored = wrapMessageConfigForInsert(steps, seqDelay);
+    const rotationSize = Math.min(9999, Math.max(1, Math.floor(Number(rawRotationSize) || 1)));
+    const message_config_stored = wrapMessageConfigForInsert(steps, seqDelay, rotationSize);
 
     if (!contacts || contacts.length === 0) return errorResponse('contacts não pode ser vazio', 400);
 

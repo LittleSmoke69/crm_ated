@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { ApiHttpError } from '@/lib/utils/response';
 import { UserProfile, getUserProfile } from './permissions';
 
 export interface AuthUser {
@@ -183,22 +184,27 @@ export async function validateUser(userId: string): Promise<boolean> {
 export async function requireAuth(req: NextRequest): Promise<AuthUser> {
   try {
     const auth = await authenticateRequest(req);
-    
+
     if (!auth) {
-      console.error('[requireAuth] Usuário não autenticado - nenhum userId encontrado');
-      throw new Error('Não autenticado');
+      throw new ApiHttpError('Não autenticado', 401);
     }
 
     const isValid = await validateUser(auth.userId);
     if (!isValid) {
-      console.error('[requireAuth] Usuário inválido - userId não encontrado no banco:', auth.userId);
-      throw new Error('Usuário inválido');
+      throw new ApiHttpError('Usuário inválido', 401);
     }
 
     return auth;
-  } catch (error: any) {
-    console.error('[requireAuth] Erro:', error.message);
-    console.error('[requireAuth] Stack:', error.stack);
+  } catch (error: unknown) {
+    if (error instanceof ApiHttpError) {
+      throw error;
+    }
+    const e = error as { statusCode?: number; message?: string; stack?: string };
+    if (e?.statusCode === 503) {
+      throw error;
+    }
+    console.error('[requireAuth] Erro:', e?.message);
+    console.error('[requireAuth] Stack:', e?.stack);
     throw error;
   }
 }

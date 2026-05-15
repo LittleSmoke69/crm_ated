@@ -35,6 +35,12 @@ export interface WhatsAppInstance {
   is_blocked_for_instances?: boolean; // Indica se a API Evolution está bloqueada para criação de instâncias
   /** Quando true, a instância não pode ser usada no maturador (definido em Instâncias). */
   blocked_from_maturation?: boolean;
+  /** virgem = participa da maturação/rede; maturado = fluxo normal (sem ciclo virgem). */
+  maturation_type?: 'virgem' | 'maturado' | string;
+  maturation_status?: string | null;
+  maturation_ends_at?: string | null;
+  current_day?: number | null;
+  is_master?: boolean;
   proxy?: {
     id: string;
     name: string;

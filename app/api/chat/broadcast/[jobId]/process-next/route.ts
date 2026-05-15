@@ -23,7 +23,7 @@ import {
   messageIndicatesEvolutionSessionDropped,
 } from '@/lib/evolution/mark-instance-disconnected';
 import { computeNextDelaySeconds } from '@/lib/chat/broadcast-delay';
-import { getSequenceDelaySeconds, parseBroadcastSteps } from '@/lib/chat/broadcast-sequence';
+import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps } from '@/lib/chat/broadcast-sequence';
 import {
   broadcastSendErrorIsInstanceUnreachable,
   orderedBroadcastInstanceIds,
@@ -113,6 +113,7 @@ export async function POST(
         {
           done: false,
           skipped: true,
+          error: 'Telefone inválido',
           current_index: idx + 1,
           total_count: job.total_count,
           message_step_index: 0,
@@ -132,7 +133,8 @@ export async function POST(
 
     const msgConfig = steps[stepIdx];
 
-    const orderedIds = orderedBroadcastInstanceIds(effectiveRotation, idx);
+    const rotationSize = getRotationSize(job.message_config);
+    const orderedIds = orderedBroadcastInstanceIds(effectiveRotation, idx, rotationSize);
     const tryInstanceIds = orderedIds.length > 0 ? orderedIds : [String(instanceUuid)].filter(Boolean);
     const singleInstanceBroadcast = baseRotation.length <= 1;
     let evolutionSessionDropped = false;
