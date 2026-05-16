@@ -1,29 +1,52 @@
 /**
  * POST /api/chat/whatsapp-official/upload-audio-meta
- * Faz upload de áudio DIRETAMENTE para os servidores da Meta (WhatsApp Cloud API).
- * Retorna { media_id } que é usado no envio com audio: { id: media_id }
- * em vez de audio: { link: url }, garantindo entrega correta independente do formato do container.
+ * Converte qualquer áudio do browser (mp4/webm/ogg) para OGG/OPUS via FFmpeg
+ * e faz upload diretamente para os servidores da Meta (WhatsApp Cloud API).
  *
- * Formatos aceitos pela Meta no upload: audio/ogg, audio/mpeg, audio/aac, audio/mp4, audio/amr
- * Para áudio gravado em audio/webm (Chrome), tentamos como audio/ogg pois o codec Opus é compatível.
+ * Por que converter:
+ *  - iOS grava audio/mp4 (fMP4 fragmentado) que o WhatsApp não consegue decodificar.
+ *  - Chrome grava audio/webm que não é OGG — renomear o MIME sem converter não funciona.
+ *  - OGG/OPUS é o único formato garantido para entrega de áudio pelo WhatsApp.
+ *
+ * Retorna { media_id } para uso no envio via audio: { id: media_id }.
  */
 
 import { NextRequest } from 'next/server';
+import { randomUUID } from 'crypto';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { writeFile, unlink, readFile } from 'fs/promises';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { execSync } from 'child_process';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
+
+// Prefere o FFmpeg do sistema (Docker/prod com apk add ffmpeg).
+// Fallback para o binário empacotado pelo ffmpeg-static (desenvolvimento local).
+const systemFfmpeg = (() => {
+  try { return execSync('which ffmpeg', { stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim(); } catch { return null; }
+})();
+ffmpeg.setFfmpegPath(systemFfmpeg || ffmpegStatic || 'ffmpeg');
 
 const GRAPH_BASE = 'https://graph.facebook.com';
+const OUTPUT_MIME = 'audio/ogg; codecs=opus';
+const OUTPUT_EXT = 'ogg';
 
-// Mapeia MIME types do browser para MIME aceito pela Meta
-function normalizeMimeForMeta(mimeType: string): string {
-  const m = mimeType.toLowerCase().split(';')[0].trim();
-  // WebM com Opus → envia como OGG Opus (formato aceito pela Meta)
-  if (m === 'audio/webm') return 'audio/ogg; codecs=opus';
-  if (m === 'audio/ogg') return 'audio/ogg; codecs=opus';
-  if (m === 'audio/x-m4a') return 'audio/mp4';
-  if (m === 'audio/m4a') return 'audio/mp4';
-  return m;
+/** Converte qualquer buffer de áudio para OGG/OPUS via FFmpeg. */
+function convertToOggOpus(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioCodec('libopus')
+      .audioFrequency(16000)   // 16kHz — ideal para voz no WhatsApp
+      .audioChannels(1)         // mono obrigatório
+      .audioBitrate('32k')      // 32kbps mantém o arquivo abaixo de 512KB
+      .format('ogg')
+      .on('error', (err) => reject(new Error(`FFmpeg: ${err.message}`)))
+      .on('end', () => resolve())
+      .save(outputPath);
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -35,6 +58,10 @@ export async function POST(req: NextRequest) {
     const msg = (err as Error)?.message ?? 'Não autenticado';
     return errorResponse(msg.includes('autenticado') || msg.includes('inválido') ? msg : 'Não autenticado', 401);
   }
+
+  const id = randomUUID();
+  const inputPath = join(tmpdir(), `audio-in-${id}`);
+  const outputPath = join(tmpdir(), `audio-out-${id}.${OUTPUT_EXT}`);
 
   try {
     const formData = await req.formData().catch(() => null);
@@ -70,38 +97,49 @@ export async function POST(req: NextRequest) {
     }
 
     const rawMime = (file.type || 'audio/ogg').split(';')[0].trim().toLowerCase();
-    const metaMime = normalizeMimeForMeta(rawMime);
-    const ext = metaMime === 'audio/ogg' ? 'ogg'
-      : metaMime === 'audio/mpeg' ? 'mp3'
-      : metaMime === 'audio/mp4' ? 'm4a'
-      : metaMime === 'audio/aac' ? 'aac'
-      : metaMime === 'audio/amr' ? 'amr'
-      : 'ogg';
 
+    console.info('[upload-audio-meta] converting audio', {
+      phone_number_id: config.phone_number_id,
+      source_mime: rawMime,
+      file_size: file.size,
+    });
+
+    // Escreve o arquivo recebido em /tmp
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(inputPath, buffer);
+
+    // Converte para OGG/OPUS via FFmpeg
+    try {
+      await convertToOggOpus(inputPath, outputPath);
+    } catch (ffErr) {
+      console.error('[upload-audio-meta] FFmpeg conversion failed:', (ffErr as Error).message);
+      return errorResponse('Falha na conversão do áudio. Verifique o formato do arquivo.', 422);
+    }
+
+    // Lê o arquivo convertido
+    const convertedBuffer = await readFile(outputPath);
+
+    console.info('[upload-audio-meta] conversion done', {
+      original_size: file.size,
+      converted_size: convertedBuffer.length,
+      output_mime: OUTPUT_MIME,
+    });
+
+    // Upload para a Meta
     const version = String(config.graph_version || 'v25.0').replace(/^v/, '');
     const uploadUrl = `${GRAPH_BASE}/v${version}/${config.phone_number_id}/media`;
 
-    // Monta multipart para a Meta — reutiliza o blob com MIME normalizado
-    const buffer = await file.arrayBuffer();
     const metaFormData = new FormData();
     metaFormData.append('messaging_product', 'whatsapp');
-    metaFormData.append('type', metaMime);
+    metaFormData.append('type', OUTPUT_MIME);
     metaFormData.append(
       'file',
-      new Blob([buffer], { type: metaMime }),
-      `audio.${ext}`
+      new Blob([convertedBuffer], { type: OUTPUT_MIME }),
+      `audio.${OUTPUT_EXT}`
     );
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
-
-    console.info('[upload-audio-meta] upload request', {
-      phone_number_id: config.phone_number_id,
-      graph_version: `v${version}`,
-      source_mime: rawMime,
-      normalized_mime: metaMime,
-      file_size: file.size,
-    });
 
     let metaRes: Response;
     try {
@@ -133,10 +171,14 @@ export async function POST(req: NextRequest) {
     return successResponse({
       media_id: metaJson.id as string,
       media_type: 'audio',
-      mime_type: metaMime,
+      mime_type: OUTPUT_MIME,
     });
   } catch (err: unknown) {
     console.error('[upload-audio-meta] exception:', (err as Error)?.message ?? err);
     return serverErrorResponse(err as Error);
+  } finally {
+    // Limpa sempre os arquivos temporários
+    await unlink(inputPath).catch(() => {});
+    await unlink(outputPath).catch(() => {});
   }
 }

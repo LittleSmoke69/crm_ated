@@ -33,6 +33,7 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
+import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -3227,6 +3228,9 @@ export default function AdminMetaPage() {
             <span className="text-amber-700 dark:text-amber-400">Não foi possível atualizar agora. Exibindo dados salvos. {liveAggregateError}</span>
           </div>
         ) : null}
+
+        <BancaXAdsRanking />
+
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
           {/* Card 1: Gasto em Anúncios */}

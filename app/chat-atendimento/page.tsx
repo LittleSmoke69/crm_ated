@@ -909,6 +909,9 @@ export default function ChatPage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const recordingAnimationRef = useRef<number | null>(null);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedBlobUrl, setRecordedBlobUrl] = useState<string | null>(null);
+  const [recordedMimeType, setRecordedMimeType] = useState<string>('audio/ogg');
 
   // Alertas
   const [showTokenAlert, setShowTokenAlert] = useState(false);
@@ -2917,16 +2920,23 @@ export default function ChatPage() {
       alert('Faça login para gravar áudio.');
       return;
     }
+    // Descarta gravação anterior pendente
+    if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
+    setRecordedBlob(null);
+    setRecordedBlobUrl(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = getPreferredAudioMimeType();
       const recorder = new MediaRecorder(stream, { mimeType });
       const chunks: BlobPart[] = [];
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunks, { type: mimeType });
-        await uploadRecordedAudio(blob, mimeType);
+        const previewUrl = URL.createObjectURL(blob);
+        setRecordedBlob(blob);
+        setRecordedBlobUrl(previewUrl);
+        setRecordedMimeType(mimeType);
       };
       recorder.start();
       mediaRecorderRef.current = recorder;
@@ -2982,8 +2992,14 @@ export default function ChatPage() {
     setRecordingLevels([0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2]);
   };
 
-  const uploadRecordedAudio = async (blob: Blob, mimeType: string) => {
-    if (!selectedChannel || !userId) return;
+  const discardRecordedAudio = () => {
+    if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
+    setRecordedBlob(null);
+    setRecordedBlobUrl(null);
+  };
+
+  const uploadRecordedAudio = async (blob: Blob, mimeType: string): Promise<{ meta_id?: string; url: string } | null> => {
+    if (!selectedChannel || !userId) return null;
     setUploading(true);
     try {
       const baseType = mimeType.split(';')[0].trim().toLowerCase();
@@ -3005,16 +3021,9 @@ export default function ChatPage() {
         });
         const uploadData = await uploadRes.json().catch(() => ({}));
         if (!uploadRes.ok || !uploadData?.success || !uploadData?.data?.url) {
-          alert(uploadData?.error || 'Falha no upload do áudio. Tente novamente.');
-          return;
+          return null;
         }
-        setAttachedMedia({
-          url: uploadData.data.url,
-          type: 'audio',
-          name: 'Áudio gravado',
-          mimetype: baseType,
-        });
-        return;
+        return { url: uploadData.data.url, meta_id: undefined };
       }
 
       // Dois uploads em paralelo:
@@ -3042,17 +3051,82 @@ export default function ChatPage() {
       const meta_id: string | undefined = metaData?.success ? metaData.data?.media_id : undefined;
       const url: string = supData?.success ? supData.data?.url : '';
 
-      if (!meta_id && !url) {
-        alert('Falha ao processar áudio. Tente novamente.');
+      if (!meta_id && !url) return null;
+
+      return { meta_id, url };
+    } catch (e) {
+      console.error('[Chat] upload áudio:', e);
+      return null;
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSendRecordedAudio = async () => {
+    if (!recordedBlob || !selectedChannel || !selectedConversationId) return;
+    const conversation = conversations.find((c) => c.id === selectedConversationId);
+    if (!conversation) return;
+    setSendError(null);
+    setSending(true);
+    try {
+      const uploaded = await uploadRecordedAudio(recordedBlob, recordedMimeType);
+      if (!uploaded) {
+        setSendError('Falha ao processar áudio. Tente novamente.');
         return;
       }
 
-      setAttachedMedia({ url, meta_id, type: 'audio', name: 'Áudio gravado', mimetype: baseType });
-    } catch (e) {
-      console.error('[Chat] upload áudio:', e);
-      alert('Falha ao enviar áudio gravado. Tente novamente.');
+      if (selectedChannel.type === 'evolution') {
+        const response = await fetch('/api/chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            instance_id: selectedChannel.id,
+            remoteJid: conversation.remote_jid,
+            type: 'media',
+            media: uploaded.url,
+            mimetype: recordedMimeType.split(';')[0].trim() || 'audio/ogg',
+            mediatype: 'audio',
+            fileName: 'audio.ogg',
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (response.ok && result.success) {
+          discardRecordedAudio();
+        } else {
+          setSendError(result.error || result.message || 'Falha ao enviar áudio.');
+        }
+        return;
+      }
+
+      const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+      const body: Record<string, string | undefined> = {
+        config_id: selectedChannel.id,
+        to,
+        type: 'audio',
+        ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
+        media_url: uploaded.url || undefined,
+      };
+      const response = await fetch('/api/chat/whatsapp-official/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      let result: { success?: boolean; error?: string; message?: string } = {};
+      try { result = await response.json(); } catch { result = {}; }
+      if (response.ok && result.success) {
+        discardRecordedAudio();
+      } else {
+        const errMsg = result.error || result.message || '';
+        setSendError(getSendErrorMessage(response.status, errMsg));
+        const isTokenError = response.status === 401 ||
+          (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
+        if (isTokenError) {
+          setShowTokenAlert(true);
+          setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+        }
+      }
     } finally {
-      setUploading(false);
+      setSending(false);
     }
   };
 
@@ -6084,6 +6158,51 @@ export default function ChatPage() {
                   <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf" onChange={handleFileSelect} />
                   <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
                   <input ref={docInputRef} type="file" className="hidden" accept="application/pdf" onChange={handleFileSelect} />
+                  {/* ── Prévia de áudio gravado ──────────────────────────── */}
+                  {recordedBlob && !isRecording && (
+                    <div className="mb-2 p-3 bg-gray-50 dark:bg-[#2a2a2a] rounded-xl border border-[#8CD955]/40 dark:border-[#8CD955]/30 flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-[#8CD955]/20 flex items-center justify-center">
+                            <Mic size={13} className="text-[#8CD955]" />
+                          </div>
+                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Prévia do áudio</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={discardRecordedAudio}
+                          disabled={uploading || sending}
+                          className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+                          aria-label="Descartar gravação"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                      <audio src={recordedBlobUrl!} controls className="w-full" style={{ height: '36px' }} />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={discardRecordedAudio}
+                          disabled={uploading || sending}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50 transition-colors"
+                        >
+                          <Trash2 size={12} />
+                          Descartar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSendRecordedAudio}
+                          disabled={uploading || sending || (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-white disabled:opacity-50 transition-colors"
+                          style={{ backgroundColor: '#8CD955' }}
+                        >
+                          {uploading || sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                          Enviar nota de voz
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {attachedMedia && (
                     <div className="mb-2 p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-gray-200 dark:border-[#404040]">
                       {attachedMedia.type === 'image' && attachedMedia.preview && (

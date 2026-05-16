@@ -15,8 +15,8 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install cron + flock (util-linux) + bash
-RUN apk add --no-cache dcron util-linux bash
+# Install cron + flock (util-linux) + bash + ffmpeg (conversão de áudio)
+RUN apk add --no-cache dcron util-linux bash ffmpeg
 
 # Copy built app and node_modules
 COPY --from=builder /app ./
