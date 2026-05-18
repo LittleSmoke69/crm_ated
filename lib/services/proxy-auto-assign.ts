@@ -1,5 +1,6 @@
 import { supabaseServiceRole } from './supabase-service';
 import { assignProxyToEvolutionInstance } from '@/lib/services/evolution-instance-proxy';
+import { isProxyEnabled } from '@/lib/utils/proxy-enabled';
 
 /**
  * Serviço para atribuição automática de proxies às instâncias
@@ -22,10 +23,9 @@ export class ProxyAutoAssign {
     try {
       // Busca todos os proxies ativos
       console.log('🔍 [PROXY-AUTO] Buscando proxies ativos...');
-      const { data: proxies, error: proxiesError } = await supabaseServiceRole
+      const { data: proxiesRaw, error: proxiesError } = await supabaseServiceRole
         .from('proxy_instances')
-        .select('id, name, host, port, protocol, username, password')
-        .eq('enabled', true)
+        .select('id, name, host, port, protocol, username, password, enabled')
         .order('created_at', { ascending: true });
 
       if (proxiesError) {
@@ -33,7 +33,9 @@ export class ProxyAutoAssign {
         return null;
       }
 
-      if (!proxies || proxies.length === 0) {
+      const proxies = (proxiesRaw || []).filter((p) => isProxyEnabled(p.enabled));
+
+      if (proxies.length === 0) {
         console.warn('⚠️ [PROXY-AUTO] Nenhum proxy ativo encontrado');
         return null;
       }

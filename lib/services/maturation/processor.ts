@@ -1786,8 +1786,8 @@ async function recoverStuckSteps(supabase: SupabaseClient): Promise<number> {
 const LOG_MESH = '[MATURADOR-MESH]';
 // Intervalo entre ciclos mesh: 1–3 min aleatório.
 // Separado do warmup de 15 min para instâncias novas (SEND_DELAY_MS no runMeshCycle).
-const MESH_CYCLE_INTERVAL_MIN_SEC = 60;       // 1 min
-const MESH_CYCLE_INTERVAL_MAX_SEC = 3 * 60;   // 3 min
+const MESH_CYCLE_INTERVAL_MIN_SEC = 3 * 60;   // 3 min
+const MESH_CYCLE_INTERVAL_MAX_SEC = 8 * 60;   // 8 min
 const MESH_MAX_SENDERS_PER_CYCLE = 5;
 const MESH_MIN_SENDERS_PER_CYCLE = 1;
 
@@ -2111,45 +2111,39 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       continue;
     }
 
-    // Escolhe aleatoriamente 1-6 linhas de partes diferentes do texto
-    const count = Math.floor(Math.random() * 6) + 1;
+    // Envia SOMENTE 1 linha por vez. Cada instância tem seu próprio ponteiro
+    // (group_msg_strophe_idx) que avança sequencialmente para não repetir.
+    // Na primeira vez, sorteia uma posição inicial aleatória para que cada
+    // instância comece em um ponto diferente da letra.
     const total = GRUPO_LINES.length;
-    const sectionSize = Math.max(1, Math.floor(total / count));
-    const selectedIndices: number[] = [];
-    for (let s = 0; s < count; s++) {
-      const sectionStart = s * sectionSize;
-      const sectionEnd = s === count - 1 ? total : Math.min((s + 1) * sectionSize, total);
-      selectedIndices.push(sectionStart + Math.floor(Math.random() * (sectionEnd - sectionStart)));
-    }
+    const currentIdx = typeof row.group_msg_strophe_idx === 'number'
+      ? ((row.group_msg_strophe_idx % total) + total) % total
+      : Math.floor(Math.random() * total);
 
     const evoId = ei?.id as string | undefined;
 
-    // Envia as linhas selecionadas; para na primeira falha 400 (instância fora do grupo ou desconectada)
     let sentCount = 0;
     let notInGroup = false;
-    for (let i = 0; i < selectedIndices.length; i++) {
-      const result = await sendText({
-        baseUrl, instanceName, apiKey,
-        number: GRUPO_MATURACAO_ID,
-        text: GRUPO_LINES[selectedIndices[i]],
-      });
-      if (result.success) {
-        sentCount++;
-      } else if (result.httpStatus === 400) {
-        // Connection Closed = instância desconectou → marca no banco e sai
-        if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
-          if (evoId) {
-            await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'group-messaging');
-          }
-          await supabase.from('master_instances')
-            .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
-            .eq('id', row.id);
-          console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} desconectada (Connection Closed) — marcada no banco`);
-          return 0;
+    const result = await sendText({
+      baseUrl, instanceName, apiKey,
+      number: GRUPO_MATURACAO_ID,
+      text: GRUPO_LINES[currentIdx],
+    });
+    if (result.success) {
+      sentCount = 1;
+    } else if (result.httpStatus === 400) {
+      // Connection Closed = instância desconectou → marca no banco e sai
+      if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
+        if (evoId) {
+          await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'group-messaging');
         }
-        notInGroup = true;
-        break;
+        await supabase.from('master_instances')
+          .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
+          .eq('id', row.id);
+        console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} desconectada (Connection Closed) — marcada no banco`);
+        return 0;
       }
+      notInGroup = true;
     }
 
     if (notInGroup && sentCount === 0) {
@@ -2161,17 +2155,17 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       return 0;
     }
 
-    const nextIdx = (typeof row.group_msg_strophe_idx === 'number' ? row.group_msg_strophe_idx + count : count) % total;
+    const nextIdx = (currentIdx + 1) % total;
     const delayMs = (60 + Math.random() * 240) * 1000; // 1-5 minutos por instância
 
-    console.log(`${LOG_GRUPO} ✅ ${instanceName} ${sentCount}/${count} linha(s) → grupo (próximo ${Math.round(delayMs / 1000)}s)`);
+    console.log(`${LOG_GRUPO} ✅ ${instanceName} 1 linha (idx ${currentIdx}/${total}) → grupo (próximo ${Math.round(delayMs / 1000)}s)`);
 
     await supabase.from('master_instances').update({
       group_msg_next_at: new Date(Date.now() + delayMs).toISOString(),
       group_msg_strophe_idx: nextIdx,
     }).eq('id', row.id);
 
-    // 1 instância por ciclo de 30s — evita flood no grupo
+    // 1 instância e 1 linha por ciclo — evita flood no grupo
     return sentCount;
   }
 
@@ -2505,7 +2499,7 @@ async function runMeshCycle(
     let senderOffsetMs = 0;
     for (const r of recipients) {
       if (meshInvalidDestKeys.has(normalizeMaturationDestKey(r.jid))) continue;
-      senderOffsetMs += 60_000 + Math.floor(Math.random() * 240_001); // 1min a 5min
+      senderOffsetMs += 300_000 + Math.floor(Math.random() * 600_001); // 5min a 15min
       const scheduledAt = new Date(now.getTime() + senderOffsetMs).toISOString();
       const msg = pool[Math.floor(Math.random() * pool.length)];
       stepsToInsert.push({

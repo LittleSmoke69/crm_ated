@@ -1,9 +1,16 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useTenantRouter, withTenantSlug, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
 import { evolutionDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
+import {
+  findProxyById,
+  isProxyEnabled,
+  parseProxyListResponse,
+  type ProxyListItem,
+} from '@/lib/utils/proxy-enabled';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -67,7 +74,8 @@ import {
   LogIn,
   ExternalLink,
   Headphones as HeadphonesIcon,
-  Unplug
+  Unplug,
+  Link2
 } from 'lucide-react';
 import CRMStatCard from '@/components/CRM/CRMStatCard';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
@@ -213,11 +221,33 @@ interface InstanceWithProxy {
   instance_name: string;
   phone_number: string | null;
   status: string | null;
+  proxy_id?: string | null;
+  is_master?: boolean;
   proxy_instances: Array<{
     id: string;
     enabled: string;
     proxy_instances: Proxys;
   }>;
+}
+
+function getInstanceLinkedProxyId(instance: InstanceWithProxy): string | null {
+  if (instance.proxy_id) return instance.proxy_id;
+  const nested = instance.proxy_instances?.[0]?.proxy_instances;
+  return nested?.id ?? null;
+}
+
+function getInstanceLinkedProxyLabel(
+  instance: InstanceWithProxy,
+  proxysList?: Proxys[]
+): string | null {
+  const nested = instance.proxy_instances?.[0]?.proxy_instances;
+  if (nested) return nested.name || nested.host || null;
+  const id = getInstanceLinkedProxyId(instance);
+  if (id && proxysList?.length) {
+    const p = proxysList.find((x) => x.id === id);
+    return p?.name || p?.host || null;
+  }
+  return id ? 'Proxy vinculado' : null;
 }
 
 export default function AdminDashboard() {
@@ -1227,8 +1257,8 @@ export default function AdminDashboard() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full">
                 <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
                   
                   <div className="relative z-10">
                     <div className="flex flex-col gap-3 mb-4">
@@ -4421,10 +4451,16 @@ const PROXY_LIST_PER_PAGE = 10;
 const PROXY_ASSIGN_INSTANCES_PER_PAGE = 10;
 
 const ProxySection = () => {
-  const [proxys, setProxys] = useState<Proxys[]>([]);
+  const [proxys, setProxys] = useState<ProxyListItem[]>([]);
   const [editingProxy, setEditingProxy] = useState<Proxys | null>(null);  
   const [intancesWithProxy, setInstancesWithProxy] = useState<InstanceWithProxy[]>([]);
   const [showAddModalProxy, setShowAddModalProxy] = useState(false);
+  const [showLinkProxyModal, setShowLinkProxyModal] = useState(false);
+  const [linkProxyId, setLinkProxyId] = useState('');
+  const [linkSelectedInstanceIds, setLinkSelectedInstanceIds] = useState<Set<string>>(new Set());
+  const [linkInstanceSearch, setLinkInstanceSearch] = useState('');
+  const [linkModalBusy, setLinkModalBusy] = useState(false);
+  const [linkModalMounted, setLinkModalMounted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [proxyPage, setProxyPage] = useState(1);
   const [assignInstancesPage, setAssignInstancesPage] = useState(1);
@@ -4443,6 +4479,10 @@ const ProxySection = () => {
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    setLinkModalMounted(true);
   }, []);
 
   useEffect(() => {
@@ -4467,7 +4507,7 @@ const ProxySection = () => {
 
       if (proxyRes.ok) {
         const proxyData = await proxyRes.json();
-        setProxys(proxyData.data || []);
+        setProxys(parseProxyListResponse(proxyData));
       }
 
       if (instanceRes.ok) {
@@ -4642,14 +4682,202 @@ const ProxySection = () => {
     }
   };
 
+  const refreshProxysForLinkModal = async (): Promise<ProxyListItem[]> => {
+    const userId = getStoredUserId();
+    if (!userId) return proxys;
+    try {
+      const res = await fetch('/api/admin/proxy', {
+        headers: { 'X-User-Id': userId },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const list = parseProxyListResponse(json);
+        setProxys(list);
+        return list;
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar lista de proxies:', error);
+    }
+    return proxys;
+  };
+
+  const openLinkProxyModal = () => {
+    setLinkProxyId('');
+    setLinkSelectedInstanceIds(new Set());
+    setLinkInstanceSearch('');
+    setShowLinkProxyModal(true);
+    void refreshProxysForLinkModal();
+  };
+
+  const filteredInstancesForLink = intancesWithProxy.filter((inst) => {
+    const q = linkInstanceSearch.trim().toLowerCase();
+    if (!q) return true;
+    const proxyLabel = getInstanceLinkedProxyLabel(inst, proxys) || '';
+    return (
+      inst.instance_name.toLowerCase().includes(q) ||
+      (inst.phone_number || '').toLowerCase().includes(q) ||
+      proxyLabel.toLowerCase().includes(q)
+    );
+  });
+
+  const toggleLinkInstance = (instanceId: string) => {
+    setLinkSelectedInstanceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(instanceId)) next.delete(instanceId);
+      else next.add(instanceId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllFilteredInstances = () => {
+    const ids = filteredInstancesForLink.map((i) => i.id);
+    const allSelected = ids.length > 0 && ids.every((id) => linkSelectedInstanceIds.has(id));
+    setLinkSelectedInstanceIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        ids.forEach((id) => next.delete(id));
+      } else {
+        ids.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleBulkLinkProxy = async () => {
+    const adminUserId = getStoredUserId();
+    if (!adminUserId) {
+      alert('Sessão inválida. Faça login novamente.');
+      return;
+    }
+    const proxyId = linkProxyId.trim();
+    if (!proxyId) {
+      alert('Selecione um proxy para vincular.');
+      return;
+    }
+    const selected = intancesWithProxy.filter((i) => linkSelectedInstanceIds.has(i.id));
+    if (selected.length === 0) {
+      alert('Selecione ao menos uma instância.');
+      return;
+    }
+
+    let proxyList = proxys;
+    let selectedProxy = findProxyById(proxyList, proxyId);
+    if (!selectedProxy) {
+      proxyList = await refreshProxysForLinkModal();
+      selectedProxy = findProxyById(proxyList, proxyId);
+    }
+    if (selectedProxy && !isProxyEnabled(selectedProxy.enabled)) {
+      alert('O proxy selecionado está inativo no cadastro. Use o cadeado na tabela para ativá-lo.');
+      return;
+    }
+
+    setLinkModalBusy(true);
+    let ok = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    try {
+      for (const instance of selected) {
+        const currentProxyId = getInstanceLinkedProxyId(instance);
+        if (String(currentProxyId).trim() === proxyId) {
+          skipped += 1;
+          continue;
+        }
+        if (currentProxyId) {
+          try {
+            await handleUnassignUser(currentProxyId, instance.id);
+          } catch {
+            errors.push(`${instance.instance_name}: falha ao remover proxy anterior`);
+            continue;
+          }
+        }
+        try {
+          const res = await fetch(`/api/admin/proxy/${encodeURIComponent(proxyId)}/assign-user`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-User-Id': adminUserId,
+            },
+            body: JSON.stringify({ user_id: instance.id }),
+          });
+          if (res.ok) {
+            ok += 1;
+          } else {
+            const err = await res.json().catch(() => ({}));
+            errors.push(`${instance.instance_name}: ${err.error || 'erro ao vincular'}`);
+          }
+        } catch {
+          errors.push(`${instance.instance_name}: erro de rede`);
+        }
+      }
+      await loadData();
+      const msg = [
+        ok > 0 ? `${ok} instância(s) vinculada(s).` : '',
+        skipped > 0 ? `${skipped} já estava(m) com este proxy.` : '',
+        errors.length > 0 ? `Falhas:\n${errors.slice(0, 8).join('\n')}${errors.length > 8 ? `\n… e mais ${errors.length - 8}` : ''}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      alert(msg || 'Nenhuma alteração realizada.');
+      if (errors.length === 0) {
+        setShowLinkProxyModal(false);
+        setLinkSelectedInstanceIds(new Set());
+      }
+    } finally {
+      setLinkModalBusy(false);
+    }
+  };
+
+  const handleBulkUnlinkProxy = async () => {
+    const selected = intancesWithProxy.filter((i) => linkSelectedInstanceIds.has(i.id));
+    const withProxy = selected.filter((i) => getInstanceLinkedProxyId(i));
+    if (withProxy.length === 0) {
+      alert('Selecione instâncias que já tenham proxy vinculado.');
+      return;
+    }
+    if (
+      !confirm(
+        `Remover o proxy de ${withProxy.length} instância(s)?\n\n${withProxy.map((i) => i.instance_name).join(', ')}`
+      )
+    ) {
+      return;
+    }
+
+    setLinkModalBusy(true);
+    let ok = 0;
+    const errors: string[] = [];
+
+    try {
+      for (const instance of withProxy) {
+        const proxyId = getInstanceLinkedProxyId(instance);
+        if (!proxyId) continue;
+        try {
+          await handleUnassignUser(proxyId, instance.id);
+          ok += 1;
+        } catch {
+          errors.push(instance.instance_name);
+        }
+      }
+      await loadData();
+      if (errors.length > 0) {
+        alert(`${ok} removida(s). Falha em: ${errors.join(', ')}`);
+      } else {
+        alert(`Proxy removido de ${ok} instância(s).`);
+        setLinkSelectedInstanceIds(new Set());
+      }
+    } finally {
+      setLinkModalBusy(false);
+    }
+  };
+
   if (loading) {
     return <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow p-6 border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-300">Carregando...</div>;
   }
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
@@ -4657,18 +4885,31 @@ const ProxySection = () => {
               <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
               <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Proxys Evolution</h2>
             </div>
-          <button
-            onClick={() => {
-              setEditingProxy(null);
-              setFormDataProxy({ name: '', host: '', port: '', password: '', username: '', protocol: '' });
-              setShowAddModalProxy(true);
-            }}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] text-sm sm:text-base w-full sm:w-auto"
-          >
-            <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-            Adicionar Proxy
-          </button>
-        </div>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto relative z-20">
+              <button
+                type="button"
+                onClick={() => openLinkProxyModal()}
+                disabled={loading}
+                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 border border-[#8CD955] text-[#5a9c2e] dark:text-[#8CD955] rounded-lg hover:bg-[#8CD955]/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base w-full sm:w-auto"
+                title="Vincular ou remover proxy em lote nas instâncias"
+              >
+                <Link2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                Vincular proxy
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingProxy(null);
+                  setFormDataProxy({ name: '', host: '', port: '', password: '', username: '', protocol: '' });
+                  setShowAddModalProxy(true);
+                }}
+                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] text-sm sm:text-base w-full sm:w-auto"
+              >
+                <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
+                Adicionar Proxy
+              </button>
+            </div>
+          </div>
 
         <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="w-full min-w-[600px]">
@@ -4707,22 +4948,22 @@ const ProxySection = () => {
                     <td className="p-3 sm:p-4">
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
-                          proxy.enabled
+                          isProxyEnabled(proxy.enabled)
                             ? 'bg-[#8CD955]/20 text-[#8CD955] dark:bg-[#8CD955]/20 dark:text-[#8CD955]'
                             : 'bg-gray-200 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
                         }`}
                       >
-                        {proxy.enabled ? 'Ativa' : 'Inativa'}
+                        {isProxyEnabled(proxy.enabled) ? 'Ativa' : 'Inativa'}
                       </span>
                     </td>
                     <td className="p-3 sm:p-4">
                       <div className="flex flex-wrap gap-1">
                         <button
-                          onClick={() => handleSetProxyEnabled(proxy.id, !proxy.enabled)}
+                          onClick={() => handleSetProxyEnabled(proxy.id, !isProxyEnabled(proxy.enabled))}
                           className="p-2 rounded border border-gray-300 dark:border-[#404040] hover:bg-gray-100 dark:hover:bg-[#333] text-gray-700 dark:text-gray-300"
-                          title={proxy.enabled ? 'Bloquear uso do proxy (desativa na Evolution)' : 'Desbloquear proxy (habilita na Evolution)'}
+                          title={isProxyEnabled(proxy.enabled) ? 'Bloquear uso do proxy (desativa na Evolution)' : 'Desbloquear proxy (habilita na Evolution)'}
                         >
-                          {proxy.enabled ? <Lock className="w-4 h-4" /> : <Lock className="w-4 h-4 opacity-50" />}
+                          {isProxyEnabled(proxy.enabled) ? <Lock className="w-4 h-4" /> : <Lock className="w-4 h-4 opacity-50" />}
                         </button>
                         <button
                           onClick={() => handleEditProxy(proxy)}
@@ -4808,7 +5049,7 @@ const ProxySection = () => {
                   }}
                 >
                   <option value="">Selecione um Proxy</option>
-                  {proxys.filter(proxy => proxy.enabled).map((proxy) => (
+                  {proxys.filter((proxy) => isProxyEnabled(proxy.enabled)).map((proxy) => (
                     <option key={proxy.id} value={proxy.id}>
                       {proxy.name || proxy.host}
                     </option>
@@ -4976,6 +5217,192 @@ const ProxySection = () => {
           </div>
         </div>
       )}
+      {linkModalMounted &&
+        showLinkProxyModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[200] p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !linkModalBusy) setShowLinkProxyModal(false);
+            }}
+          >
+          <div
+            className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-lg p-4 sm:p-6 max-w-3xl w-full max-h-[90vh] flex flex-col border border-gray-200 dark:border-[#404040]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start gap-3 mb-4 shrink-0">
+              <div>
+                <h3 className="text-lg sm:text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                  <Link2 className="w-5 h-5 text-[#8CD955]" />
+                  Vincular proxy às instâncias
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  Selecione um ou mais números e vincule um proxy ativo ou remova o vínculo existente.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !linkModalBusy && setShowLinkProxyModal(false)}
+                disabled={linkModalBusy}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50"
+              >
+                <X className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+            </div>
+
+            {(proxys.length === 0 || intancesWithProxy.length === 0) && (
+              <div className="mb-4 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+                {proxys.length === 0
+                  ? 'Cadastre ao menos um proxy ativo antes de vincular.'
+                  : 'Nenhuma instância Evolution encontrada no sistema.'}
+              </div>
+            )}
+
+            <div className="space-y-4 shrink-0">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Proxy para vincular
+                </label>
+                <select
+                  value={linkProxyId}
+                  onChange={(e) => setLinkProxyId(String(e.target.value).trim())}
+                  disabled={linkModalBusy}
+                  className="w-full border border-gray-300 dark:border-[#404040] rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] disabled:opacity-60"
+                >
+                  <option value="">Selecione um proxy ativo</option>
+                  {proxys
+                    .filter((p) => p.id && isProxyEnabled(p.enabled))
+                    .map((p) => (
+                      <option key={p.id} value={String(p.id)}>
+                        {p.name || p.host} ({p.host}:{p.port})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={linkInstanceSearch}
+                    onChange={(e) => setLinkInstanceSearch(e.target.value)}
+                    placeholder="Buscar instância ou proxy..."
+                    disabled={linkModalBusy}
+                    className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#404040] rounded-lg text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] disabled:opacity-60"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleSelectAllFilteredInstances}
+                  disabled={linkModalBusy || filteredInstancesForLink.length === 0}
+                  className="px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] disabled:opacity-50 whitespace-nowrap"
+                >
+                  {filteredInstancesForLink.length > 0 &&
+                  filteredInstancesForLink.every((i) => linkSelectedInstanceIds.has(i.id))
+                    ? 'Desmarcar filtradas'
+                    : 'Selecionar filtradas'}
+                </button>
+              </div>
+
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {linkSelectedInstanceIds.size} selecionada(s) · {filteredInstancesForLink.length} exibida(s)
+              </p>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto border border-gray-200 dark:border-[#404040] rounded-lg divide-y divide-gray-100 dark:divide-[#404040] my-2">
+              {filteredInstancesForLink.length === 0 ? (
+                <p className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                  Nenhuma instância encontrada.
+                </p>
+              ) : (
+                filteredInstancesForLink.map((inst) => {
+                  const linkedId = getInstanceLinkedProxyId(inst);
+                  const linkedLabel = getInstanceLinkedProxyLabel(inst, proxys);
+                  const checked = linkSelectedInstanceIds.has(inst.id);
+                  return (
+                    <label
+                      key={inst.id}
+                      className={`flex items-start gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] ${
+                        checked ? 'bg-[#8CD955]/5 dark:bg-[#8CD955]/10' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleLinkInstance(inst.id)}
+                        disabled={linkModalBusy}
+                        className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-800 dark:text-white text-sm">
+                          {inst.instance_name}
+                          {inst.is_master && (
+                            <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">
+                              (mestre)
+                            </span>
+                          )}
+                        </div>
+                        {inst.phone_number && (
+                          <div className="text-xs text-gray-500 dark:text-gray-400">{inst.phone_number}</div>
+                        )}
+                        {linkedId ? (
+                          <span className="inline-flex items-center gap-1 mt-1 text-xs text-[#5a9c2e] dark:text-[#8CD955]">
+                            <Link2 className="w-3 h-3" />
+                            {linkedLabel || 'Proxy vinculado'}
+                          </span>
+                        ) : (
+                          <span className="inline-block mt-1 text-xs text-gray-400">Sem proxy</span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row justify-end gap-2 pt-4 shrink-0 border-t border-gray-200 dark:border-[#404040]">
+              <button
+                type="button"
+                onClick={() => !linkModalBusy && setShowLinkProxyModal(false)}
+                disabled={linkModalBusy}
+                className="px-4 py-2 border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] text-sm disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkUnlinkProxy}
+                disabled={linkModalBusy || linkSelectedInstanceIds.size === 0}
+                className="px-4 py-2 border border-amber-400 dark:border-amber-500 text-amber-700 dark:text-amber-400 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-500/10 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {linkModalBusy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Unplug className="w-4 h-4" />
+                )}
+                Remover proxy
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkLinkProxy}
+                disabled={linkModalBusy || linkSelectedInstanceIds.size === 0 || !linkProxyId}
+                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {linkModalBusy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Link2 className="w-4 h-4" />
+                )}
+                Vincular selecionadas
+              </button>
+            </div>
+          </div>
+        </div>,
+          document.body
+        )}
     </div>
   );
 };

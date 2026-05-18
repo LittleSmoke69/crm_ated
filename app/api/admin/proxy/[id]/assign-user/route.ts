@@ -36,14 +36,28 @@ export async function POST(
       return errorResponse('user_id é obrigatório (ID da instância evolution_instances)', 400);
     }
 
+    console.log('[PROXY-ASSIGN] POST /api/admin/proxy/[id]/assign-user', {
+      proxyId,
+      instanceId,
+      adminUserId: userId,
+    });
+
     const result = await assignProxyToEvolutionInstance({
       instanceId,
       proxyId,
     });
 
     if (!result.ok) {
+      console.error('[PROXY-ASSIGN] assign-user falhou', {
+        proxyId,
+        instanceId,
+        status: result.status ?? 400,
+        error: result.error,
+      });
       return errorResponse(result.error, result.status ?? 400);
     }
+
+    console.log('[PROXY-ASSIGN] assign-user OK', { proxyId, instanceId });
 
     const { data, error } = await supabaseServiceRole
       .from('evolution_instances')

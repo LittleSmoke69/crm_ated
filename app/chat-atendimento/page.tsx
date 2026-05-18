@@ -13,7 +13,6 @@ import {
 } from '@/lib/chat/broadcast-delay';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
-import { mergeEvolutionConversationsForAtendimento } from '@/lib/chat/merge-evolution-atendimento-conversations';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import {
   MessageSquare,
@@ -887,17 +886,6 @@ export default function ChatPage() {
   useEffect(() => {
     conversationsSnapshotRef.current = conversations;
   }, [conversations]);
-  /** Lista unificada Evolution: instâncias + canal preferido para merge e realtime. */
-  const atendimentoEvolutionMergeRef = useRef<{ evolution: ChannelEvolution[]; preferredId: string }>({
-    evolution: [],
-    preferredId: '',
-  });
-  useEffect(() => {
-    atendimentoEvolutionMergeRef.current = {
-      evolution: channels.evolution,
-      preferredId: selectedChannel?.type === 'evolution' ? selectedChannel.id : '',
-    };
-  }, [channels.evolution, selectedChannel]);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -1515,52 +1503,6 @@ export default function ChatPage() {
       const prevSelId = selectedConversationIdRef.current;
       const prevRemoteJid = conversationsSnapshotRef.current.find((c) => c.id === prevSelId)?.remote_jid;
 
-      const isEvolutionMerge = selectedChannel.type === 'evolution' && channels.evolution.length > 0;
-
-      if (isEvolutionMerge) {
-        const evoList = channels.evolution;
-        const hasAnyList = evoList.some((ch) => Array.isArray(conversationsCacheRef.current[ch.id]));
-        if (!hasAnyList) {
-          setConversationsLoading(true);
-        }
-
-        try {
-          const results = await Promise.all(
-            evoList.map(async (ch) => {
-              const response = await fetch(`/api/chat/conversations?instance_id=${ch.id}`, {
-                headers: authHeaders(),
-              });
-              const result = await response.json();
-              const list: Conversation[] = result.success ? result.data || [] : [];
-              return [ch.id, list] as const;
-            })
-          );
-
-          for (const [id, list] of results) {
-            conversationsCacheRef.current[id] = list;
-          }
-
-          const map = new Map<string, Conversation[]>(results);
-          const merged = mergeEvolutionConversationsForAtendimento(map, selectedChannel.id);
-
-          setConversations(merged);
-
-          setSelectedConversationId(() => {
-            if (prevSelId && merged.some((c) => c.id === prevSelId)) return prevSelId;
-            if (prevRemoteJid) {
-              const next = merged.find((c) => !c.is_group && c.remote_jid === prevRemoteJid);
-              if (next) return next.id;
-            }
-            return '';
-          });
-        } catch (error) {
-          console.error('[Chat] carregar conversas:', error);
-        } finally {
-          setConversationsLoading(false);
-        }
-        return;
-      }
-
       const cached = conversationsCacheRef.current[selectedChannel.id];
       if (cached && cached.length > 0) {
         setConversations(cached);
@@ -1584,11 +1526,18 @@ export default function ChatPage() {
           }
           conversationsCacheRef.current[selectedChannel.id] = list;
           setConversations(list);
-          if (keepSelectionIfPresent) {
-            setSelectedConversationId((prev) =>
-              prev && list.some((c) => c.id === prev) ? prev : ''
-            );
-          }
+          setSelectedConversationId(() => {
+            if (prevSelId && list.some((c) => c.id === prevSelId)) return prevSelId;
+            if (
+              keepSelectionIfPresent &&
+              prevRemoteJid &&
+              selectedChannel.type === 'evolution'
+            ) {
+              const next = list.find((c) => !c.is_group && c.remote_jid === prevRemoteJid);
+              if (next) return next.id;
+            }
+            return '';
+          });
         }
       } catch (error) {
         console.error('[Chat] carregar conversas:', error);
@@ -1597,7 +1546,7 @@ export default function ChatPage() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedChannel, channels.evolution]
+    [selectedChannel]
   );
 
   useEffect(() => {
@@ -2744,83 +2693,69 @@ export default function ChatPage() {
       };
     }
 
-    const evoList = channels.evolution;
-    if (evoList.length === 0) return;
+    const filterVal = selectedChannel.id;
+    const sortByLastMessage = (arr: Conversation[]) =>
+      [...arr].sort(
+        (a, b) =>
+          new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
+      );
 
-    const applyEvolutionConversationPayload = (
-      instanceId: string,
-      payload: { eventType: string; new?: Record<string, unknown>; old?: Record<string, unknown> }
-    ) => {
-      const { evolution: evoRows, preferredId } = atendimentoEvolutionMergeRef.current;
-      const list = conversationsCacheRef.current[instanceId] || [];
-      let isInsert = false;
+    const channel = supabase
+      .channel(`chat_conversations_evolution_${filterVal}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'chat_conversations',
+          filter: `instance_id=eq.${filterVal}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const newConv = payload.new as Conversation;
+            const isNew = payload.eventType === 'INSERT';
 
-      if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-        const newConv = payload.new as unknown as Conversation;
-        isInsert = payload.eventType === 'INSERT';
-        const idx = list.findIndex((c) => c.id === newConv.id);
-        const nextList =
-          idx >= 0 ? list.map((c) => (c.id === newConv.id ? newConv : c)) : [newConv, ...list];
-        conversationsCacheRef.current[instanceId] = nextList;
-      } else if (payload.eventType === 'DELETE') {
-        const removedId = (payload.old as unknown as Conversation | undefined)?.id;
-        if (!removedId) return;
-        conversationsCacheRef.current[instanceId] = list.filter((c) => c.id !== removedId);
-      } else {
-        return;
-      }
-
-      const map = new Map<string, Conversation[]>();
-      for (const ch of evoRows) {
-        map.set(ch.id, conversationsCacheRef.current[ch.id] || []);
-      }
-      const merged = mergeEvolutionConversationsForAtendimento(map, preferredId || instanceId);
-      setConversations(merged);
-
-      if (
-        isInsert &&
-        canNotify &&
-        typeof window !== 'undefined' &&
-        'Notification' in window
-      ) {
-        const newConv = payload.new as unknown as Conversation;
-        const convTitle = newConv.title || 'Nova conversa';
-        const preview = (newConv.last_message_preview || '').slice(0, 60);
-        if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
-          try {
-            new Notification('Nova conversa no Chat Atendimento — Zaploto', {
-              body: preview
-                ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
-                : convTitle,
-              icon: '/favicon.ico',
+            setConversations((prev) => {
+              const updated =
+                prev.findIndex((c) => c.id === newConv.id) >= 0
+                  ? prev.map((c) => (c.id === newConv.id ? newConv : c))
+                  : [newConv, ...prev];
+              const next = sortByLastMessage(updated);
+              conversationsCacheRef.current[filterVal] = next;
+              return next;
             });
-          } catch (_) {}
-        }
-      }
-    };
 
-    const created = evoList.map((evo) =>
-      supabase
-        .channel(`chat_conversations_evo_${evo.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'chat_conversations',
-            filter: `instance_id=eq.${evo.id}`,
-          },
-          (payload) => applyEvolutionConversationPayload(evo.id, payload)
-        )
-        .subscribe()
-    );
+            if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+              const convTitle = newConv.title || 'Nova conversa';
+              const preview = (newConv.last_message_preview || '').slice(0, 60);
+              if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
+                try {
+                  new Notification('Nova conversa no Chat Atendimento — Zaploto', {
+                    body: preview
+                      ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
+                      : convTitle,
+                    icon: '/favicon.ico',
+                  });
+                } catch (_) {}
+              }
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const removedId = (payload.old as Conversation).id;
+            if (!removedId) return;
+            setConversations((prev) => {
+              const next = prev.filter((c) => c.id !== removedId);
+              conversationsCacheRef.current[filterVal] = next;
+              return next;
+            });
+          }
+        }
+      )
+      .subscribe();
 
     return () => {
-      created.forEach((c) => {
-        supabase.removeChannel(c);
-      });
+      supabase.removeChannel(channel);
     };
-  }, [selectedChannel, channels.evolution, evolutionChannelIdsKey, userStatus]);
+  }, [selectedChannel, userStatus]);
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
@@ -4098,10 +4033,16 @@ export default function ChatPage() {
                     const [type, id] = v.split(':');
                     if (type === 'evolution') {
                       const ch = channels.evolution.find((c) => c.id === id);
-                      if (ch) setSelectedChannel(ch);
+                      if (ch) {
+                        setSelectedChannel(ch);
+                        setConversations(conversationsCacheRef.current[ch.id] ?? []);
+                      }
                     } else {
                       const ch = channels.whatsapp_official.find((c) => c.id === id);
-                      if (ch) setSelectedChannel(ch);
+                      if (ch) {
+                        setSelectedChannel(ch);
+                        setConversations(conversationsCacheRef.current[ch.id] ?? []);
+                      }
                     }
                     setSelectedConversationId('');
                   }}
@@ -5459,12 +5400,6 @@ export default function ChatPage() {
                     className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
                   />
                 </div>
-                {selectedChannel?.type === 'evolution' && channels.evolution.length > 1 && (
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 mb-2 leading-snug">
-                    Lista unificada das suas instâncias. Mensagens enviadas usam sempre a instância selecionada no menu
-                    lateral.
-                  </p>
-                )}
                 {tagOptions.length > 0 && (
                   <div className="mb-3">
                     <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Filtrar por etiqueta</label>
@@ -5623,26 +5558,6 @@ export default function ChatPage() {
                               <div className="flex items-center justify-between mb-1">
                                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5 flex-wrap">
                                   {conv.title || 'Sem nome'}
-                                  {selectedChannel?.type === 'evolution' &&
-                                    channels.evolution.length > 1 &&
-                                    conv.instance_id &&
-                                    (() => {
-                                      const instName = channels.evolution.find((e) => e.id === conv.instance_id)?.instance_name;
-                                      if (!instName) return null;
-                                      const isCurrent = conv.instance_id === selectedChannel?.id;
-                                      return (
-                                        <span
-                                          title={`Disparo via ${instName}`}
-                                          className={`flex-shrink-0 max-w-[80px] truncate text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                                            isCurrent
-                                              ? 'bg-[#8CD955]/20 text-[#4a7c25] dark:text-[#8CD955]'
-                                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-                                          }`}
-                                        >
-                                          {instName}
-                                        </span>
-                                      );
-                                    })()}
                                   {selectedChannel?.type === 'whatsapp_official' &&
                                     conv.whatsapp_config_id && (
                                       <span
@@ -5681,14 +5596,6 @@ export default function ChatPage() {
                               <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">
                                 {conv.last_message_preview || '—'}
                               </p>
-                              {selectedChannel?.type === 'evolution' &&
-                                channels.evolution.length > 1 &&
-                                conv.instance_id &&
-                                conv.instance_id !== selectedChannel?.id && (
-                                  <p className="text-[10px] text-amber-700 dark:text-amber-300 mb-1 leading-snug">
-                                    Resposta enviada pela instância selecionada no menu
-                                  </p>
-                                )}
                               <div className="flex items-center justify-end">
                                 {conv.attendance_status !== 'resolvido' &&
                                   (userStatus === 'suporte' ||
