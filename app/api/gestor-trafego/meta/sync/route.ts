@@ -12,15 +12,7 @@ import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { runSync } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-
-function normalizeBancaUrl(url: string | null | undefined): string {
-  if (!url) return '';
-  let s = String(url).trim();
-  s = s.replace(/^https?:\/\//i, '');
-  s = s.replace(/\/api\/crm\/?/i, '');
-  s = s.replace(/\/+$/, '');
-  return s.trim().toLowerCase();
-}
+import { gestorTrafegoUserCanAccessBanca } from '@/lib/services/gestor-trafego-bancas';
 
 export async function POST(req: NextRequest) {
   try {
@@ -67,70 +59,21 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Gestor: verifica se tem acesso à banca (user_bancas ou dono)
-    const profileId = profile.id;
-    let { data: ubRow } = await supabaseServiceRole
-      .from('user_bancas')
-      .select('banca_ids')
-      .eq('user_id', profileId)
-      .maybeSingle();
-    if ((!ubRow?.banca_ids?.length) && userId !== profileId) {
-      const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
-      ubRow = fallback ?? ubRow;
-    }
-    const assignedBancaIds = new Set(Array.isArray(ubRow?.banca_ids) ? (ubRow.banca_ids as string[]) : []);
-
-    if (assignedBancaIds.has(bancaId)) {
-      const result = await runSync(bancaId, body?.date_preset || 'last_30d');
-      if (!result.success) {
-        return successResponse({ success: false, error: result.error });
-      }
-      return successResponse({
-        success: true,
-        campaignsCount: result.campaignsCount,
-        adsetsCount: result.adsetsCount,
-        insightsCount: result.insightsCount,
-      });
+    const canAccess = await gestorTrafegoUserCanAccessBanca(userId, profile, bancaId);
+    if (!canAccess) {
+      return errorResponse('Você não tem permissão para sincronizar esta banca.', 403);
     }
 
-    // Gestor com dono: verifica se a banca é do dono
-    if (profile.enroller) {
-      const { data: dono } = await supabaseServiceRole
-        .from('profiles')
-        .select('id, banca_url')
-        .eq('id', profile.enroller)
-        .eq('status', 'dono_banca')
-        .single();
-      if (dono?.banca_url) {
-        const { data: bancas } = await supabaseServiceRole
-          .from('crm_bancas')
-          .select('id')
-          .eq('id', bancaId)
-          .limit(1);
-        const banca = bancas?.[0] as { id: string; url?: string } | undefined;
-        if (banca) {
-          const { data: allBancas } = await supabaseServiceRole.from('crm_bancas').select('id, url');
-          const match = (allBancas || []).find(
-            (b: { url: string }) =>
-              normalizeBancaUrl(b.url) === normalizeBancaUrl(dono.banca_url)
-          );
-          if (match?.id === bancaId) {
-            const result = await runSync(bancaId, body?.date_preset || 'last_30d');
-            if (!result.success) {
-              return successResponse({ success: false, error: result.error });
-            }
-            return successResponse({
-              success: true,
-              campaignsCount: result.campaignsCount,
-              adsetsCount: result.adsetsCount,
-              insightsCount: result.insightsCount,
-            });
-          }
-        }
-      }
+    const result = await runSync(bancaId, body?.date_preset || 'last_30d');
+    if (!result.success) {
+      return successResponse({ success: false, error: result.error });
     }
-
-    return errorResponse('Você não tem permissão para sincronizar esta banca.', 403);
+    return successResponse({
+      success: true,
+      campaignsCount: result.campaignsCount,
+      adsetsCount: result.adsetsCount,
+      insightsCount: result.insightsCount,
+    });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado') || err?.message?.includes('Não autenticado')) {
       return errorResponse(err.message, 403);

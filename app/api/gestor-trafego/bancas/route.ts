@@ -2,50 +2,13 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { canAccessGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { getEffectiveDonoIdForGestorTrafegoViewer } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { getHierarchyPath } from '@/lib/utils/hierarchy';
-
-function normalizeBancaUrl(url: string | null | undefined): string {
-  if (!url) return '';
-  let s = String(url).trim();
-  s = s.replace(/^https?:\/\//i, '');
-  s = s.replace(/\/api\/crm\/?/i, '');
-  s = s.replace(/\/+$/, '');
-  return s.trim().toLowerCase();
-}
-
-/** Gerente sem linha em user_bancas: uma banca a partir do dono na hierarquia (crm_bancas por URL). */
-async function resolveGerenteBancaIdsFromHierarchy(profileId: string): Promise<string[]> {
-  const { data: allBancas } = await supabaseServiceRole.from('crm_bancas').select('id, url');
-  const byNorm = new Map<string, string>();
-  (allBancas || []).forEach((b: { id: string; url?: string | null }) => {
-    const n = normalizeBancaUrl(b.url);
-    if (n) byNorm.set(n, b.id);
-  });
-  const donoId = await getEffectiveDonoIdForGestorTrafegoViewer(profileId);
-  if (donoId) {
-    const { data: dono } = await supabaseServiceRole
-      .from('profiles')
-      .select('banca_url')
-      .eq('id', donoId)
-      .single();
-    const bid = dono?.banca_url ? byNorm.get(normalizeBancaUrl(dono.banca_url)) : undefined;
-    if (bid) return [bid];
-  }
-  const path = await getHierarchyPath(profileId);
-  for (const p of path) {
-    if (p.status?.trim().toLowerCase() !== 'dono_banca' || !p.banca_url) continue;
-    const bid = byNorm.get(normalizeBancaUrl(p.banca_url));
-    if (bid) return [bid];
-  }
-  return [];
-}
+import { listGestorTrafegoBancas } from '@/lib/services/gestor-trafego-bancas';
 
 /**
  * GET /api/gestor-trafego/bancas
- * Lista bancas em user_bancas (gestor/gerente). Gerente sem escolha em perfil: fallback pela hierarquia (dono).
+ * Lista bancas do gestor/gerente: user_bancas + donos na hierarquia Zaploto.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -67,64 +30,8 @@ export async function GET(req: NextRequest) {
     if (!profile || !hasAccess) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
     }
-    const profileId = profile.id;
 
-    let { data: ubRow } = await supabaseServiceRole
-      .from('user_bancas')
-      .select('banca_ids')
-      .eq('user_id', profileId)
-      .maybeSingle();
-
-    if (!Array.isArray(ubRow?.banca_ids) || ubRow.banca_ids.length === 0) {
-      if (userId !== profileId) {
-        const { data: fallback } = await supabaseServiceRole.from('user_bancas').select('banca_ids').eq('user_id', userId).maybeSingle();
-        ubRow = fallback ?? ubRow;
-      }
-    }
-
-    let bancaIds = Array.isArray(ubRow?.banca_ids) ? ([...(ubRow.banca_ids as string[])] as string[]) : [];
-    const statusNorm = profile.status?.trim().toLowerCase();
-    if (statusNorm === 'gerente' && bancaIds.length === 0) {
-      bancaIds = await resolveGerenteBancaIdsFromHierarchy(profileId);
-    }
-    if (bancaIds.length === 0) {
-      return successResponse([]);
-    }
-
-    const { data: bancas } = await supabaseServiceRole
-      .from('crm_bancas')
-      .select('id, name, url')
-      .in('id', bancaIds);
-
-    if (!bancas?.length) {
-      return successResponse([]);
-    }
-
-    const { data: donos } = await supabaseServiceRole
-      .from('profiles')
-      .select('id, banca_url')
-      .eq('status', 'dono_banca');
-
-    const urlToDonoId = new Map<string, string>();
-    (donos || []).forEach((d: { id: string; banca_url?: string | null }) => {
-      const norm = normalizeBancaUrl(d.banca_url);
-      if (norm) urlToDonoId.set(norm, d.id);
-    });
-
-    const result = bancas
-      .map((b: { id: string; name: string | null; url: string | null }) => {
-        const donoId = urlToDonoId.get(normalizeBancaUrl(b.url)) || null;
-        return {
-          banca_id: b.id,
-          banca_name: b.name || b.url || b.id,
-          url: b.url,
-          dono_id: donoId,
-        };
-      })
-      .sort((a: { banca_name: string }, b: { banca_name: string }) =>
-        String(a.banca_name).localeCompare(String(b.banca_name))
-      );
-
+    const result = await listGestorTrafegoBancas(profile.id, userId);
     return successResponse(result);
   } catch (err: any) {
     if (err.message?.includes('Acesso negado') || err.message?.includes('Não autenticado')) {

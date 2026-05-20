@@ -75,6 +75,7 @@ interface Message {
   caption?: string | null;
   sender_jid?: string | null;
   whatsapp_config_id?: string | null;
+  instance_id?: string | null;
   provider?: 'evolution' | 'whatsapp_official' | null;
 }
 
@@ -187,6 +188,28 @@ function formatBroadcastInstancesLine(
   }
   const single = typeof job.instance_name === 'string' ? job.instance_name.trim() : '';
   return single || '—';
+}
+
+/** Disparo em massa em andamento — usado para destacar conversas e balões enviados pela rotação. */
+interface ActiveBroadcast {
+  id: string;
+  title: string;
+  status: 'running' | 'pending' | 'paused' | string;
+  started_at: string | null;
+  created_at: string | null;
+  instances: { id: string; name: string }[];
+  /** Telefones em dígitos (com 55) — match contra remote_jid. */
+  phone_digits: string[];
+}
+
+/** Reduz o JID/telefone aos dígitos no padrão BR (prefixa 55 quando 10/11 dígitos). */
+function toBrPhoneDigitsClient(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+    return `55${digits}`;
+  }
+  return digits;
 }
 
 interface BroadcastMessage {
@@ -928,6 +951,10 @@ export default function ChatPage() {
   // Disparo em Massa
   const [broadcasts, setBroadcasts] = useState<BroadcastJob[]>([]);
   const [broadcastsLoading, setBroadcastsLoading] = useState(false);
+  /** Disparos em andamento (running/pending/paused) — destacam conversas e balões. */
+  const [activeBroadcasts, setActiveBroadcasts] = useState<ActiveBroadcast[]>([]);
+  /** Conversas tocadas por disparos em andamento (em qualquer instância da rotação). */
+  const [broadcastConversations, setBroadcastConversations] = useState<Conversation[]>([]);
   const [showBroadcastForm, setShowBroadcastForm] = useState(false);
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastDelay, setBroadcastDelay] = useState(120);
@@ -1664,6 +1691,38 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
+  /** Carrega disparos em andamento para destacar conversas/balões no atendimento. */
+  const loadActiveBroadcasts = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/chat/broadcast/active', { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) setActiveBroadcasts(Array.isArray(result.data) ? result.data : []);
+    } catch {
+      /* silent — destaque é informativo, não bloqueia o chat */
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  /**
+   * Carrega as conversas tocadas pelos disparos ativos em TODAS as instâncias
+   * da rotação — permite ver todas as conversas da campanha mesmo quando o canal
+   * selecionado é só uma das instâncias da rotação.
+   */
+  const loadBroadcastConversations = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/chat/broadcast/conversations', { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success) {
+        setBroadcastConversations(Array.isArray(result.data) ? result.data : []);
+      }
+    } catch {
+      /* silent */
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   const loadBroadcastMessages = useCallback(async () => {
     setBroadcastMessagesLoading(true);
     try {
@@ -1702,6 +1761,23 @@ export default function ChatPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChannel]);
+
+  /**
+   * Mantém a lista de disparos ativos + suas conversas atualizada enquanto há canal selecionado.
+   * Carga inicial e refresh em loop para refletir progresso da campanha em tempo real.
+   * Disparos ativos: 20s (muda pouco). Conversas do disparo: 10s (novas conversas aparecem rápido).
+   */
+  useEffect(() => {
+    if (!selectedChannel) return;
+    loadActiveBroadcasts();
+    loadBroadcastConversations();
+    const idActive = window.setInterval(loadActiveBroadcasts, 20_000);
+    const idConvs = window.setInterval(loadBroadcastConversations, 10_000);
+    return () => {
+      window.clearInterval(idActive);
+      window.clearInterval(idConvs);
+    };
+  }, [selectedChannel, loadActiveBroadcasts, loadBroadcastConversations]);
 
   useEffect(() => {
     if (!selectedChannel || selectedChannel.type !== 'evolution') return;
@@ -3527,10 +3603,76 @@ export default function ChatPage() {
     return colors[(title.charCodeAt(0) || 0) % colors.length];
   };
 
+  /**
+   * Resolve nome legível de uma instância — primeiro tenta a rotação do disparo
+   * (broadcast_instances.name), depois cai para a lista de canais Evolution carregados;
+   * por fim, devolve um label curto baseado no UUID.
+   */
+  const resolveInstanceName = useCallback(
+    (instanceId: string | null | undefined, rotation?: { id: string; name: string }[]): string => {
+      if (!instanceId) return '';
+      if (Array.isArray(rotation)) {
+        const hitRotation = rotation.find((r) => r.id === instanceId);
+        if (hitRotation?.name) return hitRotation.name;
+      }
+      const hitChannel = channels.evolution.find((c) => c.id === instanceId);
+      if (hitChannel?.instance_name) return hitChannel.instance_name;
+      return `Inst. ${String(instanceId).slice(0, 8)}…`;
+    },
+    [channels.evolution]
+  );
+
+  /**
+   * Para cada disparo em andamento, expande o Set de dígitos do telefone alvo —
+   * memorizado para evitar reconstrução a cada render.
+   */
+  const activeBroadcastsByPhone = useMemo(() => {
+    const map = new Map<string, ActiveBroadcast[]>();
+    for (const bc of activeBroadcasts) {
+      for (const phone of bc.phone_digits) {
+        const list = map.get(phone);
+        if (list) list.push(bc);
+        else map.set(phone, [bc]);
+      }
+    }
+    return map;
+  }, [activeBroadcasts]);
+
+  /**
+   * Retorna o disparo em andamento que tem o JID/telefone desta conversa como alvo,
+   * ou null. Quando há múltiplos disparos para o mesmo número, devolve o mais recente.
+   */
+  const getActiveBroadcastForConversation = useCallback(
+    (conv: { remote_jid?: string | null }): ActiveBroadcast | null => {
+      const digits = toBrPhoneDigitsClient(conv.remote_jid?.split('@')[0] || '');
+      if (!digits) return null;
+      const matches = activeBroadcastsByPhone.get(digits);
+      if (!matches || matches.length === 0) return null;
+      if (matches.length === 1) return matches[0];
+      return [...matches].sort((a, b) => {
+        const ta = new Date(a.started_at || a.created_at || 0).getTime();
+        const tb = new Date(b.started_at || b.created_at || 0).getTime();
+        return tb - ta;
+      })[0];
+    },
+    [activeBroadcastsByPhone]
+  );
+
+  // Junta conversas do canal atual com conversas tocadas por disparos ativos
+  // (de outras instâncias da rotação) para a campanha aparecer inteira em tempo real.
+  // Dedupe por id; a versão do canal atual tem precedência (state mais quente).
+  const conversationsWithBroadcast = useMemo(() => {
+    if (broadcastConversations.length === 0) return conversations;
+    const seen = new Set(conversations.map((c) => c.id));
+    const extras = broadcastConversations.filter((c) => !seen.has(c.id));
+    if (extras.length === 0) return conversations;
+    return [...conversations, ...extras];
+  }, [conversations, broadcastConversations]);
+
   // ── Filtros e ordenação ────────────────────────────────────────────────────
   // Todos = atribuídas a mim
   // Histórico = fora da janela 24h (template) ou já resolvidas
-  const filteredConversations = conversations.filter((conv) => {
+  const filteredConversations = conversationsWithBroadcast.filter((conv) => {
     const term = (searchTerm || '').trim().toLowerCase();
     const matchesSearch =
       !term ||
@@ -3554,8 +3696,12 @@ export default function ChatPage() {
     }
   });
 
-  // Ordenação: 24h ativos primeiro, depois por última mensagem
+  // Ordenação: disparo em andamento primeiro, depois 24h ativos, depois última mensagem
   const sortedConversations = [...filteredConversations].sort((a, b) => {
+    const aBc = getActiveBroadcastForConversation(a);
+    const bBc = getActiveBroadcastForConversation(b);
+    if (aBc && !bBc) return -1;
+    if (!aBc && bBc) return 1;
     const a24 = isWithin24hWindow(a);
     const b24 = isWithin24hWindow(b);
     if (a24 && !b24) return -1;
@@ -3568,8 +3714,8 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const mineCount = conversations.filter((c) => c.user_id === userId).length;
-  const historyCount = conversations.filter(
+  const mineCount = conversationsWithBroadcast.filter((c) => c.user_id === userId).length;
+  const historyCount = conversationsWithBroadcast.filter(
     (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
   ).length;
 
@@ -3585,7 +3731,7 @@ export default function ChatPage() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
-  const selectedConversation = conversations.find((c) => c.id === selectedConversationId);
+  const selectedConversation = conversationsWithBroadcast.find((c) => c.id === selectedConversationId);
   const canSendFreeMessage =
     selectedChannel?.type !== 'whatsapp_official' ||
     (selectedConversation ? isWithin24hWindow(selectedConversation) : false);
@@ -3950,146 +4096,161 @@ export default function ChatPage() {
           {/* ── Painel Esquerdo (Zaploto Chat) — visível só quando chatSidebarOpen ── */}
           {chatSidebarOpen && (
           <div className="w-48 md:w-64 min-h-0 flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col relative">
-            <button
-              type="button"
-              onClick={() => setChatSidebarOpen(false)}
-              className="absolute top-3 right-3 z-10 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500 dark:text-gray-400"
-              aria-label="Fechar menu"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 pr-8">Chat Atendimento</h2>
+            <div className="px-4 pt-4 pb-3 border-b border-gray-200 dark:border-[#404040]">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="min-w-0 flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#8CD955]/15">
+                    <MessageCircle className="h-4 w-4 text-[#8CD955]" />
+                  </div>
+                  <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate">
+                    Chat Atendimento
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChatSidebarOpen(false)}
+                  className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500 dark:text-gray-400 transition-colors"
+                  aria-label="Fechar menu"
+                  title="Ocultar menu"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={reopenAtendimentoInstancePicker}
-                className="mb-3 text-left w-full text-xs font-medium text-[#8CD955] hover:underline"
+                className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-[#8CD955] hover:text-[#7bc448] transition-colors"
               >
-                ← Trocar instância / canal
+                <ChevronLeft className="h-3 w-3" />
+                Trocar instância / canal
               </button>
-              <div className="space-y-1">
-                <button
-                  onClick={() => setActiveView('chat')}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
-                    activeView === 'chat'
-                      ? 'text-white'
-                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
-                  }`}
-                  style={activeView === 'chat' ? { backgroundColor: '#8CD955' } : {}}
-                >
-                  <MessageCircle className="w-5 h-5" />
-                  Todas as conversas
-                </button>
-                <button
-                  onClick={() => setActiveView('contacts')}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
-                    activeView === 'contacts'
-                      ? 'text-white'
-                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
-                  }`}
-                  style={activeView === 'contacts' ? { backgroundColor: '#8CD955' } : {}}
-                >
-                  <BookUser className="w-5 h-5" />
-                  Contatos
-                </button>
-                {selectedChannel?.type === 'evolution' && (
-                  <>
-                    <button
-                      onClick={() => setActiveView('broadcast')}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
-                        activeView === 'broadcast'
-                          ? 'text-white'
-                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
-                      }`}
-                      style={activeView === 'broadcast' ? { backgroundColor: '#8CD955' } : {}}
-                    >
-                      <Megaphone className="w-5 h-5" />
-                      Disparo em Massa
-                    </button>
-                    <button
-                      onClick={() => setActiveView('agent')}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
-                        activeView === 'agent'
-                          ? 'text-white'
-                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
-                      }`}
-                      style={activeView === 'agent' ? { backgroundColor: '#8CD955' } : {}}
-                    >
-                      <Bot className="w-5 h-5" />
-                      Agente de IA
-                    </button>
-                  </>
-                )}
+              <div className="space-y-0.5">
+                {(() => {
+                  const navItems: { key: ActiveView; label: string; Icon: typeof MessageCircle; evoOnly?: boolean }[] = [
+                    { key: 'chat', label: 'Todas as conversas', Icon: MessageCircle },
+                    { key: 'contacts', label: 'Contatos', Icon: BookUser },
+                    { key: 'broadcast', label: 'Disparo em Massa', Icon: Megaphone, evoOnly: true },
+                    { key: 'agent', label: 'Agente de IA', Icon: Bot, evoOnly: true },
+                  ];
+                  return navItems
+                    .filter((it) => !it.evoOnly || selectedChannel?.type === 'evolution')
+                    .map(({ key, label, Icon }) => {
+                      const isActive = activeView === key;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => setActiveView(key)}
+                          aria-current={isActive ? 'page' : undefined}
+                          className={`group relative w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                            isActive
+                              ? 'bg-[#8CD955]/15 text-[#5a9e2e] dark:text-[#8CD955]'
+                              : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] hover:text-gray-900 dark:hover:text-gray-100'
+                          }`}
+                        >
+                          {isActive && (
+                            <span
+                              aria-hidden="true"
+                              className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-[#8CD955]"
+                            />
+                          )}
+                          <Icon className={`w-4.5 h-4.5 flex-shrink-0 ${isActive ? 'text-[#8CD955]' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} style={{ width: '18px', height: '18px' }} />
+                          <span className="truncate">{label}</span>
+                        </button>
+                      );
+                    });
+                })()}
               </div>
             </div>
 
             {/* Seletor de Canal */}
             {canSelectChannel ? (
               <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                <label className="block text-[10px] font-semibold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-1.5">
                   Canal
                 </label>
-                <select
-                  value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (!v) { setSelectedChannel(null); setSelectedConversationId(''); return; }
-                    const [type, id] = v.split(':');
-                    if (type === 'evolution') {
-                      const ch = channels.evolution.find((c) => c.id === id);
-                      if (ch) {
-                        setSelectedChannel(ch);
-                        setConversations(conversationsCacheRef.current[ch.id] ?? []);
+                <div className="relative">
+                  <select
+                    value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!v) { setSelectedChannel(null); setSelectedConversationId(''); return; }
+                      const [type, id] = v.split(':');
+                      if (type === 'evolution') {
+                        const ch = channels.evolution.find((c) => c.id === id);
+                        if (ch) {
+                          setSelectedChannel(ch);
+                          setConversations(conversationsCacheRef.current[ch.id] ?? []);
+                        }
+                      } else {
+                        const ch = channels.whatsapp_official.find((c) => c.id === id);
+                        if (ch) {
+                          setSelectedChannel(ch);
+                          setConversations(conversationsCacheRef.current[ch.id] ?? []);
+                        }
                       }
-                    } else {
-                      const ch = channels.whatsapp_official.find((c) => c.id === id);
-                      if (ch) {
-                        setSelectedChannel(ch);
-                        setConversations(conversationsCacheRef.current[ch.id] ?? []);
-                      }
-                    }
-                    setSelectedConversationId('');
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
-                  style={{ borderColor: '#8CD955' }}
-                >
-                  <option value="">Selecione um canal</option>
-                  {channels.evolution.length > 0 && (
-                    <optgroup label="Evolution">
-                      {channels.evolution.map((ch) => (
-                        <option key={ch.id} value={`evolution:${ch.id}`}>
-                          {ch.instance_name}
-                          {ch.is_master ? ' · Mestre' : ''} ({ch.status})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {channels.whatsapp_official.length > 0 && (
-                    <optgroup label="WhatsApp Oficial">
-                      {channels.whatsapp_official.map((ch) => (
-                        <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
-                          {ch.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                      setSelectedConversationId('');
+                    }}
+                    className="w-full appearance-none rounded-lg border border-gray-200 bg-white dark:bg-[#333] dark:border-[#404040] px-3 py-2 pr-8 text-sm text-gray-900 dark:text-gray-100 transition-colors focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  >
+                    <option value="">Selecione um canal</option>
+                    {channels.evolution.length > 0 && (
+                      <optgroup label="Evolution">
+                        {channels.evolution.map((ch) => (
+                          <option key={ch.id} value={`evolution:${ch.id}`}>
+                            {ch.instance_name}
+                            {ch.is_master ? ' · Mestre' : ''} ({ch.status})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {channels.whatsapp_official.length > 0 && (
+                      <optgroup label="WhatsApp Oficial">
+                        {channels.whatsapp_official.map((ch) => (
+                          <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
+                            {ch.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                  />
+                </div>
+                {selectedChannel && (
+                  <div className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+                    <span
+                      className={`inline-block h-1.5 w-1.5 rounded-full ${
+                        selectedChannel.type === 'evolution' && /open|ok|connected/i.test(selectedChannel.status || '')
+                          ? 'bg-emerald-500'
+                          : 'bg-gray-400'
+                      }`}
+                    />
+                    <span className="truncate">
+                      {selectedChannel.type === 'evolution' ? selectedChannel.status : 'WhatsApp Oficial'}
+                    </span>
+                  </div>
+                )}
               </div>
             ) : selectedChannel ? (
               <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-                <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
-                <div className="text-sm text-gray-700 dark:text-gray-200">
-                  {selectedChannel.type === 'evolution' ? (
-                    <>
-                      {selectedChannel.instance_name}
-                      {selectedChannel.is_master ? (
-                        <span className="ml-1.5 text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
-                          Mestre
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    selectedChannel.name
+                <div className="text-[10px] font-semibold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-1.5">Canal</div>
+                <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full flex-shrink-0 ${
+                      selectedChannel.type === 'evolution' && /open|ok|connected/i.test(selectedChannel.status || '')
+                        ? 'bg-emerald-500'
+                        : 'bg-gray-400'
+                    }`}
+                  />
+                  <span className="truncate font-medium">
+                    {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
+                  </span>
+                  {selectedChannel.type === 'evolution' && selectedChannel.is_master && (
+                    <span className="ml-auto text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                      Mestre
+                    </span>
                   )}
                 </div>
               </div>
@@ -5005,8 +5166,26 @@ export default function ChatPage() {
               {/* Histórico de disparos: filtros + lista em cards — ocupa o restante da coluna (mín. ~35vh) */}
               <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-gray-100 bg-gray-50/30 dark:border-[#333] dark:bg-[#262626]/50">
                 {broadcastsLoading ? (
-                  <div className="flex flex-1 items-center justify-center p-6">
-                    <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                  <div className="flex flex-1 flex-col gap-2 p-3">
+                    <div className="flex items-center gap-2 px-1 py-1.5">
+                      <Loader2 className="h-4 w-4 animate-spin text-[#8CD955]" />
+                      <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                        Carregando histórico de disparos…
+                      </span>
+                    </div>
+                    {[0, 1, 2].map((i) => (
+                      <div
+                        key={`bskel-${i}`}
+                        className="animate-pulse rounded-xl border border-gray-200 bg-white p-3 dark:border-[#404040] dark:bg-[#2a2a2a]"
+                      >
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="h-3 w-32 rounded bg-gray-200 dark:bg-[#3a3a3a]" />
+                          <div className="h-3 w-12 rounded bg-gray-200 dark:bg-[#3a3a3a]" />
+                        </div>
+                        <div className="h-2 w-full rounded bg-gray-100 dark:bg-[#333]" />
+                        <div className="mt-2 h-2 w-3/4 rounded bg-gray-100 dark:bg-[#333]" />
+                      </div>
+                    ))}
                   </div>
                 ) : broadcasts.length === 0 ? (
                   !showBroadcastForm ? (
@@ -5542,6 +5721,12 @@ export default function ChatPage() {
                   <>
                     {displayedConversations.map((conv) => {
                       const isSelected = selectedConversationId === conv.id;
+                      const convBroadcast = getActiveBroadcastForConversation(conv);
+                      // Mostrar SÓ a instância que enviou para este contato (a "dona" da linha),
+                      // não a rotação inteira. conv.instance_id já reflete o sender do disparo.
+                      const broadcastSenderName = convBroadcast
+                        ? resolveInstanceName(conv.instance_id, convBroadcast.instances)
+                        : '';
                       return (
                         <div
                           key={conv.id}
@@ -5549,7 +5734,9 @@ export default function ChatPage() {
                           className={`p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${
                             isSelected
                               ? 'bg-[#8CD95515] dark:bg-[#8CD95520] border-l-4 border-l-[#8CD955]'
-                              : ''
+                              : convBroadcast
+                                ? 'bg-blue-50/60 dark:bg-blue-900/15 border-l-4 border-l-blue-500'
+                                : ''
                           }`}
                         >
                           <div className="flex items-start gap-3">
@@ -5610,6 +5797,19 @@ export default function ChatPage() {
                                   {formatTime(conv.last_message_at)}
                                 </span>
                               </div>
+                              {convBroadcast && (
+                                <div
+                                  className="flex items-center gap-1 mb-1 text-[11px] font-medium text-blue-700 dark:text-blue-300"
+                                  title={`Disparo ${convBroadcast.status}: ${convBroadcast.title || 'Sem título'}`}
+                                >
+                                  <Megaphone className="w-3 h-3 flex-shrink-0" />
+                                  <span className="truncate">
+                                    Disparo
+                                    {broadcastSenderName ? ` · ${broadcastSenderName}` : ''}
+                                    {convBroadcast.status === 'paused' ? ' (pausado)' : ''}
+                                  </span>
+                                </div>
+                              )}
                               <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">
                                 {conv.last_message_preview || '—'}
                               </p>
@@ -5901,12 +6101,33 @@ export default function ChatPage() {
                     <div className="text-center text-gray-500 dark:text-gray-400 text-sm mt-8">
                       Nenhuma mensagem ainda
                     </div>
-                  ) : (
-                    messages.map((msg, index) => {
+                  ) : (() => {
+                    // Marcação de balões enviados por um disparo em andamento:
+                    // só marca mensagens posteriores ao started_at do disparo e
+                    // cujo instance_id esteja na rotação ativa.
+                    const broadcastForSelected = getActiveBroadcastForConversation(selectedConversation);
+                    const broadcastRotationIds = new Set(
+                      broadcastForSelected?.instances.map((i) => i.id) || []
+                    );
+                    const broadcastStartedTs = broadcastForSelected?.started_at
+                      ? Math.floor(new Date(broadcastForSelected.started_at).getTime() / 1000)
+                      : 0;
+                    return messages.map((msg, index) => {
                       const showDate =
                         index === 0 ||
                         new Date(msg.timestamp * 1000).toDateString() !==
                           new Date(messages[index - 1].timestamp * 1000).toDateString();
+
+                      const fromBroadcast =
+                        !!broadcastForSelected &&
+                        msg.from_me === true &&
+                        !!msg.instance_id &&
+                        broadcastRotationIds.has(msg.instance_id) &&
+                        (broadcastStartedTs === 0 || msg.timestamp >= broadcastStartedTs);
+
+                      const broadcastInstanceName = fromBroadcast
+                        ? resolveInstanceName(msg.instance_id, broadcastForSelected!.instances)
+                        : '';
 
                       return (
                         <React.Fragment key={msg.id}>
@@ -5934,10 +6155,23 @@ export default function ChatPage() {
                             <div
                               className={`max-w-md px-4 py-2 rounded-lg ${
                                 msg.from_me
-                                  ? 'bg-[#8CD955] text-white rounded-br-none'
+                                  ? fromBroadcast
+                                    ? 'bg-blue-500 text-white rounded-br-none ring-1 ring-blue-300 dark:ring-blue-700'
+                                    : 'bg-[#8CD955] text-white rounded-br-none'
                                   : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
                               }`}
                             >
+                              {fromBroadcast && (
+                                <div
+                                  className="flex items-center gap-1 mb-1 text-[10px] font-semibold uppercase tracking-wide text-white/90"
+                                  title={`Disparo em massa — ${broadcastForSelected?.title || 'sem título'}`}
+                                >
+                                  <Megaphone className="w-3 h-3 flex-shrink-0" />
+                                  <span className="truncate">
+                                    Disparo · {broadcastInstanceName || 'inst. desconhecida'}
+                                  </span>
+                                </div>
+                              )}
                               <MessageContent
                                 msg={msg}
                                 fromMe={msg.from_me}
@@ -5956,8 +6190,8 @@ export default function ChatPage() {
                           </div>
                         </React.Fragment>
                       );
-                    })
-                  )}
+                    });
+                  })()}
                   <div ref={messagesEndRef} />
                 </div>
 
@@ -6326,11 +6560,47 @@ export default function ChatPage() {
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <MessageSquare className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-                  <p className="text-gray-600 dark:text-gray-400">Selecione uma conversa para começar</p>
-                </div>
+              <div className="flex-1 flex items-center justify-center p-6">
+                {(() => {
+                  const empty =
+                    activeView === 'broadcast'
+                      ? {
+                          Icon: Megaphone,
+                          title: 'Disparo em Massa',
+                          desc: 'Crie um novo envio ou selecione um histórico ao lado para acompanhar o progresso.',
+                        }
+                      : activeView === 'contacts'
+                      ? {
+                          Icon: BookUser,
+                          title: 'Contatos',
+                          desc: 'Selecione um contato na lista para iniciar uma conversa.',
+                        }
+                      : activeView === 'agent'
+                      ? {
+                          Icon: Bot,
+                          title: 'Agente de IA',
+                          desc: 'Configure o agente no painel ao lado.',
+                        }
+                      : {
+                          Icon: MessageSquare,
+                          title: 'Nenhuma conversa selecionada',
+                          desc: 'Escolha uma conversa na lista à esquerda para começar a atender.',
+                        };
+                  const Icon = empty.Icon;
+                  return (
+                    <div className="max-w-sm text-center">
+                      <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-gray-200 dark:bg-[#2a2a2a] dark:ring-[#404040]">
+                        <Icon className="h-9 w-9 text-[#8CD955]" />
+                      </div>
+                      <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">
+                        {empty.title}
+                      </h3>
+                      <p className="mt-1.5 text-sm leading-relaxed text-gray-500 dark:text-gray-400">
+                        {empty.desc}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>

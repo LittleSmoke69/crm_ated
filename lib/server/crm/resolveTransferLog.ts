@@ -11,8 +11,15 @@ import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributio
 import type { DepositHistoryItem } from '@/lib/server/crm/crmRedistributionClient';
 
 const DEFAULT_DEADLINE_DAYS = 10;
-const STATUS_APROVADO = 1;
 const LOG_PREFIX = '[resolve-expired-transfers]';
+
+/** CRM externo às vezes devolve status_code como number (1) e às vezes como string ("1"). */
+function isApprovedDeposit(item: { status_code?: number | string | null }): boolean {
+  const code = item.status_code;
+  if (code == null) return false;
+  if (typeof code === 'number') return code === 1;
+  return String(code).trim() === '1';
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,11 +52,12 @@ export function isTransferExpired(createdAt: string | null | undefined, deadline
 }
 
 /**
- * Retorna a data do último depósito aprovado (status_code === 1) no histórico, ou null se não houver.
+ * Retorna a data do último depósito aprovado no histórico, ou null se não houver.
+ * Aceita status_code como number (1) ou string ("1") — o CRM externo varia.
  * A API pode retornar itens em qualquer ordem; considera o maior date entre os aprovados.
  */
-function getLastApprovedDepositDate(history: DepositHistoryItem[]): Date | null {
-  const approved = history.filter((item) => item.status_code === STATUS_APROVADO);
+export function getLastApprovedDepositDate(history: DepositHistoryItem[]): Date | null {
+  const approved = history.filter(isApprovedDeposit);
   if (approved.length === 0) return null;
   let latest: Date | null = null;
   for (const item of approved) {
@@ -59,6 +67,12 @@ function getLastApprovedDepositDate(history: DepositHistoryItem[]): Date | null 
     }
   }
   return latest;
+}
+
+/** True se houver depósito aprovado com data >= data da transferência. */
+export function isLeadConvertedAfterTransfer(history: DepositHistoryItem[], transferDate: Date): boolean {
+  const lastApproved = getLastApprovedDepositDate(history);
+  return lastApproved !== null && lastApproved.getTime() >= transferDate.getTime();
 }
 
 /** Ao vincular, opcionalmente persiste totais no momento da resolução para cálculo de lucro (diferença vs total_depositado_snapshot). */
@@ -188,8 +202,7 @@ export async function resolveOneTransferLog(
         result = await client.getUserDepositHistory(leadId, 100, 1);
       }
       const history = result.success && Array.isArray(result.history) ? result.history : [];
-      const lastApprovedDate = getLastApprovedDepositDate(history);
-      if (lastApprovedDate !== null && lastApprovedDate.getTime() >= transferDate.getTime()) {
+      if (isLeadConvertedAfterTransfer(history, transferDate)) {
         isConverted = true;
       }
     } catch {

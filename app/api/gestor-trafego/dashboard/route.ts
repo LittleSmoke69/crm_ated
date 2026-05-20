@@ -12,6 +12,7 @@ import {
 } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getHierarchyPath } from '@/lib/utils/hierarchy';
+import { gestorTrafegoUserCanAccessBanca } from '@/lib/services/gestor-trafego-bancas';
 
 export const maxDuration = 120;
 
@@ -119,6 +120,10 @@ export async function GET(req: NextRequest) {
     } else {
       const effectiveBancaIdHeader = (req.headers.get('X-Effective-Banca-Id') ?? req.headers.get('x-effective-banca-id'))?.trim();
       if (effectiveBancaIdHeader) {
+        const canAccessBanca = await gestorTrafegoUserCanAccessBanca(userId, profile, effectiveBancaIdHeader);
+        if (!canAccessBanca) {
+          return errorResponse('Você não tem acesso a esta banca.', 403);
+        }
         const { data: banca } = await supabaseServiceRole
           .from('crm_bancas')
           .select('id, url, name')
@@ -128,13 +133,7 @@ export async function GET(req: NextRequest) {
           bancaId = banca.id;
           bancaUrl = banca.url;
           bancaName = banca.name || banca.url || 'Banca';
-          const { data: donos } = await supabaseServiceRole
-            .from('profiles')
-            .select('id, banca_url')
-            .eq('status', 'dono_banca');
-          const norm = normalizeBancaUrl(banca.url);
-          const found = (donos || []).find((d: { banca_url?: string | null }) => normalizeBancaUrl(d.banca_url) === norm);
-          if (found) donoId = found.id;
+          donoId = null;
         }
       }
       if (!bancaId && !donoId) {

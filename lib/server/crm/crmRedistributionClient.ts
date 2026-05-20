@@ -83,7 +83,8 @@ export interface DepositHistoryItem {
   id: number;
   value: number;
   status: string;
-  status_code: number;
+  /** CRM ora retorna number (1), ora string ("1"); tratar ambos no consumidor. */
+  status_code: number | string;
   date: string;
   created_at?: string;
   updated_at?: string;

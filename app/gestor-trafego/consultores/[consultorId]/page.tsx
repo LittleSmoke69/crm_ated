@@ -231,7 +231,7 @@ export default function DetalheConsultor() {
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div className="w-full min-w-0 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6">
         {/* Breadcrumb & Header */}
         <div className="flex flex-col gap-4">
           <button 

@@ -1,22 +1,26 @@
 import { getUserProfile } from '@/lib/middleware/permissions';
+import { getHierarchyPath } from '@/lib/utils/hierarchy';
 
 /**
- * Para usuários com status 'gestor', retorna o ID do dono de banca (enroller)
- * cujos dados o gestor pode visualizar. Retorna null se o usuário não for gestor
- * ou se o enroller não for dono_banca.
+ * Para usuários com status 'gestor', retorna o ID do dono de banca na hierarquia:
+ * enroller direto dono_banca ou primeiro dono_banca no caminho até a raiz.
  */
 export async function getEffectiveDonoIdForGestor(gestorUserId: string): Promise<string | null> {
   const profile = await getUserProfile(gestorUserId);
   const statusNorm = profile?.status?.trim().toLowerCase();
-  if (!profile || statusNorm !== 'gestor' || !profile.enroller) {
+  if (!profile || statusNorm !== 'gestor') {
     return null;
   }
-  const enrollerProfile = await getUserProfile(profile.enroller);
-  const enrollerStatusNorm = enrollerProfile?.status?.trim().toLowerCase();
-  if (!enrollerProfile || enrollerStatusNorm !== 'dono_banca') {
-    return null;
+  if (profile.enroller) {
+    const enrollerProfile = await getUserProfile(profile.enroller);
+    const enrollerStatusNorm = enrollerProfile?.status?.trim().toLowerCase();
+    if (enrollerProfile && enrollerStatusNorm === 'dono_banca') {
+      return enrollerProfile.id;
+    }
   }
-  return enrollerProfile.id;
+  const path = await getHierarchyPath(profile.id);
+  const donoInPath = path.find((p) => p.status?.trim().toLowerCase() === 'dono_banca');
+  return donoInPath?.id ?? null;
 }
 
 /**

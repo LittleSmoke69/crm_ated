@@ -199,9 +199,11 @@ export default function GestorTrafegoClient({
   const userId = serverUserId || clientUserId;
   const checking = serverUserId ? false : authChecking;
   const isAdminOrSuperAdmin = serverUserStatus === 'admin' || serverUserStatus === 'super_admin';
-  const showDonoSelector = isAdminOrSuperAdmin || canSelectDono;
   /** Mesma UX de seletor por banca que o gestor (lista /api/gestor-trafego/bancas). */
   const usesBancaSelectorAsGestor = serverUserStatus === 'gestor' || serverUserStatus === 'gerente';
+  /** Dropdown de banca sempre visível para gestor/gerente (independe de canSelectDono do servidor). */
+  const showBancaDropdown = usesBancaSelectorAsGestor && !authError;
+  const showDonoSelector = isAdminOrSuperAdmin || canSelectDono || showBancaDropdown;
   const isGerenteViewer = serverUserStatus === 'gerente';
   
   const [loading, setLoading] = useState(false);
@@ -320,10 +322,10 @@ export default function GestorTrafegoClient({
 
   const [isFirstRender, setIsFirstRender] = useState(true);
 
-  // Gestor: carrega bancas às quais está atribuído. Admin/Super Admin: carrega lista de donos.
+  // Gestor/gerente: carrega bancas (hierarquia + user_bancas). Admin: lista de donos.
   useEffect(() => {
-    if (!userId || !showDonoSelector || authError) return;
-    if (usesBancaSelectorAsGestor) {
+    if (!userId || authError) return;
+    if (showBancaDropdown) {
       if (bancasGestor.length > 0) return;
       setLoadingDonos(true);
       fetch('/api/gestor-trafego/bancas', { headers: { 'X-User-Id': userId }, credentials: 'include' })
@@ -331,20 +333,33 @@ export default function GestorTrafegoClient({
         .then((res) => {
           if (res.success && Array.isArray(res.data)) {
             setBancasGestor(res.data);
-            // Auto-seleciona a primeira banca para carregar dados imediatamente (sem precisar do dono)
-            if (res.data.length > 0 && !selectedDonoId) {
+            const validIds = new Set(
+              res.data.map((b: BancaGestorOption) => `banca:${b.banca_id}`)
+            );
+            const stored =
+              typeof window !== 'undefined'
+                ? window.sessionStorage?.getItem('gestor_effective_dono_id') || ''
+                : '';
+            const pickStored = stored && validIds.has(stored) ? stored : '';
+            if (pickStored) {
+              setSelectedDonoId(pickStored);
+            } else if (res.data.length > 0) {
               const first = res.data[0];
               const value = `banca:${first.banca_id}`;
               setSelectedDonoId(value);
               if (typeof window !== 'undefined') {
                 window.sessionStorage?.setItem('gestor_effective_dono_id', value);
               }
+            } else {
+              setSelectedDonoId('');
             }
           } else {
             setBancasGestor([]);
           }
         })
         .finally(() => setLoadingDonos(false));
+    } else if (!showDonoSelector) {
+      return;
     } else {
       if (initialData) return;
       if (donos.length > 0) return;
@@ -356,20 +371,20 @@ export default function GestorTrafegoClient({
         })
         .finally(() => setLoadingDonos(false));
     }
-  }, [userId, showDonoSelector, authError, initialData, serverUserStatus, usesBancaSelectorAsGestor, bancasGestor.length, donos.length]);
+  }, [userId, showDonoSelector, showBancaDropdown, authError, initialData, serverUserStatus, bancasGestor.length, donos.length]);
 
   useEffect(() => {
     if (!userId) return;
     
-    // Quem usa seletor de dono: não chama dashboard sem dono selecionado
-    if (showDonoSelector && !initialData && !selectedDonoId) {
+    // Gestor/gerente/admin: não chama dashboard sem banca/dono selecionado
+    if ((showBancaDropdown || showDonoSelector) && !initialData && !selectedDonoId) {
       return;
     }
     
     // Se não tiver initialData, busca imediatamente ao montar com data de hoje (ou com dono selecionado)
     if (!initialData && isFirstRender) {
       setIsFirstRender(false);
-      if (showDonoSelector && !selectedDonoId) return;
+      if ((showBancaDropdown || showDonoSelector) && !selectedDonoId) return;
       checkAuthorization();
       return;
     }
@@ -388,7 +403,7 @@ export default function GestorTrafegoClient({
         checkAuthorization();
       }
     }
-  }, [userId, dateFilter, appliedStartDate, appliedEndDate, showDonoSelector, selectedDonoId, metaActiveOnly]);
+  }, [userId, dateFilter, appliedStartDate, appliedEndDate, showDonoSelector, showBancaDropdown, selectedDonoId, metaActiveOnly]);
 
   // Retorna YYYY-MM-DD no fuso local (evita UTC que atrasa/adianta o dia no Brasil)
   const toLocalDateString = (d: Date) => {
@@ -515,7 +530,7 @@ export default function GestorTrafegoClient({
     baseParams.append('meta_active_only', metaActiveOnly ? '1' : '0');
 
     const headers: Record<string, string> = { 'X-User-Id': userId as string };
-    if (showDonoSelector && selectedDonoId) {
+    if ((showBancaDropdown || showDonoSelector) && selectedDonoId) {
       if (selectedDonoId.startsWith('dono:')) {
         headers['X-Effective-Dono-Id'] = selectedDonoId.slice(5);
       } else if (selectedDonoId.startsWith('banca:')) {
@@ -690,6 +705,26 @@ export default function GestorTrafegoClient({
     g.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
     (g.full_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  const handleSelectGestorBanca = (targetBancaId: string) => {
+    const value = `banca:${targetBancaId}`;
+    if (selectedDonoId === value) return;
+    setSelectedDonoId(value);
+    setIsAuthorized(null);
+    setLoadingExtMetrics(true);
+    setLoadingBanca(true);
+    setLoadingMeta(true);
+    setMetaFunnel(null);
+    setMetaCampaignsData([]);
+    setBancaId(null);
+    setBancaName(null);
+    setMetaConfigLoaded(false);
+    setMetaIntegrationsList([]);
+    setMetaSelectedIntegrationId('');
+    if (typeof window !== 'undefined') {
+      window.sessionStorage?.setItem('gestor_effective_dono_id', value);
+    }
+  };
 
   const handleSyncMetaAds = async () => {
     const id = effectiveBancaId;
@@ -1017,7 +1052,7 @@ export default function GestorTrafegoClient({
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="p-6 space-y-6 max-w-7xl mx-auto bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
+      <div className="w-full min-w-0 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -1051,79 +1086,69 @@ export default function GestorTrafegoClient({
               Métricas da Banca {bancaName ? `- ${bancaName}` : showDonoSelector && !selectedDonoId ? '(selecione uma banca)' : ''}
             </h2>
             
-            {/* Filtro de período + banca: gerente = data à esquerda, banca ao lado; demais = banca antes da data */}
+            {/* Período + dropdown de banca (mesmo estilo) */}
             <div className="flex flex-wrap items-center gap-2 date-filter-container">
-              {showDonoSelector && (
-                <div
-                  className={`flex items-center gap-2 ${isGerenteViewer ? 'order-2' : 'order-1'}`}
-                >
-                  <span
-                    className={`text-sm font-medium text-gray-600 dark:text-gray-400 ${
-                      isGerenteViewer ? 'inline' : 'hidden sm:inline'
-                    }`}
-                  >
-                    {!usesBancaSelectorAsGestor
-                      ? 'Dono da Banca'
-                      : isGerenteViewer
-                        ? 'Suas bancas'
-                        : 'Banca'}
-                  </span>
+              {showBancaDropdown && (
+                <div className="relative order-1">
                   {loadingDonos ? (
-                    <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400">
+                    <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400 min-w-[160px]">
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
-                      Carregando...
+                      <span>Carregando...</span>
                     </div>
                   ) : (
-                    <select
-                      value={selectedDonoId}
-                      onChange={(e) => {
-                        setSelectedDonoId(e.target.value);
-                        if (e.target.value) {
-                          setIsAuthorized(null);
-                          setLoadingExtMetrics(true);
-                          setMetaFunnel(null);
-                          setMetaCampaignsData([]);
-                          setBancaId(null);
-                          setBancaName(null);
-                        } else {
-                          setGerentes([]);
-                          setExternalMetrics(null);
-                          setTop5Consultants([]);
-                          setMetaFunnel(null);
-                          setMetaCampaignsData([]);
-                          setBancaId(null);
-                          setBancaName(null);
-                        }
-                      }}
-                      className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[180px]"
-                    >
-                      <option value="">
-                        {usesBancaSelectorAsGestor
-                          ? (bancasGestor.length === 0 ? 'Nenhuma banca atribuída' : 'Selecione uma banca')
-                          : 'Selecione um dono de banca'}
-                      </option>
-                      {usesBancaSelectorAsGestor
-                        ? bancasGestor.map((b) => (
-                            <option
-                              key={b.banca_id}
-                              value={`banca:${b.banca_id}`}
-                            >
-                              {b.banca_name}
-                            </option>
-                          ))
-                        : donos.map((d) => (
-                            <option
-                              key={d.id}
-                              value={d.banca_id ? `banca:${d.banca_id}` : `dono:${d.id}`}
-                            >
-                              {d.banca_name || d.full_name || d.email}
-                            </option>
-                          ))}
-                    </select>
+                    <div className="relative">
+                      <Building2
+                        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8CD955] pointer-events-none z-10"
+                        aria-hidden
+                      />
+                      <ChevronDown
+                        className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none z-10"
+                        aria-hidden
+                      />
+                      <select
+                        value={selectedDonoId}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            setSelectedDonoId('');
+                            setGerentes([]);
+                            setExternalMetrics(null);
+                            setTop5Consultants([]);
+                            setMetaFunnel(null);
+                            setMetaCampaignsData([]);
+                            setBancaId(null);
+                            setBancaName(null);
+                            return;
+                          }
+                          if (v.startsWith('banca:')) {
+                            handleSelectGestorBanca(v.slice(6));
+                          }
+                        }}
+                        disabled={bancasGestor.length === 0}
+                        aria-label="Selecionar banca"
+                        className="appearance-none flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 pl-10 pr-10 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[160px] max-w-[220px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed truncate"
+                      >
+                        {bancasGestor.length === 0 ? (
+                          <option value="">Nenhuma banca</option>
+                        ) : (
+                          <>
+                            {!selectedDonoId && (
+                              <option value="">Selecione a banca</option>
+                            )}
+                            {bancasGestor.map((b) => (
+                              <option key={b.banca_id} value={`banca:${b.banca_id}`}>
+                                {b.banca_name}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                    </div>
                   )}
                 </div>
               )}
-              <div className={`relative ${isGerenteViewer ? 'order-1' : 'order-2'}`}>
+
+              <div className={`relative ${showBancaDropdown ? 'order-2' : 'order-1'}`}>
                 <button
                   type="button"
                   onClick={() => setShowDatePicker(!showDatePicker)}
@@ -1279,6 +1304,68 @@ export default function GestorTrafegoClient({
                   </div>
                 )}
               </div>
+
+              {showDonoSelector && !showBancaDropdown && (
+                <div className="relative order-2">
+                  {loadingDonos ? (
+                    <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                      Carregando...
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <Building2
+                        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8CD955] pointer-events-none z-10"
+                        aria-hidden
+                      />
+                      <ChevronDown
+                        className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none z-10"
+                        aria-hidden
+                      />
+                      <select
+                        value={selectedDonoId}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            setSelectedDonoId('');
+                            setGerentes([]);
+                            setExternalMetrics(null);
+                            setTop5Consultants([]);
+                            setMetaFunnel(null);
+                            setMetaCampaignsData([]);
+                            setBancaId(null);
+                            setBancaName(null);
+                            return;
+                          }
+                          if (v.startsWith('banca:')) {
+                            handleSelectGestorBanca(v.slice(6));
+                          } else {
+                            setSelectedDonoId(v);
+                            setIsAuthorized(null);
+                            setLoadingExtMetrics(true);
+                            setMetaFunnel(null);
+                            setMetaCampaignsData([]);
+                            setBancaId(null);
+                            setBancaName(null);
+                          }
+                        }}
+                        aria-label="Selecionar dono da banca"
+                        className="appearance-none bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 pl-10 pr-10 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[180px] max-w-[240px] cursor-pointer truncate"
+                      >
+                        <option value="">Selecione um dono</option>
+                        {donos.map((d) => (
+                          <option
+                            key={d.id}
+                            value={d.banca_id ? `banca:${d.banca_id}` : `dono:${d.id}`}
+                          >
+                            {d.banca_name || d.full_name || d.email}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           

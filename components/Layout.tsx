@@ -8,6 +8,7 @@ import { Menu, X, LogOut } from 'lucide-react';
 import Logo from './Logo';
 import TelefoneModal from './TelefoneModal';
 import BancasModal from './BancasModal';
+import { getInternalAppPathname } from '@/lib/utils/white-label-path';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -278,9 +279,12 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     }
   };
 
-  const isChat = pathname === '/chat' || pathname === '/chat-atendimento';
-  const isFlowEditor = typeof pathname === 'string' && /^\/admin\/flows\/[^/]+$/.test(pathname);
-  const isAntiSpamPage = typeof pathname === 'string' && pathname.startsWith('/anti-spam');
+  // Normaliza o pathname removendo o prefixo de tenant (`/zaploto/chat-atendimento` → `/chat-atendimento`),
+  // senão o modo full-screen do chat e o editor de flows não ativam em tenants white label.
+  const internalPath = getInternalAppPathname(pathname);
+  const isChat = internalPath === '/chat' || internalPath === '/chat-atendimento';
+  const isFlowEditor = /^\/admin\/flows\/[^/]+$/.test(internalPath);
+  const isAntiSpamPage = internalPath.startsWith('/anti-spam');
   const isFullScreen = isChat || isFlowEditor;
 
   return (
