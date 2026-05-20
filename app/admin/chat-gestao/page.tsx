@@ -8,8 +8,9 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { BarChart3, Loader2 } from 'lucide-react';
 import ChatGestaoReportSection from '@/components/Admin/chat-gestao/ChatGestaoReportSection';
 import ChatGestaoTagsSection from '@/components/Admin/chat-gestao/ChatGestaoTagsSection';
+import ChatGestaoBroadcastsSection from '@/components/Admin/chat-gestao/ChatGestaoBroadcastsSection';
 
-type TabId = 'relatorio' | 'etiquetas';
+type TabId = 'relatorio' | 'etiquetas' | 'disparos';
 
 function ChatGestaoContent() {
   const router = useTenantRouter();
@@ -21,7 +22,7 @@ function ChatGestaoContent() {
   const canAccess = isAdminFull || isGerente;
 
   const validTabs: TabId[] = useMemo(() => {
-    if (isAdminFull) return ['relatorio', 'etiquetas'];
+    if (isAdminFull) return ['relatorio', 'etiquetas', 'disparos'];
     if (isGerente) return ['relatorio'];
     return [];
   }, [isAdminFull, isGerente]);
@@ -86,6 +87,7 @@ function ChatGestaoContent() {
               [
                 { id: 'relatorio' as const, label: 'Relatório' },
                 { id: 'etiquetas' as const, label: 'Etiquetas' },
+                { id: 'disparos' as const, label: 'Disparos' },
               ] as const
             ).map(({ id, label }) => (
               <button
@@ -109,6 +111,7 @@ function ChatGestaoContent() {
             <ChatGestaoReportSection userId={userId} isAdminFull={isAdminFull} />
           )}
           {activeTab === 'etiquetas' && isAdminFull && <ChatGestaoTagsSection userId={userId} />}
+          {activeTab === 'disparos' && isAdminFull && <ChatGestaoBroadcastsSection userId={userId} />}
         </div>
       </div>
     </Layout>

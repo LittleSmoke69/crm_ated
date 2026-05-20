@@ -8,6 +8,7 @@ import {
 } from '@/lib/server/crm/gerenteLeadStock';
 import { assertLeadTransferNotLockedForBanca, isConsultantInBanca } from '@/lib/server/crm/adminLeadTransferContext';
 import { createCrmRedistributionClient } from '@/lib/server/crm/crmRedistributionClient';
+import { buildLeadIdSetUnderConsultant, leadIdMatchKey } from '@/lib/server/crm/crmLeadIdsForCrmApi';
 import {
   getPendingStockEntriesByLeadIds,
   markStockEntriesDistributed,
@@ -130,6 +131,12 @@ export async function POST(req: NextRequest) {
     }
 
     const client = createCrmRedistributionClient(bancaCtx.crmBaseUrl);
+    let atTargetSet: Set<string> | null = null;
+    try {
+      atTargetSet = await buildLeadIdSetUnderConsultant(client, target);
+    } catch (e) {
+      console.warn(`${LOG_PREFIX} falha ao listar indicados do destino; repasse sem filtro prévio.`, e);
+    }
     const resultSummaries: Array<{
       source: string;
       transfer_type: string;
@@ -155,9 +162,33 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const crmLeadIds = group.leadIds.map((id) => normalizeCrmId(id));
+      let leadIdsToSend = group.leadIds;
+      let entryIdsToSend = group.entryIds;
+      if (atTargetSet) {
+        const keptLeadIds: string[] = [];
+        const keptEntryIds: string[] = [];
+        for (let i = 0; i < group.leadIds.length; i += 1) {
+          const lid = group.leadIds[i];
+          const crmId = normalizeCrmId(lid);
+          if (!atTargetSet.has(leadIdMatchKey(crmId))) {
+            keptLeadIds.push(lid);
+            keptEntryIds.push(group.entryIds[i]);
+          }
+        }
+        if (keptLeadIds.length === 0) {
+          console.log(
+            `${LOG_PREFIX} repasse ignorado: ${group.leadIds.length} lead(s) já no destino ${target} (origem ${group.sourceEmail})`
+          );
+          await markStockEntriesDistributed(group.entryIds);
+          continue;
+        }
+        leadIdsToSend = keptLeadIds;
+        entryIdsToSend = keptEntryIds;
+      }
+
+      const crmLeadIds = leadIdsToSend.map((id) => normalizeCrmId(id));
       console.log(
-        `${LOG_PREFIX} repasse estoque→consultor gerente=${profile.email} banca=${banca_id} src=${group.sourceEmail} dst=${target} tf=${group.transferType} prazo=${group.deadlineDays} n=${group.leadIds.length}`
+        `${LOG_PREFIX} repasse estoque→consultor gerente=${profile.email} banca=${banca_id} src=${group.sourceEmail} dst=${target} tf=${group.transferType} prazo=${group.deadlineDays} n=${leadIdsToSend.length} skipped=${group.leadIds.length - leadIdsToSend.length}`
       );
 
       const crmResult = await client.redistributeLeads({
@@ -174,17 +205,17 @@ export async function POST(req: NextRequest) {
       }
 
       const crmCount =
-        Number(crmResult.count ?? crmResult.data?.count ?? 0) || group.leadIds.length;
+        Number(crmResult.count ?? crmResult.data?.count ?? 0) || leadIdsToSend.length;
 
       const snapshotByLeadId = new Map<string, Record<string, unknown>>();
       const selectSnapWithEmail =
         'lead_id, lead_email, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
       const selectSnapBasic =
         'lead_id, lead_name, lead_phone, saldo_snapshot, last_interaction_snapshot, total_depositado_snapshot, total_apostado_snapshot, total_ganho_snapshot, available_withdraw_snapshot, total_saque_snapshot';
-      const snapFirst = await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapWithEmail).in('id', group.entryIds);
+      const snapFirst = await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapWithEmail).in('id', entryIdsToSend);
       const snapRows =
         snapFirst.error && ((snapFirst.error.message ?? '').includes('lead_email') || snapFirst.error.code === 'PGRST204')
-          ? (await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapBasic).in('id', group.entryIds)).data
+          ? (await supabaseServiceRole.from('admin_lead_transfer_entries').select(selectSnapBasic).in('id', entryIdsToSend)).data
           : snapFirst.data;
       for (const s of (snapRows ?? []) as Array<Record<string, unknown>>) {
         snapshotByLeadId.set(String(s.lead_id), s);
@@ -195,7 +226,7 @@ export async function POST(req: NextRequest) {
         performed_by_user_id: userId,
         source_consultant_email: group.sourceEmail,
         target_consultant_email: target,
-        leads_ids: group.leadIds,
+        leads_ids: leadIdsToSend,
         count: crmCount,
         transfer_type: group.transferType,
         deadline_days: group.deadlineDays,
@@ -220,7 +251,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const newEntries = group.leadIds.map((leadId) => {
+      const newEntries = leadIdsToSend.map((leadId) => {
         const snap = snapshotByLeadId.get(leadId) ?? {};
         const balance = snap.saldo_snapshot != null ? Number(snap.saldo_snapshot) : null;
         return {
@@ -264,7 +295,11 @@ export async function POST(req: NextRequest) {
         console.error(`${LOG_PREFIX} erro ao inserir entries repasse:`, entriesError);
       }
 
-      const marked = await markStockEntriesDistributed(group.entryIds);
+      const skippedEntryIds = group.entryIds.filter((id) => !entryIdsToSend.includes(id));
+      if (skippedEntryIds.length > 0) {
+        await markStockEntriesDistributed(skippedEntryIds);
+      }
+      const marked = await markStockEntriesDistributed(entryIdsToSend);
       if (!marked) {
         console.warn(`${LOG_PREFIX} falha ao marcar entries como repassado (source=${group.sourceEmail}).`);
       }
@@ -274,7 +309,7 @@ export async function POST(req: NextRequest) {
         transfer_type: group.transferType,
         deadline_days: group.deadlineDays,
         crm_count: crmCount,
-        marked: group.entryIds.length,
+        marked: entryIdsToSend.length + skippedEntryIds.length,
         transfer_log_id: insertedLog.id,
       });
     }

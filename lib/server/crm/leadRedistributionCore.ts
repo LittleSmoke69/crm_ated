@@ -322,8 +322,31 @@ export async function executeLeadRedistributionCore(
     }
   }
 
+  const preSkippedKeySet = new Set(preSkippedAlreadyAtTarget.map((id) => leadIdMatchKey(id)));
+  const leadsIdsForTransfer = force_db_only
+    ? normalizedLeadIds
+    : normalizedLeadIds.filter((id, idx) => {
+        const crmId = crmLeadIds[idx] ?? id;
+        return !preSkippedKeySet.has(leadIdMatchKey(crmId));
+      });
+
+  /** Repasse origem→mesmo destino no CRM: não há movimento possível — não registrar log nem entries. */
+  if (!force_db_only && leadsIdsForTransfer.length === 0 && preSkippedAlreadyAtTarget.length > 0) {
+    const n = preSkippedAlreadyAtTarget.length;
+    console.log(
+      `${LOG_PREFIX} transferência ignorada: ${n} lead(s) já no destino ${target_consultant_email} (origem ${source_consultant_email})`
+    );
+    return {
+      ok: true,
+      count: 0,
+      crm_count: 0,
+      transfer_log_id: null,
+      message: `${n} lead(s) ignorado(s): já estão com o consultor de destino (${target_consultant_email}) no CRM. Nenhuma transferência foi registrada.`,
+    };
+  }
+
   console.log(
-    `${LOG_PREFIX} calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, n=${crmLeadIdsToSend.length} total=${normalizedLeadIds.length} preSkipped=${preSkippedAlreadyAtTarget.length} kind=${transferKind}`
+    `${LOG_PREFIX} calling CRM redistributeLeads: source=${source_consultant_email}, target=${target_consultant_email}, n=${crmLeadIdsToSend.length} total=${leadsIdsForTransfer.length} preSkipped=${preSkippedAlreadyAtTarget.length} kind=${transferKind}`
   );
 
   /** Objeto + propriedade mutável: evita reassignment a `let` que o Turbopack trata como const. */
@@ -335,13 +358,7 @@ export async function executeLeadRedistributionCore(
           );
           return { success: true as const, count: normalizedLeadIds.length, message: 'force_db_only — CRM skipped by admin' };
         })()
-      : crmLeadIdsToSend.length === 0
-        ? {
-            success: true as const,
-            count: preSkippedAlreadyAtTarget.length,
-            message: 'Todos os leads já estavam no consultor de destino no CRM (POST redistribute omitido).',
-          }
-        : await client.redistributeLeads({
+      : await client.redistributeLeads({
             source_consultant_email,
             target_consultant_email,
             leads_ids: crmLeadIdsToSend,
@@ -367,15 +384,15 @@ export async function executeLeadRedistributionCore(
     Number(rawCrmCount) === 0;
 
   let count: number;
-  if (crmLeadIdsToSend.length === 0) {
-    count = Number(rawCrmCount ?? preSkippedAlreadyAtTarget.length);
+  if (force_db_only) {
+    count = leadsIdsForTransfer.length;
   } else if (rawCrmCount != null && Number.isFinite(Number(rawCrmCount))) {
-    count = Number(rawCrmCount) + preSkippedAlreadyAtTarget.length;
+    count = Number(rawCrmCount);
   } else {
-    count = crmLeadIdsToSend.length + preSkippedAlreadyAtTarget.length;
+    count = crmLeadIdsToSend.length;
   }
-  if ((isDevolucao || isReverse) && normalizedLeadIds.length > 0 && count === 0) {
-    count = normalizedLeadIds.length;
+  if ((isDevolucao || isReverse) && leadsIdsForTransfer.length > 0 && count === 0) {
+    count = leadsIdsForTransfer.length;
   }
 
   const skipOriginalFallback = transferKind === 'gerente_stock_to_consultant';
@@ -414,7 +431,7 @@ export async function executeLeadRedistributionCore(
       });
       const c = Number(r.count ?? r.data?.count ?? 0);
       if (r.success && c > 0) {
-        count = c + preSkippedAlreadyAtTarget.length;
+        count = c;
         source_consultant_email = alt;
         crmLast.r = r;
         recovered = true;
@@ -449,7 +466,7 @@ export async function executeLeadRedistributionCore(
             }
           }
           if (subtotal > 0) {
-            count = subtotal + preSkippedAlreadyAtTarget.length;
+            count = subtotal;
             source_consultant_email = lastSourceUsed;
             if (lastOk) crmLast.r = lastOk;
             recovered = true;
@@ -497,7 +514,7 @@ export async function executeLeadRedistributionCore(
     }
   }
 
-  if (!isDevolucao && !isReverse && skipOriginalFallback && crmExplicitZero && normalizedLeadIds.length > 0) {
+  if (!isDevolucao && !isReverse && skipOriginalFallback && crmExplicitZero && leadsIdsForTransfer.length > 0) {
     return {
       ok: false,
       status: 400,
@@ -592,7 +609,7 @@ export async function executeLeadRedistributionCore(
     performed_by_user_id: ctx.userId,
     source_consultant_email,
     target_consultant_email,
-    leads_ids: normalizedLeadIds,
+    leads_ids: leadsIdsForTransfer,
     count,
     transfer_type,
     deadline_days: transfer_deadline_days,
@@ -624,8 +641,8 @@ export async function executeLeadRedistributionCore(
     };
   }
 
-  if (insertedLog?.id && normalizedLeadIds.length > 0) {
-    const entries = normalizedLeadIds.map((leadId) => {
+  if (insertedLog?.id && leadsIdsForTransfer.length > 0) {
+    const entries = leadsIdsForTransfer.map((leadId) => {
       const sid = String(leadId);
       const snap = snapshotByLeadId.get(sid);
       const balance = snap?.saldo_snapshot != null ? Number(snap.saldo_snapshot) : null;
@@ -671,8 +688,8 @@ export async function executeLeadRedistributionCore(
     }
   }
 
-  if (source_transfer_log_id && normalizedLeadIds.length > 0) {
-    const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+  if (source_transfer_log_id && leadsIdsForTransfer.length > 0) {
+    const leadIdStrings = leadsIdsForTransfer.map((id) => String(id));
     const { error: updateSourceError } = await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .update({
@@ -697,7 +714,7 @@ export async function executeLeadRedistributionCore(
   if (logOrigemId) {
     const devolvidoAt = new Date().toISOString();
     await supabaseServiceRole.from('admin_lead_transfer_logs').update({ devolvido_at: devolvidoAt }).eq('id', logOrigemId);
-    const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+    const leadIdStrings = leadsIdsForTransfer.map((id) => String(id));
     await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .update({ resolution_status: 'devolvido', resolved_at: devolvidoAt })
@@ -713,7 +730,7 @@ export async function executeLeadRedistributionCore(
       : null;
   if (logDevolucaoId) {
     const reversedAt = new Date().toISOString();
-    const leadIdStrings = normalizedLeadIds.map((id) => String(id));
+    const leadIdStrings = leadsIdsForTransfer.map((id) => String(id));
     await supabaseServiceRole
       .from('admin_lead_transfer_entries')
       .update({ resolution_status: 'reversed', resolved_at: reversedAt })
@@ -744,11 +761,16 @@ export async function executeLeadRedistributionCore(
   }
 
   const crmReportedCount = crmLast.r.count ?? ('data' in crmLast.r ? crmLast.r.data?.count : undefined) ?? count;
+  const skippedNote =
+    preSkippedAlreadyAtTarget.length > 0
+      ? ` ${preSkippedAlreadyAtTarget.length} lead(s) ignorado(s) por já estarem com o destino no CRM.`
+      : '';
+  const baseMessage = crmLast.r.message ?? `${count} lead(s) transferido(s) com sucesso.`;
   return {
     ok: true,
     count,
     crm_count: crmReportedCount,
     transfer_log_id: insertedLog?.id ?? null,
-    message: crmLast.r.message ?? `${count} lead(s) transferido(s) com sucesso.`,
+    message: `${baseMessage}${skippedNote}`.trim(),
   };
 }

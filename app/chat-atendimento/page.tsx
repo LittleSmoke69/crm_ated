@@ -966,6 +966,8 @@ export default function ChatPage() {
     messageStep?: number;
     messageStepsTotal?: number;
     sameContactContinue?: boolean;
+    /** Instância que efetuou o último envio (para validar rotação visualmente). */
+    lastSentBy?: { id: string; name: string };
   } | null>(null);
   const [activeBroadcastCountdown, setActiveBroadcastCountdown] = useState(0);
   const [broadcastInstanceDown, setBroadcastInstanceDown] = useState(false);
@@ -1841,6 +1843,7 @@ export default function ChatPage() {
           done?: boolean; paused?: boolean; instanceDown?: boolean; skipped?: boolean;
           current_index?: number; total_count?: number;
           contact?: BroadcastContact; success?: boolean;
+          sent_by?: { id: string; name: string };
           next_delay_seconds?: number;
           message_step_index?: number;
           message_steps_total?: number;
@@ -1878,6 +1881,7 @@ export default function ChatPage() {
           total: data.total_count ?? (prev?.total ?? 0),
           contact: data.contact ?? prev?.contact,
           lastSent: data.success ? data.contact ?? prev?.lastSent : prev?.lastSent,
+          lastSentBy: data.success && data.sent_by ? data.sent_by : prev?.lastSentBy,
           lastSkipReason: (() => {
             if (data.success) return undefined;
             if (data.skipped && typeof data.error === 'string' && data.error.trim()) return data.error.trim();
@@ -4373,6 +4377,11 @@ export default function ChatPage() {
                   {activeBroadcastProgress.lastSent && (
                     <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
                       Enviado: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                      {activeBroadcastProgress.lastSentBy?.name && (
+                        <span className="ml-1 inline-flex items-center rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                          via {activeBroadcastProgress.lastSentBy.name}
+                        </span>
+                      )}
                     </p>
                   )}
                   {activeBroadcastProgress.lastSkipReason && (
@@ -4682,10 +4691,10 @@ export default function ChatPage() {
                         {broadcastInstanceIds.size > 1 && (
                           <div className="mt-2">
                             <label className="mb-1 block text-[11px] font-medium text-gray-600 dark:text-gray-400">
-                              Contatos por instância (rotação por bloco)
+                              Contatos por instância antes de trocar
                             </label>
                             <p className="mb-1 text-[10px] text-gray-500 dark:text-gray-500">
-                              Ex: 5 → instância A envia para 5 contatos, depois instância B envia para 5, e assim por diante.
+                              Com {broadcastInstanceIds.size} instâncias e <span className="font-semibold text-[#8CD955]">{broadcastRotationSize}</span> por bloco: A→{broadcastRotationSize}× · B→{broadcastRotationSize}× · ... · volta para A após {broadcastInstanceIds.size * broadcastRotationSize} contatos.
                             </p>
                             <input
                               type="number"
@@ -4697,6 +4706,9 @@ export default function ChatPage() {
                               }
                               className="w-full rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-[#8CD955]"
                             />
+                            <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-500">
+                              Use <strong>1</strong> para alternar a cada contato (A→B→C→...). Padrão.
+                            </p>
                           </div>
                         )}
                       </div>
@@ -5169,6 +5181,11 @@ export default function ChatPage() {
                               {isActive && activeBroadcastProgress?.lastSent ? (
                                 <p className="mb-2 truncate text-[11px] text-blue-600 dark:text-blue-400">
                                   Último envio: {activeBroadcastProgress.lastSent.name || activeBroadcastProgress.lastSent.phone}
+                                  {activeBroadcastProgress.lastSentBy?.name ? (
+                                    <span className="ml-1 inline-flex items-center rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                                      via {activeBroadcastProgress.lastSentBy.name}
+                                    </span>
+                                  ) : null}
                                 </p>
                               ) : null}
                               <div className="flex flex-wrap gap-1.5">

@@ -3455,6 +3455,14 @@ export default function AdminLeadTransferPage() {
       if (res.ok && json.success) {
         const count = json?.data?.count ?? selectedLeadIds.size;
         const newTransferLogId = json?.data?.transfer_log_id ?? null;
+        const apiMessage = typeof json?.data?.message === 'string' ? json.data.message.trim() : '';
+        if (count === 0 && !newTransferLogId) {
+          showToast(apiMessage || 'Nenhum lead transferido: todos já estão com o consultor de destino no CRM.', 'info');
+          setShowConfirmModal(false);
+          setConfirmAcknowledged(false);
+          setTransferring(false);
+          return;
+        }
         const requestIdToApprove = transferFromSolicitationRequestIdRef.current;
         if (requestIdToApprove && destinoModo !== 'estoque_gerente') {
           const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === (sourceEmail ?? '').trim().toLowerCase());
@@ -5601,6 +5609,8 @@ export default function AdminLeadTransferPage() {
       const perLogMoved: { logId: string; count: number }[] = [];
       /** Pacotes resolvidos que devolveram 409 (CRM não moveu) — seguimos com os restantes. */
       const skipped409Logs: { logId: string; label: string; n: number }[] = [];
+      /** Pacotes em que titular (origem do repasse) já é o consultor destino — ignorados. */
+      const skippedSameDestLogs: { logId: string; label: string; n: number }[] = [];
       /** IDs enviados ao CRM com resposta de sucesso (exclui pacotes 409). */
       const crmSuccessLeadIds: string[] = [];
       let totalMoved = 0;
@@ -5665,10 +5675,24 @@ export default function AdminLeadTransferPage() {
           showToast('Muitas tentativas no CRM. Tente novamente em alguns segundos.', 'error');
           return;
         }
+        if (json?.data?.skipped_same_origin_dest === true) {
+          const donor = (row.source_consultant_email ?? '').trim();
+          const titular = (row.target_consultant_email ?? '').trim();
+          const label = `${row.transfer_type ?? 'TF'} ${String(logId).slice(0, 8)}… · titular ${titular || '—'} (doador ${donor || '—'})`;
+          skippedSameDestLogs.push({ logId: normalizeTransferLogId(logId), label, n: idsForLog.length });
+          continue;
+        }
         if (!res.ok || !json.success) {
           if (res.status === 400) {
             const rawMessage = String(json?.error ?? json?.message ?? '').trim();
             const lower = rawMessage.toLowerCase();
+            if (lower.includes('origem') && lower.includes('destino') && lower.includes('diferentes')) {
+              const donor = (row.source_consultant_email ?? '').trim();
+              const titular = (row.target_consultant_email ?? '').trim();
+              const label = `${row.transfer_type ?? 'TF'} ${String(logId).slice(0, 8)}… · titular ${titular || '—'} (doador ${donor || '—'})`;
+              skippedSameDestLogs.push({ logId: normalizeTransferLogId(logId), label, n: idsForLog.length });
+              continue;
+            }
             const emailHint =
               lower.includes('email') ||
               (lower.includes('consultor') && lower.includes('email')) ||
@@ -5717,11 +5741,21 @@ export default function AdminLeadTransferPage() {
       if (totalMoved === 0) {
         setMoveLeadsBlockedByRateLimit(false);
         setMoveLeadsCrmDesyncPending(false);
-        if (skipped409Logs.length > 0) {
-          const detail = skipped409Logs.map((s) => `${s.label} (${s.n} lead(s))`).join(' · ');
+        if (skipped409Logs.length > 0 || skippedSameDestLogs.length > 0) {
+          const parts: string[] = [];
+          if (skippedSameDestLogs.length > 0) {
+            parts.push(
+              `${skippedSameDestLogs.length} pacote(s) ignorado(s) (titular já é o destino): ${skippedSameDestLogs.map((s) => `${s.label} (${s.n})`).join(' · ')}`
+            );
+          }
+          if (skipped409Logs.length > 0) {
+            parts.push(
+              `${skipped409Logs.length} pacote(s) com 409 (dessincronia): ${skipped409Logs.map((s) => `${s.label} (${s.n})`).join(' · ')}`
+            );
+          }
           showToast(
-            `Nenhum repasse concluído no CRM. ${skipped409Logs.length} transferência(s) resolvida(s) ignorada(s) por 409 (dessincronia): ${detail}. Corrija o titular no CRM ou use «Forçar registro» por pacote.`,
-            'error'
+            `Nenhum repasse concluído no CRM. ${parts.join('. ')}${skipped409Logs.length > 0 ? ' Corrija o titular no CRM ou use «Forçar registro» por pacote.' : ''}`,
+            skipped409Logs.length > 0 ? 'error' : 'info'
           );
         }
         return;
@@ -5770,6 +5804,12 @@ export default function AdminLeadTransferPage() {
                 skipped_409_labels: skipped409Logs.map((s) => s.label),
               }
             : {}),
+          ...(skippedSameDestLogs.length > 0
+            ? {
+                skipped_same_dest_log_ids: skippedSameDestLogs.map((s) => s.logId),
+                skipped_same_dest_labels: skippedSameDestLogs.map((s) => s.label),
+              }
+            : {}),
         };
         try {
           const approveRes = await fetch(`/api/admin/crm/lead-requests/${moveLeadsSelectedRequest.id}`, {
@@ -5789,12 +5829,18 @@ export default function AdminLeadTransferPage() {
           });
           const approveJson = await approveRes.json();
           if (approveRes.ok && approveJson.success) {
-            const skipApprove =
+            const skipApprove = [
+              skippedSameDestLogs.length > 0
+                ? `${skippedSameDestLogs.length} pacote(s) ignorados (titular = destino): ${skippedSameDestLogs.map((s) => s.label).join(' · ')}`
+                : '',
               skipped409Logs.length > 0
-                ? ` ${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}.`
-                : '';
+                ? `${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('. ');
             showToast(
-              `Transferência concluída e solicitação aprovada. ${totalMoved} lead(s) repassado(s).${skipApprove}`,
+              `Transferência concluída e solicitação aprovada. ${totalMoved} lead(s) repassado(s).${skipApprove ? ` ${skipApprove}.` : ''}`,
               'success'
             );
             loadLeadRequests();
@@ -5823,10 +5869,15 @@ export default function AdminLeadTransferPage() {
         );
       } else {
         const baseMsg = lastSuccessJson?.data?.message ?? `${totalMoved} lead(s) repassado(s).`;
-        const skipMsg =
+        const skipParts = [
+          skippedSameDestLogs.length > 0
+            ? `${skippedSameDestLogs.length} pacote(s) ignorados (titular = destino): ${skippedSameDestLogs.map((s) => s.label).join(' · ')}`
+            : '',
           skipped409Logs.length > 0
-            ? ` ${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}.`
-            : '';
+            ? `${skipped409Logs.length} pacote(s) ignorados (409): ${skipped409Logs.map((s) => s.label).join(' · ')}`
+            : '',
+        ].filter(Boolean);
+        const skipMsg = skipParts.length > 0 ? ` ${skipParts.join('. ')}.` : '';
         showToast(baseMsg + skipMsg, 'success');
       }
 

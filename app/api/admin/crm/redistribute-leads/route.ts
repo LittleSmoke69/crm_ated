@@ -49,16 +49,31 @@ const bodySchema = z
   .refine(
     (data) => !!(data.to_gerente_stock_gerente_id || (data.target_consultant_email && String(data.target_consultant_email).trim())),
     { message: 'Informe o consultor destino ou o envio para estoque do gerente.', path: ['target_consultant_email'] }
-  )
-  .refine(
-    (data) => {
-      if (data.to_gerente_stock_gerente_id) return true;
-      return data.source_consultant_email.toLowerCase() !== (data.target_consultant_email ?? '').trim().toLowerCase();
-    },
-    { message: 'Consultor origem e destino devem ser diferentes.', path: ['target_consultant_email'] }
   );
 
 const LOG_PREFIX = '[lead-transfer][redistribute-leads]';
+
+async function markSourceEntriesRepassadoWhenSkipped(
+  transferLogId: string,
+  bancaId: string,
+  leadsIds: Array<number | string>
+): Promise<void> {
+  const leadIdStrings = leadsIds.map((id) => String(id).trim()).filter(Boolean);
+  if (!transferLogId.trim() || !bancaId.trim() || leadIdStrings.length === 0) return;
+  const { error } = await supabaseServiceRole
+    .from('admin_lead_transfer_entries')
+    .update({
+      resolution_status: 'repassado',
+      resolved_at: new Date().toISOString(),
+    })
+    .eq('transfer_log_id', transferLogId.trim())
+    .eq('banca_id', bancaId.trim())
+    .in('lead_id', leadIdStrings)
+    .eq('resolution_status', 'disponivel_retransferencia');
+  if (error) {
+    console.warn(`${LOG_PREFIX} markSourceEntriesRepassadoWhenSkipped:`, error.message);
+  }
+}
 
 function isCrmDesyncDbOnlyRecovery(filters_snapshot: Record<string, unknown> | null | undefined): boolean {
   if (filters_snapshot == null || typeof filters_snapshot !== 'object') return false;
@@ -193,8 +208,28 @@ export async function POST(req: NextRequest) {
     const target_consultant_email = (parsed.data.target_consultant_email ?? '').trim();
     const filters_snapshot = parsed.data.filters_snapshot ?? null;
     const transferKind: TransferKind = 'standard';
+    const sourceLow = parsed.data.source_consultant_email.trim().toLowerCase();
+    const targetLow = target_consultant_email.toLowerCase();
 
-    if (parsed.data.source_consultant_email.trim().toLowerCase() === target_consultant_email.toLowerCase()) {
+    if (sourceLow === targetLow && targetLow.includes('@')) {
+      const sourceLogId = parsed.data.source_transfer_log_id?.trim() ?? '';
+      if (sourceLogId && parsed.data.leads_ids.length > 0) {
+        await markSourceEntriesRepassadoWhenSkipped(sourceLogId, ctx.bancaId, parsed.data.leads_ids);
+        const n = parsed.data.leads_ids.length;
+        const msg = `${n} lead(s) ignorado(s): origem e destino são o mesmo consultor (${target_consultant_email}). Nenhum repasse no CRM foi necessário.`;
+        console.log(`${LOG_PREFIX} ${msg} log_origem=${sourceLogId}`);
+        return successResponse(
+          {
+            count: 0,
+            crm_count: 0,
+            transfer_log_id: null,
+            skipped_same_origin_dest: true,
+            message: msg,
+            transfer_kind: transferKind,
+          },
+          msg
+        );
+      }
       return errorResponse('Consultor origem e destino devem ser diferentes.', 400);
     }
 
