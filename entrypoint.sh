@@ -20,5 +20,11 @@ else
   echo "[entrypoint] Instância worker — cron desabilitado."
 fi
 
+echo "[entrypoint] Iniciando webhook queue worker (concorrência=${WEBHOOK_WORKER_CONCURRENCY:-8})..."
+REDIS_QUEUE_URL="${REDIS_QUEUE_URL:-redis://:redis123@redis_shared:6379}" \
+WEBHOOK_WORKER_CONCURRENCY="${WEBHOOK_WORKER_CONCURRENCY:-8}" \
+  npm run webhook:worker >> /var/log/zaploto-webhook-worker.log 2>&1 &
+echo "[entrypoint] Webhook worker iniciado (PID=$!)"
+
 echo "[entrypoint] Iniciando Next.js na porta ${PORT:-3000}..."
 exec npm start -- -p ${PORT:-3000}
