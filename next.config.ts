@@ -1,6 +1,9 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Skip type checking and linting during Docker build (handled in dev/CI)
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
   images: { unoptimized: true },
   // Raiz absoluta do Turbopack (process.cwd() = diretório do projeto ao rodar build)
   turbopack: { root: process.cwd() },

@@ -4,11 +4,11 @@ WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
-# Copy source and build
+# Copy source and build (cache Next.js compilation between builds)
 COPY . .
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache npm run build
 
 # ─── Runtime ───────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
