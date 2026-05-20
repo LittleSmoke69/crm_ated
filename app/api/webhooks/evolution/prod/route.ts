@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     await queue.add('process-event', { payload, zaplotoId }, {
       // jobId baseado em messageId para deduplicação natural na fila
       jobId: payload?.data?.key?.id
-        ? `${payload?.instance ?? payload?.instanceName ?? 'unknown'}:${payload.data.key.id}`
+        ? `${(payload?.instance ?? payload?.instanceName ?? 'unknown').replace(/:/g, '_')}__${payload.data.key.id.replace(/:/g, '_')}`
         : undefined,
     });
 
