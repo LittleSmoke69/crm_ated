@@ -23,10 +23,10 @@ services:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=2048"
       PORT: 3000
-      CRON_ENABLED: "true"
+      CRON_ENABLED: "false"
       SITE_URL: "https://zaploto.com"
       INTERNAL_API_BASE_URL: "http://localhost:3000"
-      WEBHOOK_WORKER_CONCURRENCY: "4"
+      WEBHOOK_WORKER_CONCURRENCY: "0"
     networks:
       - ZAPLOTOV3
     volumes:
@@ -56,7 +56,7 @@ services:
       PORT: 3001
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3001"
-      WEBHOOK_WORKER_CONCURRENCY: "4"
+      WEBHOOK_WORKER_CONCURRENCY: "0"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -84,7 +84,7 @@ services:
       PORT: 3002
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3002"
-      WEBHOOK_WORKER_CONCURRENCY: "4"
+      WEBHOOK_WORKER_CONCURRENCY: "0"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -112,7 +112,7 @@ services:
       PORT: 3003
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3003"
-      WEBHOOK_WORKER_CONCURRENCY: "4"
+      WEBHOOK_WORKER_CONCURRENCY: "0"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -121,6 +121,63 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  cron:
+    image: zaplotov3-app
+    container_name: zaplotov3-cron
+    restart: unless-stopped
+    cpus: "1"
+    mem_limit: 512m
+    env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      NODE_ENV: production
+      CRON_ONLY: "true"
+      WEBHOOK_WORKER_CONCURRENCY: "0"
+    networks:
+      - ZAPLOTOV3
+    volumes:
+      - cron_logs:/var/log
+
+  worker1:
+    image: zaplotov3-app
+    container_name: zaplotov3-worker1
+    restart: unless-stopped
+    cpus: "1"
+    mem_limit: 512m
+    env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      NODE_ENV: production
+      WORKER_ONLY: "true"
+      WEBHOOK_WORKER_CONCURRENCY: "2"
+    networks:
+      - ZAPLOTOV3
+    volumes:
+      - cron_logs:/var/log
+
+  worker2:
+    image: zaplotov3-app
+    container_name: zaplotov3-worker2
+    restart: unless-stopped
+    cpus: "1"
+    mem_limit: 512m
+    env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      NODE_ENV: production
+      WORKER_ONLY: "true"
+      WEBHOOK_WORKER_CONCURRENCY: "2"
+    networks:
+      - ZAPLOTOV3
+    volumes:
+      - cron_logs:/var/log
 
 volumes:
   cron_logs:
