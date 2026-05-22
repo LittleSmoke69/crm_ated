@@ -8,6 +8,26 @@ import { calculateLeadTemperature } from '@/lib/utils/temperature';
 import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
 import { COMBO_AVULSO_EMAIL_MARKER, isComboAvulsoEmail } from '@/lib/crm/combo-avulso';
 
+// Cache em memória com TTL para evitar picos de CPU em consultas repetidas
+const leadsCache = new Map<string, { data: any; expiresAt: number }>();
+const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutos
+
+function getCached(key: string): any | null {
+  const entry = leadsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { leadsCache.delete(key); return null; }
+  return entry.data;
+}
+
+function setCache(key: string, data: any) {
+  leadsCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+  // Limpa entradas expiradas se cache crescer demais
+  if (leadsCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of leadsCache) { if (now > v.expiresAt) leadsCache.delete(k); }
+  }
+}
+
 /**
  * GET /api/crm/leads - Busca leads para o Kanban
  * Suporta sincronização entre API externa e Banco de Dados local
@@ -192,6 +212,14 @@ export async function GET(req: NextRequest) {
       console.log('[CRM Leads] Query params:', { from: fromParam, to: toParam, only_responded: onlyResponded, banca_index: bancaIndexParam, page: pageParam, consultant: targetProfile.email });
       console.log('[CRM Leads] Bancas a consultar:', listBancas.length);
 
+      // Cache key baseada nos parâmetros relevantes
+      const cacheKey = `leads:${targetUserId}:${listBancas.map(b => b.id).join(',')}:${fromParam ?? ''}:${toParam ?? ''}:${onlyResponded}:${bancaIndexParam ?? ''}:${pageParam ?? ''}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        console.log('[CRM Leads] Cache hit — retornando resultado em cache');
+        return cached;
+      }
+
       let allLeads: any[] = [];
       let responseMeta: { next: { banca_index: number; page: number } | null; total_bancas?: number; current_banca_index?: number; current_page?: number } | undefined;
 
@@ -218,49 +246,52 @@ export async function GET(req: NextRequest) {
         }
         // Aplica filtros e formatação a essa fatia (continuará abaixo no fluxo comum)
       } else if (onlyResponded) {
-        // Primeira busca: apenas primeira página de cada banca, depois filtrar só respondidos
-        for (let i = 0; i < listBancas.length; i++) {
-          const banca = listBancas[i];
-          try {
-            const { leads } = await fetchOneBancaPage(banca, 1);
-            allLeads.push(...leads);
-          } catch (err) {
-            console.warn(`[CRM Leads] only_responded: falha banca ${i}:`, (err as Error)?.message);
-          }
-        }
+        // Primeira busca: todas as bancas em PARALELO, apenas página 1
+        const results = await Promise.allSettled(
+          listBancas.map(banca => fetchOneBancaPage(banca, 1))
+        );
+        results.forEach((result, i) => {
+          if (result.status === 'fulfilled') allLeads.push(...result.value.leads);
+          else console.warn(`[CRM Leads] only_responded: falha banca ${i}:`, result.reason?.message);
+        });
         if (allLeads.length === 0) {
           console.log('[CRM Leads] only_responded: nenhum lead na primeira página das bancas.');
           return successResponse([], { meta: { next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null, total_bancas: listBancas.length } });
         }
         // Filtros e formatação abaixo; depois filtrar por has_interaction e retornar com meta.next
       } else {
-        // Comportamento original: todas as bancas, todas as páginas
-        for (const banca of listBancas) {
+        // Todas as bancas em PARALELO, todas as páginas por banca
+        async function fetchAllPagesForBanca(banca: BancaParaFetch): Promise<any[]> {
           const cleanBancaUrl = normalizeBancaUrl(banca.url);
           const bancaLabel = `${banca.name ?? banca.id} (${banca.id})`;
           if (!cleanBancaUrl) {
             console.warn(`[CRM Leads] Banca ignorada (URL vazia/inválida): ${bancaLabel}`);
-            continue;
+            return [];
           }
+          const leads: any[] = [];
           let currentPage = 1;
           let hasMore = true;
-          const maxPages = 1000;
-          let bancaTotal = 0;
-          while (hasMore && currentPage <= maxPages) {
+          while (hasMore && currentPage <= 1000) {
             try {
-              const { leads, hasMore: more } = await fetchOneBancaPage(banca, currentPage);
-              for (const lead of leads) allLeads.push(lead);
-              bancaTotal += leads.length;
+              const { leads: page, hasMore: more } = await fetchOneBancaPage(banca, currentPage);
+              leads.push(...page);
               hasMore = more;
               currentPage++;
             } catch (err) {
               console.error(`[CRM Leads] Banca ${bancaLabel} | Erro:`, (err as Error)?.message);
-              if (allLeads.length > 0) break;
-              throw err;
+              break;
             }
           }
-          console.log(`[CRM Leads] Banca ${bancaLabel} | carregada: ${bancaTotal} leads | total: ${allLeads.length}`);
+          console.log(`[CRM Leads] Banca ${bancaLabel} | carregada: ${leads.length} leads`);
+          return leads;
         }
+
+        const bancaResults = await Promise.allSettled(listBancas.map(fetchAllPagesForBanca));
+        bancaResults.forEach((result, i) => {
+          if (result.status === 'fulfilled') allLeads.push(...result.value);
+          else console.error(`[CRM Leads] Banca ${i} falhou:`, result.reason?.message);
+        });
+        console.log(`[CRM Leads] Total leads carregados: ${allLeads.length}`);
       }
 
       if (allLeads.length === 0 && !isChunkRequest && !onlyResponded) {
@@ -559,17 +590,20 @@ export async function GET(req: NextRequest) {
         const respondedOnly = formattedLeads.filter(
           (l: any) => l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1
         );
-        // Cliente carrega em background a partir da página 1 (não da 2), para não pular os leads da primeira página
         responseMeta = {
           next: listBancas.length > 0 ? { banca_index: 0, page: 1 } : null,
           total_bancas: listBancas.length,
         };
         console.log(`[CRM Leads] 200 OK (only_responded): ${respondedOnly.length} leads, meta.next para background`);
-        return successResponse(respondedOnly, { meta: responseMeta });
+        const resp = successResponse(respondedOnly, { meta: responseMeta });
+        setCache(cacheKey, resp);
+        return resp;
       }
 
       console.log(`[CRM Leads] 200 OK: ${formattedLeads.length} leads`);
-      return successResponse(formattedLeads, responseMeta ? { meta: responseMeta } : undefined);
+      const finalResp = successResponse(formattedLeads, responseMeta ? { meta: responseMeta } : undefined);
+      setCache(cacheKey, finalResp);
+      return finalResp;
     } catch (syncError: any) {
       console.error('[CRM Leads] Erro ao buscar dados da API externa:', syncError?.name, syncError?.message, syncError?.cause);
       console.log('[CRM Leads] --- Fim da requisição: 400 (erro API externa) ---');
