@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
-import { getSharedWebhookQueue } from '@/lib/queue/webhook-queue';
+import { publishWebhookEvent } from '@/lib/queue/rabbitmq';
 
 /** Evita payloads enormes (memória + parse) sem tocar o banco. */
 const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
@@ -36,14 +36,8 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    // Enfileira no Redis — operação < 2ms, nunca bloqueia
-    const queue = getSharedWebhookQueue();
-    await queue.add('process-event', { payload, zaplotoId }, {
-      // jobId baseado em messageId para deduplicação natural na fila
-      jobId: payload?.data?.key?.id
-        ? `${(payload?.instance ?? payload?.instanceName ?? 'unknown').replace(/:/g, '_')}__${payload.data.key.id.replace(/:/g, '_')}`
-        : undefined,
-    });
+    // Publica no RabbitMQ — push-based, < 2ms, nunca bloqueia
+    await publishWebhookEvent(payload, zaplotoId);
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -68,7 +62,7 @@ export async function GET() {
     JSON.stringify({
       ok: true,
       env: 'prod',
-      mode: 'queue',
+      mode: 'rabbitmq',
       now: new Date().toISOString(),
       message: 'Webhook Evolution PROD (modo fila) está ativo',
     }),

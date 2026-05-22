@@ -19,6 +19,7 @@
     "cron:list": "tsx scripts/linux/list-scheduled-jobs.ts",
     "cron:run": "tsx scripts/linux/run-scheduled-job.ts",
     "webhook:worker": "tsx scripts/webhook-queue-worker.ts",
+    "rabbitmq:worker": "tsx scripts/rabbitmq-worker.ts",
     "test:resolve-expired": "tsx scripts/test-resolve-expired.ts",
     "test:wa-audio-official": "tsx scripts/test-whatsapp-official-audio.ts",
     "run:netlify-resolve-expired": "tsx scripts/run-netlify-resolve-expired.ts"

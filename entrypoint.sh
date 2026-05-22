@@ -5,7 +5,17 @@ APP_DIR="/app"
 NPM_BIN="$(which npm)"
 LOG_FILE="/var/log/zaploto-cron.log"
 
-# Modo worker dedicado: roda só o worker, sem Next.js
+# Modo worker RabbitMQ dedicado: push-based, zero polling
+if [ "${RABBITMQ_WORKER_ONLY}" = "true" ]; then
+  echo "[entrypoint] Modo RABBITMQ_WORKER_ONLY — iniciando worker (prefetch=${RABBITMQ_WORKER_PREFETCH:-10})..."
+  exec env \
+    RABBITMQ_URL="${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672}" \
+    RABBITMQ_WORKER_PREFETCH="${RABBITMQ_WORKER_PREFETCH:-10}" \
+    RABBITMQ_MAX_RETRIES="${RABBITMQ_MAX_RETRIES:-3}" \
+    npm run rabbitmq:worker
+fi
+
+# Modo worker BullMQ dedicado (legado): roda só o worker, sem Next.js
 if [ "${WORKER_ONLY}" = "true" ]; then
   echo "[entrypoint] Modo WORKER_ONLY — iniciando worker (concorrência=${WEBHOOK_WORKER_CONCURRENCY:-2})..."
   exec env \

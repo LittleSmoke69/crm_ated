@@ -4,6 +4,30 @@ networks:
     external: true
 
 services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    restart: unless-stopped
+    cpus: "1"
+    mem_limit: 512m
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - ZAPLOTOV3
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
   app1:
     build:
       context: .
@@ -27,6 +51,7 @@ services:
       SITE_URL: "https://zaploto.com"
       INTERNAL_API_BASE_URL: "http://localhost:3000"
       WEBHOOK_WORKER_CONCURRENCY: "0"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
     networks:
       - ZAPLOTOV3
     volumes:
@@ -57,6 +82,7 @@ services:
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3001"
       WEBHOOK_WORKER_CONCURRENCY: "0"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -85,6 +111,7 @@ services:
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3002"
       WEBHOOK_WORKER_CONCURRENCY: "0"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -113,6 +140,7 @@ services:
       CRON_ENABLED: "false"
       INTERNAL_API_BASE_URL: "http://localhost:3003"
       WEBHOOK_WORKER_CONCURRENCY: "0"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
     networks:
       - ZAPLOTOV3
     healthcheck:
@@ -153,12 +181,17 @@ services:
       - 1.1.1.1
     environment:
       NODE_ENV: production
-      WORKER_ONLY: "true"
-      WEBHOOK_WORKER_CONCURRENCY: "2"
+      RABBITMQ_WORKER_ONLY: "true"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      RABBITMQ_WORKER_PREFETCH: "10"
+      RABBITMQ_MAX_RETRIES: "3"
     networks:
       - ZAPLOTOV3
     volumes:
       - cron_logs:/var/log
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   worker2:
     image: zaplotov3-app
@@ -172,12 +205,18 @@ services:
       - 1.1.1.1
     environment:
       NODE_ENV: production
-      WORKER_ONLY: "true"
-      WEBHOOK_WORKER_CONCURRENCY: "2"
+      RABBITMQ_WORKER_ONLY: "true"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      RABBITMQ_WORKER_PREFETCH: "10"
+      RABBITMQ_MAX_RETRIES: "3"
     networks:
       - ZAPLOTOV3
     volumes:
       - cron_logs:/var/log
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
 volumes:
   cron_logs:
+  rabbitmq_data:
