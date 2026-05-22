@@ -31,14 +31,12 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-      # 60% da memória disponível como high-water mark (default é 40%).
-      # Acima disso, broker pausa publishers — protege contra OOM.
-      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: "0.6"
     ports:
       - "5672:5672"
       - "15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     networks:
       - ZAPLOTOV3
     healthcheck:
