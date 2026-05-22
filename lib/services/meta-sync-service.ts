@@ -37,6 +37,7 @@ import {
   resolveExchangeRatesForCurrencies,
   type ExchangeRateSnapshot,
 } from '@/lib/services/exchange-rate-service';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
@@ -180,6 +181,7 @@ export type MetaBillingSummary = {
 };
 
 function logMetaReturn(context: string, data: Record<string, unknown>): void {
+  if (!isMetaVerboseLogEnabled()) return;
   console.log(META_API_LOG, context, data);
 }
 
@@ -1527,23 +1529,16 @@ export async function getMetaInsightsAggregated(
   const { data, error } = await query;
   if (error || !data?.length) return null;
 
-  const firstInsight = data[0] as Record<string, unknown>;
-  console.log('[Meta Ads] getMetaInsightsAggregated payload:', {
-    bancaId,
-    dateFrom: dateFrom ?? null,
-    dateTo: dateTo ?? null,
-    activeOnly,
-    rows: data.length,
-    fields: Object.keys(firstInsight ?? {}),
-    sample: {
-      campaign_id: firstInsight?.campaign_id ?? null,
-      reach: firstInsight?.reach ?? null,
-      impressions: firstInsight?.impressions ?? null,
-      clicks: firstInsight?.clicks ?? null,
-      leads: firstInsight?.leads ?? null,
-      spend: firstInsight?.spend ?? null,
-    },
-  });
+  if (isMetaVerboseLogEnabled()) {
+    const firstInsight = data[0] as Record<string, unknown>;
+    console.log('[Meta Ads] getMetaInsightsAggregated', {
+      bancaId,
+      dateFrom: dateFrom ?? null,
+      dateTo: dateTo ?? null,
+      activeOnly,
+      rows: data.length,
+    });
+  }
 
   const aggregated = data.reduce(
     (acc, row) => ({
@@ -1717,33 +1712,16 @@ export async function getMetaCampaignsWithInsights(
     });
   }
 
-  const firstCampaignInsight = insights[0] as Record<string, unknown>;
-  const firstRawActions = Array.isArray(firstCampaignInsight?.raw_actions)
-    ? (firstCampaignInsight.raw_actions as Array<{ action_type?: string; value?: string }>)
-    : [];
-  console.log('[Meta Ads] getMetaCampaignsWithInsights payload:', {
-    bancaId,
-    dateFrom: dateFrom ?? null,
-    dateTo: dateTo ?? null,
-    activeOnly,
-    campaignCount: campaigns.length,
-    insightsRows: insights.length,
-    fields: Object.keys(firstCampaignInsight ?? {}),
-    sample: {
-      campaign_id: firstCampaignInsight?.campaign_id ?? null,
-      campaign_name: firstCampaignInsight?.campaign_name ?? null,
-      reach: firstCampaignInsight?.reach ?? null,
-      impressions: firstCampaignInsight?.impressions ?? null,
-      clicks: firstCampaignInsight?.clicks ?? null,
-      spend: firstCampaignInsight?.spend ?? null,
-      leads: firstCampaignInsight?.leads ?? null,
-      raw_actions_count: firstRawActions.length,
-      raw_action_types: firstRawActions
-        .map((action) => action?.action_type)
-        .filter((type): type is string => Boolean(type))
-        .slice(0, 15),
-    },
-  });
+  if (isMetaVerboseLogEnabled()) {
+    console.log('[Meta Ads] getMetaCampaignsWithInsights', {
+      bancaId,
+      dateFrom: dateFrom ?? null,
+      dateTo: dateTo ?? null,
+      activeOnly,
+      campaignCount: campaigns.length,
+      insightsRows: insights.length,
+    });
+  }
 
   const metricsByCampaign = new Map<string, { reach: number; impressions: number; clicks: number; spend: number; leads: number; results: number }>();
   insights.forEach((row: { campaign_id: string; campaign_name?: string | null; reach?: number; impressions?: number; clicks?: number; spend?: number; leads?: number; raw_actions?: Array<{ action_type: string; value: string }> | null }) => {

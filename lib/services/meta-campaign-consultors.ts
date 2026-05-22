@@ -6,6 +6,7 @@ import {
   normalizeBancaUrlForCrmMatch,
   type CrmBancaLite,
 } from '@/lib/services/gestor-names-by-crm-banca';
+import { isMetaVerboseLogEnabled, metaVerboseInfo } from '@/lib/utils/meta-debug-log';
 import {
   listRedirectCampaignConsultorAssignments,
   listRedirectProjectLinkedConsultorAssignments,
@@ -29,12 +30,9 @@ const ADS_ATTRIBUTION_PROFILE_STATUSES = [
 ] as const;
 const ADS_ATTRIBUTION_STATUS_SET = new Set<string>(ADS_ATTRIBUTION_PROFILE_STATUSES);
 
-/** Logs detalhados da montagem do dropdown Ads (user_bancas + raízes + BFS enroller). Defina LOG_META_ADS_HIERARCHY=1 no .env */
-const LOG_META_ADS_HIERARCHY = process.env.LOG_META_ADS_HIERARCHY === '1';
-
+/** Logs detalhados do dropdown Ads — LOG_META_DEBUG=1 ou LOG_META_ADS_HIERARCHY=1 */
 function logAdsHierarchy(event: string, payload: Record<string, unknown>) {
-  if (!LOG_META_ADS_HIERARCHY) return;
-  console.info(`[meta-ads-hierarchy] ${event}`, JSON.stringify(payload));
+  metaVerboseInfo(`[meta-ads-hierarchy] ${event}`, payload);
 }
 
 interface ConsultantAggregatedMetrics {
@@ -169,7 +167,7 @@ async function listConsultorProfilesForAdsFromUserIds(
   }
 
   const rows = consultors ?? [];
-  if (LOG_META_ADS_HIERARCHY && userIds.length > 0) {
+  if (isMetaVerboseLogEnabled() && userIds.length > 0) {
     const statusCounts: Record<string, number> = {};
     for (const r of rows as Array<{ status?: string | null }>) {
       const s = String(r.status ?? 'unknown').toLowerCase();

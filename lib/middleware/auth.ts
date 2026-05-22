@@ -1,5 +1,9 @@
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  isLegacyUserIdAuthAllowed,
+  readSessionUserIdFromRequest,
+} from '@/lib/server/session-token';
 import { ApiHttpError } from '@/lib/utils/response';
 import { UserProfile, getUserProfile } from './permissions';
 
@@ -15,71 +19,57 @@ export interface AuthUserWithProfile extends AuthUser {
  * Middleware para autenticação via headers ou query params
  * Prioriza headers para evitar problemas com leitura do body
  */
+function readClientUserIdHint(req: NextRequest): string | null {
+  const userIdHeader = req.headers.get('x-user-id') || req.headers.get('X-User-Id');
+  if (userIdHeader?.trim()) return userIdHeader.trim();
+
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (bearer && !bearer.includes('.')) return bearer;
+  }
+
+  const userIdCookie = req.cookies.get('user_id')?.value?.trim();
+  if (userIdCookie) return userIdCookie;
+
+  return null;
+}
+
+/**
+ * Autenticação: prioriza cookie de sessão assinado (`zaploto_session`).
+ * Header/cookie `user_id` só é aceito se bater com a sessão (anti-spoof).
+ * Modo legacy (sem sessão) apenas em dev com ALLOW_LEGACY_USER_ID_AUTH=true.
+ */
 export async function authenticateRequest(req: NextRequest): Promise<AuthUser | null> {
   try {
-    // Tenta todas as variações possíveis do header
-    const headerVariations = [
-      'x-user-id',
-      'X-User-Id',
-      'X-USER-ID',
-      'x-userId',
-      'X-UserId',
-    ];
-    
-    // Verifica variações do header (sem log)
-    for (const headerName of headerVariations) {
-      const value = req.headers.get(headerName);
-      if (value) {
-        // Header encontrado, não precisa verificar os outros
-        break;
+    const sessionUserId = await readSessionUserIdFromRequest(req);
+    const clientHint = readClientUserIdHint(req);
+
+    if (sessionUserId) {
+      if (clientHint && clientHint !== sessionUserId) {
+        return null;
       }
+      return { userId: sessionUserId };
     }
 
-    // Tenta pegar do header X-User-Id (prioridade 1 - RECOMENDADO)
-    // Tenta tanto lowercase quanto uppercase
-    const userIdHeader = req.headers.get('x-user-id') || req.headers.get('X-User-Id');
-    if (userIdHeader?.trim()) {
-      return { userId: userIdHeader.trim() };
-    }
-
-    // Tenta pegar do header Authorization (prioridade 2)
-    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (authHeader?.startsWith('Bearer ')) {
-      const userId = authHeader.replace('Bearer ', '').trim();
-      if (userId) {
-        return { userId };
+    if (isLegacyUserIdAuthAllowed()) {
+      if (clientHint) return { userId: clientHint };
+      const userIdQuery = req.nextUrl.searchParams.get('userId')?.trim();
+      if (userIdQuery) return { userId: userIdQuery };
+      try {
+        const clonedReq = req.clone();
+        const body = await clonedReq.json().catch(() => null);
+        if (body?.userId) return { userId: String(body.userId).trim() };
+      } catch {
+        // body não JSON
       }
-    }
-
-    // Tenta pegar da query string (prioridade 3)
-    const userIdQuery = req.nextUrl.searchParams.get('userId');
-    if (userIdQuery?.trim()) {
-      return { userId: userIdQuery.trim() };
-    }
-
-    // Tenta pegar do cookie (prioridade 4) - fallback se header não funcionar
-    const cookies = req.cookies;
-    const userIdCookie = cookies.get('user_id')?.value;
-    if (userIdCookie?.trim()) {
-      return { userId: userIdCookie.trim() };
-    }
-
-    // Tenta pegar do body (para POST/PUT/PATCH) - última opção
-    // Só tenta se não encontrou nos headers/query
-    try {
-      const clonedReq = req.clone();
-      const body = await clonedReq.json().catch(() => null);
-      if (body?.userId) {
-        return { userId: String(body.userId).trim() };
-      }
-    } catch (error: any) {
-      // Ignora erro de parsing - pode ser que o body não seja JSON válido
     }
 
     return null;
-  } catch (error: any) {
-    console.error('[authenticateRequest] Erro inesperado:', error.message);
-    console.error('[authenticateRequest] Stack:', error.stack);
+  } catch (error: unknown) {
+    const e = error as { message?: string; stack?: string };
+    console.error('[authenticateRequest] Erro inesperado:', e?.message);
+    console.error('[authenticateRequest] Stack:', e?.stack);
     return null;
   }
 }

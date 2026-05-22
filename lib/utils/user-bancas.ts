@@ -1,6 +1,7 @@
 import { getUserProfile } from '@/lib/middleware/permissions';
 import { getHierarchyPath } from './hierarchy';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { metaVerboseInfo } from '@/lib/utils/meta-debug-log';
 
 export type BancaInfo = { id?: string; name: string; url: string | null };
 
@@ -28,9 +29,6 @@ export function parseCrmBancaIdsFromUserBancasJson(raw: unknown): string[] {
  * Mesma regra que GET /api/admin/crm/bancas?with_users=1 (match em memória; UUID case-insensitive).
  * Evita `.filter('banca_ids', 'cs', …)` em JSONB, que costuma falhar no PostgREST.
  */
-const LOG_USER_BANCAS_BANCA_LINK =
-  typeof process !== 'undefined' && process.env.LOG_META_ADS_HIERARCHY === '1';
-
 export async function getUserIdsLinkedToCrmBancaViaUserBancas(bancaId: string): Promise<string[]> {
   const target = String(bancaId ?? '').trim().toLowerCase();
   if (!target) return [];
@@ -57,18 +55,12 @@ export async function getUserIdsLinkedToCrmBancaViaUserBancas(bancaId: string): 
     out.push(uid);
   }
 
-  if (LOG_USER_BANCAS_BANCA_LINK) {
-    console.info(
-      '[user_bancas][crm_banca_link]',
-      JSON.stringify({
-        banca_id: target,
-        user_bancas_rows_scanned: rows.length,
-        matched_profile_ids: out.length,
-        rows_with_unexpected_banca_ids_shape: rowsWithNonArrayBancaIds,
-        sample_matched_ids: out.slice(0, 8),
-      })
-    );
-  }
+  metaVerboseInfo('[user_bancas][crm_banca_link]', {
+    banca_id: target,
+    user_bancas_rows_scanned: rows.length,
+    matched_profile_ids: out.length,
+    rows_with_unexpected_banca_ids_shape: rowsWithNonArrayBancaIds,
+  });
 
   return out;
 }

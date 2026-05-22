@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useLayoutEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { getPathnameTenantSlug } from '@/lib/utils/white-label-path';
+import { isCentralTenantSlug } from '@/lib/constants/white-label';
 import {
   getActiveTenantSlug,
   isCentralZaplotoAuthPath,
@@ -44,7 +45,7 @@ function readWlBrandingCache(pathSlug: string): Partial<ZaplotoTenantInfo> | nul
 
 function writeWlBrandingCache(t: ZaplotoTenantInfo) {
   try {
-    if (!t.slug || t.slug === 'zaploto' || !t.id) return;
+    if (!t.slug || isCentralTenantSlug(t.slug) || !t.id) return;
     sessionStorage.setItem(
       WL_BRANDING_CACHE_KEY,
       JSON.stringify({

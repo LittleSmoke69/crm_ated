@@ -1,17 +1,5 @@
 import type { NextRequest } from 'next/server';
 
-/**
- * Eventos enviados para o webhook interno que persiste mensagens no chat (Supabase).
- * Alinhado a `app/api/webhooks/evolution/route.ts` e `evolution-chat-webhook-handler.ts`.
- *
- * A Evolution pode enviar em maiúsculas (MESSAGES_UPSERT) ou com ponto (messages.upsert).
- */
-export const EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS = [
-  'MESSAGES_UPSERT',
-  'MESSAGES_UPDATE',
-  'MESSAGES_DELETE',
-  'SEND_MESSAGE',
-] as const;
 
 /**
  * URL pública única do webhook Evolution em produção (independente do ambiente do app / NEXT_PUBLIC_*).
@@ -96,11 +84,6 @@ export function extractEvolutionWebhookInstanceName(payload: unknown): string | 
   return null;
 }
 
-/** Indica se o evento normalizado deve persistir em `chat_conversations` / `chat_messages`. */
-export function isEvolutionChatPersistenceEvent(normalized: string): boolean {
-  return (EVOLUTION_CHAT_WEBHOOK_MESSAGE_EVENTS as readonly string[]).includes(normalized);
-}
-
 /**
  * Resolve URL pública do app para a Evolution API alcançar o webhook (não pode ser só "localhost" em produção).
  */
@@ -149,15 +132,3 @@ export function assertEvolutionCanReachWebhookBase(baseUrl: string): string | nu
   return null;
 }
 
-/**
- * URL do webhook que grava mensagens no banco (`/api/webhooks/evolution` + token).
- */
-export function buildInternalChatWebhookUrl(publicBaseUrl: string): { ok: true; url: string } | { ok: false; error: string } {
-  const token = process.env.EVOLUTION_WEBHOOK_TOKEN?.trim();
-  if (!token) {
-    return { ok: false, error: 'EVOLUTION_WEBHOOK_TOKEN não configurado no ambiente do servidor' };
-  }
-  const base = publicBaseUrl.replace(/\/+$/, '');
-  const url = `${base}/api/webhooks/evolution?token=${encodeURIComponent(token)}`;
-  return { ok: true, url };
-}

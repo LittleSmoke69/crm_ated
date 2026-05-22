@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from '@/components/WhitelabelLink';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Download, Loader2, FileText, Image as ImageIcon, FileSpreadsheet, File as FileIcon, Lock, Eye, X, Search } from 'lucide-react';
 
@@ -173,7 +174,10 @@ export default function AcademyMateriaisPage() {
   const handleDownload = async (path: string, id: string) => {
     setDownloadingId(id);
     try {
-      const res = await fetch(`/api/academy/signed-url?path=${encodeURIComponent(path)}`);
+      const res = await fetch(
+        `/api/academy/signed-url?path=${encodeURIComponent(path)}`,
+        mergeAuthInit(userId)
+      );
       const data = await res.json().catch(() => ({}));
       if (data.url) window.open(data.url, '_blank');
     } finally {
@@ -191,7 +195,10 @@ export default function AcademyMateriaisPage() {
     setPreviewUrl(null);
     setPreviewLoading(true);
     try {
-      const res = await fetch(`/api/academy/signed-url?path=${encodeURIComponent(m.file_path)}`);
+      const res = await fetch(
+        `/api/academy/signed-url?path=${encodeURIComponent(m.file_path)}`,
+        mergeAuthInit(userId)
+      );
       const data = await res.json().catch(() => ({}));
       if (data.url) setPreviewUrl(data.url);
       else setPreviewId(null);

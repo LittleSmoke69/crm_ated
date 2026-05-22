@@ -18,16 +18,14 @@
     "cron:install": "tsx scripts/linux/install-linux-cron.ts",
     "cron:list": "tsx scripts/linux/list-scheduled-jobs.ts",
     "cron:run": "tsx scripts/linux/run-scheduled-job.ts",
-    "webhook:worker": "tsx scripts/webhook-queue-worker.ts",
     "rabbitmq:worker": "tsx scripts/rabbitmq-worker.ts",
+    "maturation:worker": "tsx scripts/maturation-step-worker.ts",
     "test:resolve-expired": "tsx scripts/test-resolve-expired.ts",
     "test:wa-audio-official": "tsx scripts/test-whatsapp-official-audio.ts",
     "run:netlify-resolve-expired": "tsx scripts/run-netlify-resolve-expired.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
-    "bullmq": "^5.56.2",
-    "ioredis": "^5.6.1",
     "@types/fluent-ffmpeg": "^2.1.28",
     "amqplib": "^0.10.9",
     "bcryptjs": "^3.0.2",

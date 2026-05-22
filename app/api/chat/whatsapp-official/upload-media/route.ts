@@ -8,25 +8,40 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { inferMimeFromFileName } from '@/lib/chat/document-file-utils';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
 
 const ALLOWED_IMAGE = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const ALLOWED_AUDIO = ['audio/ogg', 'audio/mpeg', 'audio/webm', 'audio/mp4', 'audio/m4a', 'audio/x-m4a'] as const;
 const ALLOWED_VIDEO = ['video/mp4'] as const;
-const ALLOWED_DOCUMENT = ['application/pdf'] as const;
+const ALLOWED_DOCUMENT = [
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+] as const;
 
 const MAX_IMAGE = 5 * 1024 * 1024;   // 5MB
 const MAX_AUDIO = 16 * 1024 * 1024;  // 16MB
 const MAX_VIDEO = 16 * 1024 * 1024;  // 16MB
 const MAX_DOCUMENT = 100 * 1024 * 1024; // 100MB
 
-function inferMediaType(mime: string): 'image' | 'audio' | 'video' | 'document' {
+function inferMediaType(mime: string, fileName: string): 'image' | 'audio' | 'video' | 'document' {
   const lower = mime.toLowerCase();
   if (ALLOWED_IMAGE.some((t) => lower === t)) return 'image';
   if (ALLOWED_AUDIO.some((t) => lower === t)) return 'audio';
   if (ALLOWED_VIDEO.some((t) => lower === t)) return 'video';
   if (ALLOWED_DOCUMENT.some((t) => lower === t)) return 'document';
+  const fromName = inferMimeFromFileName(fileName);
+  if (fromName) {
+    if (ALLOWED_IMAGE.some((t) => fromName === t)) return 'image';
+    if (ALLOWED_AUDIO.some((t) => fromName === t)) return 'audio';
+    if (ALLOWED_VIDEO.some((t) => fromName === t)) return 'video';
+    if (ALLOWED_DOCUMENT.some((t) => fromName === t)) return 'document';
+  }
   return 'document';
 }
 
@@ -63,9 +78,12 @@ export async function POST(req: NextRequest) {
     if (!file || !file.size) return errorResponse('Arquivo obrigatório', 400);
     if (!config_id || typeof config_id !== 'string') return errorResponse('config_id obrigatório', 400);
 
-    const rawType = file.type || 'application/octet-stream';
-    const mimeType = rawType.split(';')[0].trim().toLowerCase();
-    const mediaType = inferMediaType(mimeType);
+    const safeName = (file.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+    let mimeType = (file.type || '').split(';')[0].trim().toLowerCase();
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      mimeType = inferMimeFromFileName(safeName) || mimeType || 'application/octet-stream';
+    }
+    const mediaType = inferMediaType(mimeType, safeName);
     const maxSize = getMaxSize(mediaType);
     if (file.size > maxSize) {
       return errorResponse(`Arquivo muito grande. Máximo para ${mediaType}: ${maxSize / 1024 / 1024}MB`, 400);
@@ -79,7 +97,12 @@ export async function POST(req: NextRequest) {
     };
     const allowed = allowedByType[mediaType];
     if (!allowed?.includes(mimeType)) {
-      return errorResponse(`Tipo de arquivo não permitido para ${mediaType}: ${mimeType}`, 400);
+      const fromName = inferMimeFromFileName(safeName);
+      if (fromName && allowed?.includes(fromName)) {
+        mimeType = fromName;
+      } else {
+        return errorResponse(`Tipo de arquivo não permitido para ${mediaType}: ${mimeType}`, 400);
+      }
     }
 
     const { data: config, error: configError } = await supabaseServiceRole
@@ -104,7 +127,6 @@ export async function POST(req: NextRequest) {
     }
 
     const timestamp = Date.now();
-    const safeName = (file.name || 'file').replace(/[^a-zA-Z0-9.-]/g, '_');
     const storagePath = `uploads/${config_id}/${timestamp}-${safeName}`;
 
     const buffer = Buffer.from(await file.arrayBuffer());

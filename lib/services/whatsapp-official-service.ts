@@ -77,8 +77,15 @@ async function postMessages(
   }
 
   if (parsed && typeof parsed === 'object') {
-    const obj = parsed as { messages?: Array<{ id?: string }> };
-    const mid = obj.messages?.[0]?.id;
+    const obj = parsed as {
+      messages?: Array<{ id?: string; message_status?: string }>;
+    };
+    const first = obj.messages?.[0];
+    const mid = first?.id;
+    const messageStatus = first?.message_status;
+    if (messageStatus && messageStatus !== 'accepted') {
+      console.warn(`[WA Official][${logContext}] message_status=${messageStatus} (entrega pode falhar ou atrasar)`);
+    }
     if (typeof mid !== 'string' || !mid.trim()) {
       throw new Error(
         `Resposta da Meta sem messages[0].id (envio não pode ser confirmado). Corpo: ${safeText}`
@@ -184,22 +191,47 @@ export async function sendDocument(
   return postMessages(config, body, 'sendDocument');
 }
 
+export type WhatsAppAudioSendMedia =
+  | { link: string; voice?: boolean }
+  | { id: string; voice?: boolean };
+
 export async function sendAudio(
   config: WhatsAppOfficialConfig,
   to: string,
-  media: { link: string } | { id: string },
+  media: WhatsAppAudioSendMedia,
   replyToMessageId?: string
 ): Promise<{ messages: Array<{ id: string }> }> {
+  const audioPayload: Record<string, unknown> =
+    'id' in media
+      ? {
+          id: media.id,
+          // Nota de voz (gravador do chat): OGG/OPUS + voice:true — sem isso a Meta aceita mas não entrega como áudio de voz
+          ...(media.voice !== false ? { voice: true } : {}),
+        }
+      : {
+          link: media.link,
+          ...(media.voice === true ? { voice: true } : {}),
+        };
+
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to: to.replace(/\D/g, ''),
     type: 'audio',
-    audio: media,
+    audio: audioPayload,
   };
   if (replyToMessageId) {
     body.context = { message_id: replyToMessageId };
   }
 
-  return postMessages(config, body, `sendAudio:${'id' in media ? 'media_id' : 'link'}`);
+  const mode =
+    'id' in media
+      ? media.voice !== false
+        ? 'media_id_voice'
+        : 'media_id'
+      : media.voice === true
+        ? 'link_voice'
+        : 'link';
+
+  return postMessages(config, body, `sendAudio:${mode}`);
 }

@@ -17,6 +17,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { buildCampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 import { resolvePrimaryGestorDisplayByCrmBancaIds } from '@/lib/services/meta-campaign-gestor-display';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 /** Alinhado ao GET /api/admin/meta/overview: dia único sem linhas em meta_insights_daily usa o último dia com dados até date_to. */
 async function resolveInsightsForMetrics(args: {
@@ -83,12 +84,12 @@ async function resolveInsightsForMetrics(args: {
         insightsRows = fb.data;
         appliedDateFrom = fallbackDate;
         appliedDateTo = fallbackDate;
-        console.log('[admin/meta/campaigns-all] fallback período sem insights no dia (métricas por campanha)', {
-          requested_date: dateFrom,
-          applied_date: fallbackDate,
-          banca_id: scopeBancaId ?? 'todas',
-          insights_rows: insightsRows.length,
-        });
+        if (isMetaVerboseLogEnabled()) {
+          console.log('[admin/meta/campaigns-all] fallback insights', {
+            applied_date: fallbackDate,
+            insights_rows: insightsRows.length,
+          });
+        }
       }
     }
   }

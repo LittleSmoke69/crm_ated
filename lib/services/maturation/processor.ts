@@ -7,6 +7,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
 import { VIRGIN_AUTO_MATURATION_PLAN_ID } from '@/lib/maturation/job-lifecycle';
 import { reconcileOrphanedMasterInstanceLocks } from '@/lib/maturation/reconcile-master-instance-locks';
+import { publishMaturationStep, publishGroupMessageTask } from '@/lib/queue/rabbitmq-maturation';
 import { MATURATION_MIN_STEP_DELAY_SEC } from '@/lib/maturation/min-step-delay';
 import { evolutionMaturationDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
@@ -787,7 +788,7 @@ function calculateBackoff(attempt: number): number {
   return backoffs[Math.min(attempt - 1, backoffs.length - 1)];
 }
 
-async function processStep(supabase: SupabaseClient, step: any, opts?: ProcessStepOpts): Promise<void> {
+export async function processStep(supabase: SupabaseClient, step: any, opts?: ProcessStepOpts): Promise<void> {
   const { id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts } = step;
 
   /**
@@ -1155,7 +1156,7 @@ async function processStep(supabase: SupabaseClient, step: any, opts?: ProcessSt
   }
 }
 
-async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promise<void> {
+export async function updateJobProgress(supabase: SupabaseClient, jobId: string): Promise<void> {
   const [
     { count: sent },
     { count: failed },
@@ -2029,10 +2030,93 @@ const GRUPO_LINES: string[] = [
   'Pra ajudar toda essa gente que só faz sofrer',
 ];
 
+export type SendGroupMessageParams = {
+  master_instance_id: string;
+  instance_name: string;
+  base_url: string;
+  api_key: string;
+  group_jid: string;
+  text: string;
+  next_strophe_idx: number;
+  /** evolution_instance_id — usado só para marcar como desconectada em "Connection Closed". */
+  evolution_instance_id?: string;
+};
+
+/**
+ * Envio efetivo da estrofe ao grupo de maturação + side effects no banco.
+ * Chamado pelo worker (modo fila) ou inline pelo `runGroupMessaging` (fallback).
+ *
+ * Pós-condições garantidas (em todos os caminhos):
+ *   - `group_msg_next_at` é sobrescrito com timestamp futuro (cancela o lease de 5min)
+ *   - Em sucesso: `group_msg_strophe_idx` avança
+ *   - Em Connection Closed: instância é marcada como desconectada no banco
+ *
+ * Retorna 1 se enviou com sucesso, 0 caso contrário (não bate o lease — apenas reagenda).
+ */
+export async function sendGroupMessage(
+  supabase: SupabaseClient,
+  params: SendGroupMessageParams,
+): Promise<number> {
+  const {
+    master_instance_id, instance_name, base_url, api_key,
+    group_jid, text, next_strophe_idx, evolution_instance_id,
+  } = params;
+
+  const result = await sendText({
+    baseUrl: base_url,
+    instanceName: instance_name,
+    apiKey: api_key,
+    number: group_jid,
+    text,
+  });
+
+  if (result.success) {
+    // Sucesso: avança ponteiro + reagenda 1-5min
+    const delayMs = (60 + Math.random() * 240) * 1000;
+    await supabase.from('master_instances').update({
+      group_msg_next_at: new Date(Date.now() + delayMs).toISOString(),
+      group_msg_strophe_idx: next_strophe_idx,
+    }).eq('id', master_instance_id);
+    console.log(`${LOG_GRUPO} ✅ ${instance_name} → grupo (próximo em ${Math.round(delayMs / 1000)}s)`);
+    return 1;
+  }
+
+  if (result.httpStatus === 400) {
+    if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
+      if (evolution_instance_id) {
+        await maybeMarkEvolutionInstanceDisconnected(supabase, evolution_instance_id, result.error, 'group-messaging');
+      }
+      await supabase.from('master_instances')
+        .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
+        .eq('id', master_instance_id);
+      console.warn(`${LOG_GRUPO} ⚠️ ${instance_name} desconectada (Connection Closed) — reagendado 60s`);
+      return 0;
+    }
+    // 400 mas não é Connection Closed → provavelmente fora do grupo
+    await supabase.from('master_instances')
+      .update({ group_msg_next_at: new Date(Date.now() + 600_000).toISOString() })
+      .eq('id', master_instance_id);
+    console.warn(`${LOG_GRUPO} ⚠️ ${instance_name} fora do grupo (HTTP 400) — próxima em 10min`);
+    return 0;
+  }
+
+  // Outros erros: reagenda 60s e deixa o próximo ciclo tentar
+  await supabase.from('master_instances')
+    .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
+    .eq('id', master_instance_id);
+  console.warn(`${LOG_GRUPO} ❌ ${instance_name} falhou (HTTP ${result.httpStatus}): ${result.error?.slice(0, 200)} — retry 60s`);
+  return 0;
+}
+
 /**
  * Fase extra: TODAS as master_instances conectadas enviam 1-5 estrofes de "João de Santo Cristo"
  * de partes aleatórias diferentes do texto ao grupo de maturação.
- * Processa APENAS 1 instância por tick para não consumir o orçamento da maturação mútua.
+ *
+ * Modo fila (default): publica uma task por master_instance elegível e segue.
+ * Worker processa com rate-limit por instance_name compartilhado com os steps.
+ *
+ * Modo inline (legado/fallback): envia direto; processa apenas 1 instância por tick
+ * para preservar o comportamento original.
  */
 export async function runGroupMessaging(supabase: SupabaseClient): Promise<number> {
   // Só envia ao grupo se houver campanha mesh ativa (running).
@@ -2091,6 +2175,25 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
 
     if (new Date(row.group_msg_next_at).getTime() > now.getTime()) continue;
 
+    // Claim atômico (optimistic lock): reserva a master_instance por 5min antes de
+    // qualquer envio. Sem isso, ticks concorrentes (cron + self-chain ou cron de duas
+    // instâncias) podem ler o mesmo `group_msg_next_at` vencido e enviar a mesma
+    // estrofe ao grupo duas vezes. O UPDATE só bate se `group_msg_next_at` ainda
+    // for o valor que lemos — se outro tick já avançou, retorna 0 rows e pulamos.
+    const reservedUntil = new Date(Date.now() + 5 * 60_000).toISOString();
+    const { data: claimed } = await supabase
+      .from('master_instances')
+      .update({ group_msg_next_at: reservedUntil })
+      .eq('id', row.id)
+      .eq('group_msg_next_at', row.group_msg_next_at)
+      .select('id')
+      .maybeSingle();
+
+    if (!claimed) {
+      logVerbose(`${LOG_GRUPO} ⏭ master_instance ${row.id} reservada por outro tick — pulando`);
+      continue;
+    }
+
     const ei = Array.isArray(row.evolution_instances) ? row.evolution_instances[0] : row.evolution_instances;
     // Apenas instâncias virgem enviam ao grupo de maturação
     if (ei?.maturation_type !== 'virgem') continue;
@@ -2111,61 +2214,61 @@ export async function runGroupMessaging(supabase: SupabaseClient): Promise<numbe
       continue;
     }
 
-    // Envia SOMENTE 1 linha por vez. Cada instância tem seu próprio ponteiro
-    // (group_msg_strophe_idx) que avança sequencialmente para não repetir.
-    // Na primeira vez, sorteia uma posição inicial aleatória para que cada
-    // instância comece em um ponto diferente da letra.
+    // Escolha de estrofe: ponteiro próprio por instância para não repetir.
+    // Na primeira vez (idx ausente), sorteia posição inicial aleatória.
     const total = GRUPO_LINES.length;
     const currentIdx = typeof row.group_msg_strophe_idx === 'number'
       ? ((row.group_msg_strophe_idx % total) + total) % total
       : Math.floor(Math.random() * total);
+    const nextIdx = (currentIdx + 1) % total;
 
-    const evoId = ei?.id as string | undefined;
+    // Dispatch: fila (default) → worker faz o sendText + side effects, respeitando
+    // rate-limit compartilhado por instance_name. Inline = legado (fallback ou debug).
+    const dispatchMode: 'queue' | 'inline' =
+      process.env.MATURATION_DISPATCH_MODE === 'inline' ? 'inline' : 'queue';
 
-    let sentCount = 0;
-    let notInGroup = false;
-    const result = await sendText({
-      baseUrl, instanceName, apiKey,
-      number: GRUPO_MATURACAO_ID,
-      text: GRUPO_LINES[currentIdx],
-    });
-    if (result.success) {
-      sentCount = 1;
-    } else if (result.httpStatus === 400) {
-      // Connection Closed = instância desconectou → marca no banco e sai
-      if (isConnectionClosedError({ error: result.error, httpStatus: result.httpStatus })) {
-        if (evoId) {
-          await maybeMarkEvolutionInstanceDisconnected(supabase, evoId, result.error, 'group-messaging');
-        }
+    if (dispatchMode === 'queue') {
+      try {
+        await publishGroupMessageTask({
+          master_instance_id: row.id,
+          instance_name: instanceName,
+          base_url: baseUrl,
+          api_key: apiKey,
+          group_jid: GRUPO_MATURACAO_ID,
+          text: GRUPO_LINES[currentIdx],
+          strophe_idx: currentIdx,
+          next_strophe_idx: nextIdx,
+        });
+        totalSent++;
+        logVerbose(`${LOG_GRUPO} 📤 ${instanceName} task publicada (idx ${currentIdx}/${total})`);
+        // No modo fila, publicamos para TODAS as instâncias elegíveis no ciclo.
+        // O rate-limit por instance_name do worker garante que cada instância
+        // envie 1 mensagem com cooldown — sem flood do grupo.
+        continue;
+      } catch (pubErr: any) {
+        console.warn(`${LOG_GRUPO} Publish falhou para ${instanceName} (${pubErr?.message}) — fallback para inline`);
+        // Revoga a reserva para a próxima tentativa não esperar 5min
         await supabase.from('master_instances')
           .update({ group_msg_next_at: new Date(Date.now() + 60_000).toISOString() })
           .eq('id', row.id);
-        console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} desconectada (Connection Closed) — marcada no banco`);
-        return 0;
+        // Cai para o caminho inline abaixo
       }
-      notInGroup = true;
     }
 
-    if (notInGroup && sentCount === 0) {
-      await supabase.from('master_instances')
-        .update({ group_msg_next_at: new Date(Date.now() + 600_000).toISOString() })
-        .eq('id', row.id);
-      console.warn(`${LOG_GRUPO} ⚠️ ${instanceName} fora do grupo (HTTP 400) — próxima tentativa em 10min`);
-      // Processa apenas 1 instância por ciclo — sai do loop
-      return 0;
-    }
-
-    const nextIdx = (currentIdx + 1) % total;
-    const delayMs = (60 + Math.random() * 240) * 1000; // 1-5 minutos por instância
-
-    console.log(`${LOG_GRUPO} ✅ ${instanceName} 1 linha (idx ${currentIdx}/${total}) → grupo (próximo ${Math.round(delayMs / 1000)}s)`);
-
-    await supabase.from('master_instances').update({
-      group_msg_next_at: new Date(Date.now() + delayMs).toISOString(),
-      group_msg_strophe_idx: nextIdx,
-    }).eq('id', row.id);
-
-    // 1 instância e 1 linha por ciclo — evita flood no grupo
+    // ── Fallback inline (legado): envia direto. Mantido para debugging e para
+    // casos onde a fila está down. Processa apenas 1 instância por ciclo
+    // (preserva o comportamento original de "1 estrofe por minuto por chamada").
+    const evoId = ei?.id as string | undefined;
+    const sentCount = await sendGroupMessage(supabase, {
+      master_instance_id: row.id,
+      instance_name: instanceName,
+      base_url: baseUrl,
+      api_key: apiKey,
+      group_jid: GRUPO_MATURACAO_ID,
+      text: GRUPO_LINES[currentIdx],
+      next_strophe_idx: nextIdx,
+      evolution_instance_id: evoId,
+    });
     return sentCount;
   }
 
@@ -2631,9 +2734,21 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
 
   const invalidWhatsappDestByScope = await loadInvalidWhatsappDestinationMapForRunningJobs(supabase);
 
+  // Modo de processamento:
+  //   queue (default em produção): cron-tick publica steps na fila maturation.steps;
+  //     worker (zaplotov3-maturation-worker) consome com rate-limit por instance.
+  //   inline (fallback): processa direto neste loop. Usado se MATURATION_DISPATCH_MODE=inline
+  //     OU se a publicação na fila falha (RabbitMQ down) — failover automático.
+  const dispatchMode: 'queue' | 'inline' =
+    process.env.MATURATION_DISPATCH_MODE === 'inline' ? 'inline' : 'queue';
+  let inlineFallbackActive = dispatchMode === 'inline';
+
   while (true) {
     const elapsed = Date.now() - startTime;
-    if (elapsed + STEP_TIME_BUDGET_MS > MAX_RUNTIME_MS) {
+    // Em modo queue puro, publish é rápido (~5ms): aumentamos o budget para
+    // claimar mais steps por tick (ainda respeitando MAX_RUNTIME_MS).
+    const budgetCheck = inlineFallbackActive ? STEP_TIME_BUDGET_MS : 1000;
+    if (elapsed + budgetCheck > MAX_RUNTIME_MS) {
       logVerbose(`${LOG_MANUAL} Orçamento de tempo esgotado (${elapsed}ms/${MAX_RUNTIME_MS}ms), encerrando tick`);
       hasMorePending = true; // Pode haver mais steps — sinaliza para encadeamento
       break;
@@ -2688,29 +2803,64 @@ export async function runMaturationTick(supabase: SupabaseClient): Promise<any> 
       hasMorePending = true;
       break;
     }
-    logVerbose(`${LOG_MANUAL} ${steps.length} step(s) reivindicados para envio (Evolution API)`);
+    logVerbose(`${LOG_MANUAL} ${steps.length} step(s) reivindicados (dispatch=${inlineFallbackActive ? 'inline' : 'queue'})`);
 
     for (const step of steps) {
-      const stepElapsed = Date.now() - startTime;
-      if (stepElapsed + FETCH_TIMEOUT_MS > MAX_RUNTIME_MS) {
-        // Sem tempo para este step — reseta para 'pending' para ser pego no próximo tick
-        logVerbose(`${LOG_MANUAL} Sem tempo para step job=${step.job_id} step_index=${step.step_index}, resetando para 'pending'`);
-        await supabase
-          .from('maturation_steps')
-          .update({ status: 'pending', locked_at: null, locked_by: null })
-          .eq('id', step.id)
-          .eq('status', 'processing');
-        hasMorePending = true;
-        continue;
+      if (inlineFallbackActive) {
+        // Modo inline: processa neste processo. Respeita orçamento de tempo.
+        const stepElapsed = Date.now() - startTime;
+        if (stepElapsed + FETCH_TIMEOUT_MS > MAX_RUNTIME_MS) {
+          logVerbose(`${LOG_MANUAL} Sem tempo para step job=${step.job_id} step_index=${step.step_index}, resetando para 'pending'`);
+          await supabase
+            .from('maturation_steps')
+            .update({ status: 'pending', locked_at: null, locked_by: null })
+            .eq('id', step.id)
+            .eq('status', 'processing');
+          hasMorePending = true;
+          continue;
+        }
+        await processStep(supabase, step, { invalidWhatsappDestByScope });
+        processedJobIds.add(step.job_id);
+        totalProcessed++;
+      } else {
+        // Modo queue: publica o step para o worker processar com rate-limit
+        // por instância. O step permanece em 'processing' no banco (claim feito
+        // pelo RPC). Se o worker crashar, recoverStuckSteps restaura.
+        try {
+          await publishMaturationStep({
+            step_id: step.id,
+            job_id: step.job_id,
+            step_index: step.step_index,
+            instance_name: step.instance_name,
+          });
+          processedJobIds.add(step.job_id);
+          totalProcessed++;
+        } catch (pubErr: any) {
+          // Falha de publish (broker down, timeout) — degrada para inline
+          // pelo resto do tick, e devolve este step para 'pending' para
+          // garantir que algum processo o pegue.
+          console.warn(`${LOG_MANUAL} Publish falhou (${pubErr?.message}) — fallback para inline neste tick`);
+          inlineFallbackActive = true;
+          await supabase
+            .from('maturation_steps')
+            .update({ status: 'pending', locked_at: null, locked_by: null })
+            .eq('id', step.id)
+            .eq('status', 'processing');
+        }
       }
-      await processStep(supabase, step, { invalidWhatsappDestByScope });
-      processedJobIds.add(step.job_id);
-      totalProcessed++;
     }
 
-    await Promise.all(Array.from(processedJobIds).map((id) => updateJobProgress(supabase, id)));
+    // updateJobProgress só faz sentido se processamos inline; em modo queue
+    // o worker chama updateJobProgress por si mesmo (TBD em processStep).
+    if (inlineFallbackActive) {
+      await Promise.all(Array.from(processedJobIds).map((id) => updateJobProgress(supabase, id)));
+    }
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Modo inline pausa 300ms entre lotes para não saturar Evolution.
+    // Modo queue não precisa — publish é rápido e o rate-limit fica no worker.
+    if (inlineFallbackActive) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
   }
 
   logVerbose(`${LOG_AUTO} Fase 2: Auto maturador - instâncias virgem em maturação automática`);

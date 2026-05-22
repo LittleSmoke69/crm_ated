@@ -1,3 +1,5 @@
+import { dottedExtensionFromName, inferMimeFromFileName } from '@/lib/chat/document-file-utils';
+
 /**
  * WhatsApp Cloud API — normalização de MIME para upload no bucket `chat-media`.
  * A Meta envia tipos com parâmetros (ex.: audio/ogg; codecs=opus); o lookup direto falhava
@@ -28,6 +30,11 @@ const EXT_BY_MIME: Record<string, string> = {
   'video/mp4': '.mp4',
   'video/3gpp': '.3gp',
   'application/pdf': '.pdf',
+  'text/plain': '.txt',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
 };
 
 /** Content-Types aceitos pelo bucket chat-media (manter alinhado à migration). */
@@ -45,7 +52,14 @@ const BUCKET_AUDIO = new Set([
 
 const BUCKET_IMAGE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const BUCKET_VIDEO = new Set(['video/mp4', 'video/3gpp']);
-const BUCKET_DOC = new Set(['application/pdf']);
+const BUCKET_DOC = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 
 function extToAudioContentType(ext: string): string {
   const map: Record<string, string> = {
@@ -66,15 +80,29 @@ function extToAudioContentType(ext: string): string {
  */
 export function extensionForWhatsAppMedia(
   mimeRaw: string | undefined,
-  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker',
+  /** Nome original do arquivo (campo `filename` da Meta ou `file.name` no upload). */
+  fileNameHint?: string | null
 ): string {
   const base = mimeBase(mimeRaw);
+  if (fileNameHint?.trim()) {
+    const fromName = dottedExtensionFromName(fileNameHint);
+    if (fromName) return fromName;
+  }
   if (base && EXT_BY_MIME[base]) return EXT_BY_MIME[base];
 
   if (mediaCategory === 'sticker') return '.webp';
   if (mediaCategory === 'image') return '.jpg';
   if (mediaCategory === 'video') return '.mp4';
-  if (mediaCategory === 'document') return '.pdf';
+  if (mediaCategory === 'document') {
+    if (base.includes('wordprocessingml')) return '.docx';
+    if (base.includes('msword') || base.includes('ms-word')) return '.doc';
+    if (base.includes('spreadsheetml')) return '.xlsx';
+    if (base.includes('ms-excel')) return '.xls';
+    if (base.includes('plain') || base === 'text/plain') return '.txt';
+    if (base.includes('pdf')) return '.pdf';
+    return '.bin';
+  }
 
   // Áudio: heurísticas quando a Meta manda variantes ou mime vazio
   if (!base) return '.ogg';
@@ -95,9 +123,14 @@ export function extensionForWhatsAppMedia(
 export function storageContentTypeForWhatsAppMedia(
   mimeRaw: string | undefined,
   ext: string,
-  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker',
+  fileNameHint?: string | null
 ): string {
   let base = mimeBase(mimeRaw);
+  if ((!base || base === 'application/octet-stream') && fileNameHint) {
+    const guessed = inferMimeFromFileName(fileNameHint);
+    if (guessed) base = guessed;
+  }
   if (mediaCategory === 'audio' && base === 'audio/opus') {
     base = 'audio/ogg';
   }
@@ -120,6 +153,15 @@ export function storageContentTypeForWhatsAppMedia(
       return 'video/mp4';
     case 'document':
       if (base && BUCKET_DOC.has(base)) return base;
+      if (ext === '.txt') return 'text/plain';
+      if (ext === '.doc') return 'application/msword';
+      if (ext === '.docx') {
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      }
+      if (ext === '.xls') return 'application/vnd.ms-excel';
+      if (ext === '.xlsx') {
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      }
       return 'application/pdf';
     default:
       return 'application/octet-stream';

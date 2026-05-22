@@ -3,6 +3,7 @@
  * Gera código de 6 dígitos, salva em password_reset_codes e envia via Evolution (Loto Assistência).
  */
 import { NextRequest } from 'next/server';
+import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
@@ -60,6 +61,9 @@ function normalizePhone(input: string): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const rateLimited = checkIpRateLimit(req, 'forgot-send-code', 8, 15 * 60 * 1000);
+    if (rateLimited) return errorResponse(rateLimited, 429);
+
     const body = await req.json().catch(() => ({}));
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const phoneRaw = typeof body.phone === 'string' ? body.phone.trim() : '';
@@ -79,7 +83,10 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (profileError || !profile) {
-      return errorResponse('E-mail não encontrado', 404);
+      return successResponse(
+        { sent: true },
+        'Se o e-mail e telefone estiverem corretos, você receberá o código em instantes.'
+      );
     }
 
     const evolution = await getLotoAssistenciaInstance();

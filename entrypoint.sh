@@ -1,12 +1,13 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 APP_DIR="/app"
-NPM_BIN="$(which npm)"
+NPM_BIN="$(command -v npm)"
 LOG_FILE="/var/log/zaploto-cron.log"
 
-# Modo worker RabbitMQ dedicado: push-based, zero polling
-if [ "${RABBITMQ_WORKER_ONLY}" = "true" ]; then
+# ── Modo: worker RabbitMQ ────────────────────────────────────────────────────
+# Push-based; broker entrega via prefetch. Zero polling.
+if [ "${RABBITMQ_WORKER_ONLY:-}" = "true" ]; then
   echo "[entrypoint] Modo RABBITMQ_WORKER_ONLY — iniciando worker (prefetch=${RABBITMQ_WORKER_PREFETCH:-10})..."
   exec env \
     RABBITMQ_URL="${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672}" \
@@ -15,50 +16,57 @@ if [ "${RABBITMQ_WORKER_ONLY}" = "true" ]; then
     npm run rabbitmq:worker
 fi
 
-# Modo worker BullMQ dedicado (legado): roda só o worker, sem Next.js
-if [ "${WORKER_ONLY}" = "true" ]; then
-  echo "[entrypoint] Modo WORKER_ONLY — iniciando worker (concorrência=${WEBHOOK_WORKER_CONCURRENCY:-2})..."
+# ── Modo: worker maturação ──────────────────────────────────────────────────
+# Consome fila maturation.steps com rate-limit por instance_name (Evolution).
+if [ "${MATURATION_WORKER_ONLY:-}" = "true" ]; then
+  echo "[entrypoint] Modo MATURATION_WORKER_ONLY — iniciando worker (prefetch=${MATURATION_WORKER_PREFETCH:-50}, min_interval=${MATURATION_MIN_INTERVAL_MS_PER_INSTANCE:-2000}ms)..."
   exec env \
-    REDIS_QUEUE_URL="${REDIS_QUEUE_URL:-redis://:redis123@redis_shared:6379}" \
-    WEBHOOK_WORKER_CONCURRENCY="${WEBHOOK_WORKER_CONCURRENCY:-2}" \
-    npm run webhook:worker
+    RABBITMQ_URL="${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672}" \
+    MATURATION_WORKER_PREFETCH="${MATURATION_WORKER_PREFETCH:-50}" \
+    MATURATION_MAX_RETRIES="${MATURATION_MAX_RETRIES:-2}" \
+    MATURATION_MIN_INTERVAL_MS_PER_INSTANCE="${MATURATION_MIN_INTERVAL_MS_PER_INSTANCE:-2000}" \
+    npm run maturation:worker
 fi
 
-# Modo cron dedicado: instala e roda cron em foreground, sem Next.js
-if [ "${CRON_ONLY}" = "true" ]; then
-  echo "[entrypoint] Modo CRON_ONLY — instalando e iniciando cron em foreground..."
+# ── Modo: worker anti-spam ───────────────────────────────────────────────────
+# Polling de evolution_webhook_events (sem Next.js).
+if [ "${ANTISPAM_WORKER_ONLY:-}" = "true" ]; then
+  echo "[entrypoint] Modo ANTISPAM_WORKER_ONLY — iniciando worker anti-spam (poll=${ANTI_SPAM_POLL_MS:-800}ms, batch=${ANTI_SPAM_BATCH_SIZE:-50})..."
+  exec env \
+    ANTI_SPAM_POLL_MS="${ANTI_SPAM_POLL_MS:-800}" \
+    ANTI_SPAM_BATCH_SIZE="${ANTI_SPAM_BATCH_SIZE:-50}" \
+    npm run anti-spam:worker
+fi
+
+# ── Modo: cron dedicado ──────────────────────────────────────────────────────
+# Roda crond em foreground; sem Next.js. SITE_URL/CRON_SECRET vêm via env_file.
+if [ "${CRON_ONLY:-}" = "true" ]; then
+  echo "[entrypoint] Modo CRON_ONLY — instalando crontab..."
   APP_DIR="$APP_DIR" NPM_BIN="$NPM_BIN" CRON_LOG_FILE="$LOG_FILE" \
     npx tsx scripts/linux/install-linux-cron.ts
-  echo "[entrypoint] Cron jobs instalados:"
+
+  echo "[entrypoint] Cron jobs ativos:"
   crontab -l | grep -v "^#" | grep -v "^$" | grep -v "^CRON_TZ" | grep -v "^PATH" || true
+
+  # Rotação manual diária: trunca o log se ultrapassar 50MB. Evita encher disco.
+  # logrotate seria mais robusto, mas requer install e config extra; isto é suficiente.
+  (
+    while true; do
+      sleep 3600
+      if [ -f "$LOG_FILE" ]; then
+        size=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$size" -gt 52428800 ]; then
+          echo "[entrypoint] Rotacionando $LOG_FILE (${size} bytes)"
+          mv "$LOG_FILE" "${LOG_FILE}.1"
+          : > "$LOG_FILE"
+        fi
+      fi
+    done
+  ) &
+
   exec crond -f -l 8
 fi
 
-# Só instala cron na instância primária
-if [ "${CRON_ENABLED}" = "true" ]; then
-  echo "[entrypoint] Instalando cron jobs..."
-  APP_DIR="$APP_DIR" NPM_BIN="$NPM_BIN" CRON_LOG_FILE="$LOG_FILE" \
-    npx tsx scripts/linux/install-linux-cron.ts
-
-  echo "[entrypoint] Iniciando daemon de cron..."
-  crond -b -l 8
-
-  echo "[entrypoint] Cron jobs instalados:"
-  crontab -l | grep -v "^#" | grep -v "^$" | grep -v "^CRON_TZ" | grep -v "^PATH" || true
-else
-  echo "[entrypoint] Instância worker — cron desabilitado."
-fi
-
-# Inicia worker em background apenas se concurrency > 0
-if [ "${WEBHOOK_WORKER_CONCURRENCY:-8}" != "0" ]; then
-  echo "[entrypoint] Iniciando webhook queue worker (concorrência=${WEBHOOK_WORKER_CONCURRENCY:-8})..."
-  REDIS_QUEUE_URL="${REDIS_QUEUE_URL:-redis://:redis123@redis_shared:6379}" \
-  WEBHOOK_WORKER_CONCURRENCY="${WEBHOOK_WORKER_CONCURRENCY:-8}" \
-    npm run webhook:worker >> /var/log/zaploto-webhook-worker.log 2>&1 &
-  echo "[entrypoint] Webhook worker iniciado (PID=$!)"
-else
-  echo "[entrypoint] Webhook worker desabilitado (WEBHOOK_WORKER_CONCURRENCY=0)."
-fi
-
+# ── Modo: app Next.js ────────────────────────────────────────────────────────
 echo "[entrypoint] Iniciando Next.js na porta ${PORT:-3000}..."
-exec npm start -- -p ${PORT:-3000}
+exec npm start -- -p "${PORT:-3000}"

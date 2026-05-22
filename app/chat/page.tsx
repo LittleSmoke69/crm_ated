@@ -4,9 +4,16 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
+import { DocumentMessageView } from '@/components/chat/DocumentMessageView';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
+import {
+  isActiveInboxConversation,
+  isWithin24hWindow as isWithin24hWindowInbox,
+  sortConversationsForInbox,
+} from '@/lib/chat/conversation-inbox';
 import {
   MessageSquare,
   Send,
@@ -103,6 +110,34 @@ interface ChannelWhatsAppOfficial {
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
 type ActiveView = 'chat' | 'contacts' | 'agente-ia' | 'broadcast';
+
+const CONV_SESSION_PREFIX = 'zaploto_chat_conv_v1_';
+const CONV_SESSION_TTL_MS = 3 * 60 * 1000;
+
+function readSessionConversations(channelId: string): Conversation[] | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(`${CONV_SESSION_PREFIX}${channelId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { at: number; list: Conversation[] };
+    if (!parsed?.list?.length || Date.now() - parsed.at > CONV_SESSION_TTL_MS) return null;
+    return parsed.list;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionConversations(channelId: string, list: Conversation[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(
+      `${CONV_SESSION_PREFIX}${channelId}`,
+      JSON.stringify({ at: Date.now(), list: list.slice(0, 250) })
+    );
+  } catch {
+    /* quota / private mode */
+  }
+}
 
 interface FlowOption {
   id: string;
@@ -279,11 +314,13 @@ function MediaRetryButton({
   chatMessageId,
   mediaType,
   fromMe,
+  userId,
   onResolved,
 }: {
   chatMessageId: string;
   mediaType: string;
   fromMe: boolean;
+  userId?: string | null;
   onResolved: (url: string) => void;
 }) {
   const [retrying, setRetrying] = useState(false);
@@ -296,12 +333,14 @@ function MediaRetryButton({
     setRetrying(true);
     setError(null);
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
-      const res = await fetch('/api/chat/messages/retry-media', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ chat_message_id: chatMessageId }),
-      });
+      const res = await fetch(
+        '/api/chat/messages/retry-media',
+        mergeAuthInit(userId, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_message_id: chatMessageId }),
+        })
+      );
       const json = await res.json();
       if (json.success && json.data?.media_url) {
         onResolved(json.data.media_url);
@@ -522,11 +561,13 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
 function MessageContent({
   msg,
   fromMe,
+  userId,
   onMediaClick,
   onMediaResolved,
 }: {
   msg: Message;
   fromMe: boolean;
+  userId?: string | null;
   onMediaClick: (url: string, type: 'image' | 'video', caption?: string | null) => void;
   onMediaResolved?: (messageId: string, url: string) => void;
 }) {
@@ -548,17 +589,24 @@ function MessageContent({
     if (!isOfficial) return;
     if (!msg.media_type || msg.media_type === 'text') return;
 
-    const delays = msg.media_type === 'audio' ? [2000, 9000] : [1500];
+    const delays =
+      msg.media_type === 'audio'
+        ? [2000, 9000]
+        : msg.media_type === 'document'
+          ? [1500, 5000]
+          : [1500];
     const timers: ReturnType<typeof setTimeout>[] = [];
 
     const run = async () => {
       try {
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
-        const res = await fetch('/api/chat/messages/retry-media', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ chat_message_id: msg.id }),
-        });
+        const res = await fetch(
+          '/api/chat/messages/retry-media',
+          mergeAuthInit(userId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_message_id: msg.id }),
+          })
+        );
         const json = await res.json();
         if (json.success && json.data?.media_url) {
           handleMediaResolved(json.data.media_url);
@@ -573,7 +621,7 @@ function MessageContent({
     }
     return () => timers.forEach(clearTimeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaUrl, msg.id, msg.provider, msg.media_type, msg.whatsapp_config_id, msg.instance_id]);
+  }, [mediaUrl, msg.id, msg.provider, msg.media_type, msg.whatsapp_config_id, msg.instance_id, userId]);
 
   const canRetry =
     msg.provider === 'whatsapp_official' ||
@@ -585,6 +633,7 @@ function MessageContent({
         chatMessageId={msg.id}
         mediaType={mediaType}
         fromMe={fromMe}
+        userId={userId}
         onResolved={handleMediaResolved}
       />
     ) : null;
@@ -628,19 +677,18 @@ function MessageContent({
       )}
       {msg.media_type === 'document' && (
         mediaUrl ? (
-          <a
-            href={mediaUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`flex items-center gap-2 text-sm underline ${fromMe ? 'text-white/90' : 'text-blue-400'}`}
-          >
-            <FileText size={16} /> {msg.caption ?? 'Documento'}
-          </a>
+          <DocumentMessageView
+            url={mediaUrl}
+            caption={msg.caption}
+            fromMe={fromMe}
+            chatMessageId={msg.id}
+            userId={userId}
+          />
         ) : (
           retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
-      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'document' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
@@ -719,13 +767,18 @@ export default function ChatPage() {
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
 
-  // Sync de histórico WhatsApp Oficial — controla quais canais já foram sincronizados nesta sessão
+  // Backfill leve de eventos pendentes (adiado — não compete com a lista inicial)
   const waSyncedChannelsRef = useRef<Set<string>>(new Set());
-  const [waHistorySyncing, setWaHistorySyncing] = useState(false);
-
-  // Sync de histórico Evolution — controla quais instâncias já foram sincronizadas nesta sessão
   const evoSyncedChannelsRef = useRef<Set<string>>(new Set());
-  const [evoHistorySyncing, setEvoHistorySyncing] = useState(false);
+  const deferredSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const commitConversations = useCallback((channelId: string, list: Conversation[]) => {
+    const sorted = sortConversationsForInbox(list) as Conversation[];
+    conversationsCacheRef.current[channelId] = sorted;
+    writeSessionConversations(channelId, sorted);
+    setConversations(sorted);
+    setConversationsLoading(false);
+  }, []);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -1113,23 +1166,30 @@ export default function ChatPage() {
           // Prioridade: WhatsApp Oficial > Evolution
           const defaultChannel = wa.length > 0 ? wa[0] : evo.length > 0 ? evo[0] : null;
           if (!selectedChannel && defaultChannel) {
+            const instant =
+              readSessionConversations(defaultChannel.id) ||
+              conversationsCacheRef.current[defaultChannel.id];
+            if (instant?.length) {
+              commitConversations(defaultChannel.id, instant);
+            }
             setSelectedChannel(defaultChannel);
+            setConversationFilter('all');
           }
-          // Pré-carrega conversas de TODOS os canais em paralelo
-          const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
-            ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
+          // Pré-carrega: WhatsApp Oficial primeiro (canal padrão), depois Evolution
+          const orderedChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
             ...wa.map((c) => ({ id: c.id, type: 'whatsapp_official' as const })),
+            ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
           ];
-          allChannels.forEach(({ id, type }) => {
+          orderedChannels.forEach(({ id, type }) => {
             const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
             fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() })
               .then((r) => r.json())
               .then((res) => {
                 if (res.success) {
-                  conversationsCacheRef.current[id] = res.data || [];
-                  // Se este canal já está selecionado, popula imediatamente
+                  const list: Conversation[] = res.data || [];
+                  conversationsCacheRef.current[id] = sortConversationsForInbox(list) as Conversation[];
                   setSelectedChannel((ch) => {
-                    if (ch?.id === id) setConversations(res.data || []);
+                    if (ch?.id === id) commitConversations(id, list);
                     return ch;
                   });
                 }
@@ -1139,17 +1199,18 @@ export default function ChatPage() {
         }
       })
       .catch((e) => console.error('[Chat] canais:', e));
-  }, [userId]);
+  }, [userId, commitConversations]);
 
   // ── Carregar Conversas ─────────────────────────────────────────────────────
   const loadConversationsFromApi = useCallback(
     async (keepSelectionIfPresent = false) => {
       if (!selectedChannel) return;
+      const channelId = selectedChannel.id;
 
-      // Exibe do cache imediatamente (sem spinner) se disponível
-      const cached = conversationsCacheRef.current[selectedChannel.id];
-      if (cached && cached.length > 0) {
-        setConversations(cached);
+      const instant =
+        conversationsCacheRef.current[channelId] || readSessionConversations(channelId);
+      if (instant?.length) {
+        commitConversations(channelId, instant);
       } else {
         setConversationsLoading(true);
       }
@@ -1157,15 +1218,14 @@ export default function ChatPage() {
       try {
         const params =
           selectedChannel.type === 'evolution'
-            ? `instance_id=${selectedChannel.id}`
-            : `whatsapp_config_id=${selectedChannel.id}`;
+            ? `instance_id=${channelId}`
+            : `whatsapp_config_id=${channelId}`;
 
         const response = await fetch(`/api/chat/conversations?${params}`, { headers: authHeaders() });
         const result = await response.json();
         if (result.success) {
           const list: Conversation[] = result.data || [];
-          conversationsCacheRef.current[selectedChannel.id] = list;
-          setConversations(list);
+          commitConversations(channelId, list);
           if (keepSelectionIfPresent) {
             setSelectedConversationId((prev) =>
               prev && list.some((c) => c.id === prev) ? prev : ''
@@ -1178,104 +1238,78 @@ export default function ChatPage() {
         setConversationsLoading(false);
       }
     },
-    [selectedChannel]
+    [selectedChannel, commitConversations]
   );
 
-  // Sync paginado de todos os eventos da tabela webhook_events para chat_conversations/messages.
-  // Executa reprocess_all=true uma vez por canal por sessão para garantir histórico completo.
-  const syncWaHistoryFull = useCallback(
-    async (channelId: string) => {
-      if (waSyncedChannelsRef.current.has(channelId)) return;
-
-      setWaHistorySyncing(true);
-      const PAGE = 200;
-      let offset = 0;
-      let hasMore = true;
-
+  /** Uma página de eventos pendentes — só após a lista já estar na tela (não compete com o GET). */
+  const runDeferredPendingSync = useCallback(
+    async (channel: Channel) => {
       try {
-        while (hasMore) {
+        if (channel.type === 'whatsapp_official') {
+          if (waSyncedChannelsRef.current.has(channel.id)) return;
+          waSyncedChannelsRef.current.add(channel.id);
           const res = await fetch('/api/chat/webhook-events/process-pending', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ limit: PAGE, offset, reprocess_all: true }),
+            body: JSON.stringify({ limit: 80, offset: 0 }),
           });
           const json = await res.json();
-          if (!json.success) break;
-          hasMore = json.data?.has_more === true;
-          offset = json.data?.next_offset ?? offset + PAGE;
-
           if (json.data?.token_alert) {
             setShowTokenAlert(true);
-            setTokenAlertMessage(json.data.token_alert_message || 'Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+            setTokenAlertMessage(
+              json.data.token_alert_message ||
+                'Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.'
+            );
           }
-
-          if (json.data?.processed > 0) {
-            loadConversationsFromApi(true);
-          }
-        }
-        waSyncedChannelsRef.current.add(channelId);
-      } catch (err) {
-        console.error('[Chat] syncWaHistoryFull:', err);
-      } finally {
-        setWaHistorySyncing(false);
-        loadConversationsFromApi(false);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loadConversationsFromApi]
-  );
-
-  // Sync paginado de eventos Evolution da tabela evolution_webhook_events → chat
-  const syncEvolutionHistoryFull = useCallback(
-    async (channel: ChannelEvolution) => {
-      if (evoSyncedChannelsRef.current.has(channel.id)) return;
-
-      setEvoHistorySyncing(true);
-      const PAGE = 200;
-      let offset = 0;
-      let hasMore = true;
-
-      try {
-        while (hasMore) {
-          const res = await fetch('/api/chat/evolution-events/process-pending', {
+        } else if (channel.type === 'evolution') {
+          if (evoSyncedChannelsRef.current.has(channel.id)) return;
+          evoSyncedChannelsRef.current.add(channel.id);
+          const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+          await fetch('/api/chat/evolution-events/process-pending', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ instance_name: channel.instance_name, limit: PAGE, offset, reprocess_all: true }),
+            body: JSON.stringify({
+              instance_name: channel.instance_name,
+              limit: 80,
+              offset: 0,
+              since: sinceIso,
+            }),
           });
-          const json = await res.json();
-          if (!json.success) break;
-          hasMore = json.data?.has_more === true;
-          offset = json.data?.next_offset ?? offset + PAGE;
-
-          if (json.data?.processed > 0) {
-            loadConversationsFromApi(true);
-          }
         }
-        evoSyncedChannelsRef.current.add(channel.id);
+        await loadConversationsFromApi(false);
       } catch (err) {
-        console.error('[Chat] syncEvolutionHistoryFull:', err);
-      } finally {
-        setEvoHistorySyncing(false);
-        loadConversationsFromApi(false);
+        console.error('[Chat] deferred pending sync:', err);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [loadConversationsFromApi]
   );
 
   useEffect(() => {
     if (!selectedChannel) return;
 
-    if (selectedChannel.type === 'whatsapp_official') {
-      // Primeira vez no canal desta sessão: sync completo de histórico (reprocess_all)
-      syncWaHistoryFull(selectedChannel.id);
-    } else if (selectedChannel.type === 'evolution') {
-      // Evolution: sync da tabela evolution_webhook_events + carrega conversas
-      syncEvolutionHistoryFull(selectedChannel as ChannelEvolution);
-    } else {
-      loadConversationsFromApi(false);
+    setConversationFilter('all');
+
+    const instant =
+      readSessionConversations(selectedChannel.id) ||
+      conversationsCacheRef.current[selectedChannel.id];
+    if (instant?.length) {
+      commitConversations(selectedChannel.id, instant);
     }
-  }, [selectedChannel, loadConversationsFromApi, syncWaHistoryFull, syncEvolutionHistoryFull]);
+
+    void loadConversationsFromApi(false);
+
+    if (deferredSyncTimerRef.current) clearTimeout(deferredSyncTimerRef.current);
+    deferredSyncTimerRef.current = setTimeout(() => {
+      void runDeferredPendingSync(selectedChannel);
+    }, 12_000);
+
+    return () => {
+      if (deferredSyncTimerRef.current) {
+        clearTimeout(deferredSyncTimerRef.current);
+        deferredSyncTimerRef.current = null;
+      }
+    };
+  }, [selectedChannel, loadConversationsFromApi, runDeferredPendingSync, commitConversations]);
 
   // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
   useEffect(() => {
@@ -1582,26 +1616,13 @@ export default function ChatPage() {
             const isNew = payload.eventType === 'INSERT';
 
             setConversations((prev) => {
-              const w24 = (c: Conversation) =>
-                !!c.whatsapp_config_id &&
-                !!c.last_customer_message_at &&
-                Date.now() - new Date(c.last_customer_message_at).getTime() < 86_400_000;
-              const sort24 = (arr: Conversation[]) =>
-                [...arr].sort((a, b) => {
-                  const a24 = w24(a), b24 = w24(b);
-                  if (a24 && !b24) return -1;
-                  if (!a24 && b24) return 1;
-                  return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
-                });
-              const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
-                ? prev.map((c) => (c.id === newConv.id ? newConv : c))
-                : [newConv, ...prev];
-              const sorted = sort24(updated);
-              // Atualizar cache também
-              const cacheKey = filterVal;
-              if (conversationsCacheRef.current[cacheKey]) {
-                conversationsCacheRef.current[cacheKey] = sorted;
-              }
+              const updated =
+                prev.findIndex((c) => c.id === newConv.id) >= 0
+                  ? prev.map((c) => (c.id === newConv.id ? newConv : c))
+                  : [newConv, ...prev];
+              const sorted = sortConversationsForInbox(updated) as Conversation[];
+              conversationsCacheRef.current[filterVal] = sorted;
+              writeSessionConversations(filterVal, sorted);
               return sorted;
             });
 
@@ -1801,7 +1822,10 @@ export default function ChatPage() {
     setRecordedBlobUrl(null);
   };
 
-  const uploadRecordedAudio = async (blob: Blob, mimeType: string): Promise<{ meta_id?: string; url: string } | null> => {
+  const uploadRecordedAudio = async (
+    blob: Blob,
+    mimeType: string
+  ): Promise<{ meta_id?: string; url: string; metaError?: string } | null> => {
     if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return null;
     setUploading(true);
     try {
@@ -1823,73 +1847,44 @@ export default function ChatPage() {
         return fd;
       };
 
-      const [metaResult, supResult] = await Promise.allSettled([
-        fetch('/api/chat/whatsapp-official/upload-audio-meta', {
-          method: 'POST', body: makeFormData(), headers: authHeaders(),
-        }).then((r) => r.json()),
-        fetch('/api/chat/whatsapp-official/upload-media', {
-          method: 'POST', body: makeFormData(), headers: authHeaders(),
-        }).then((r) => r.json()),
-      ]);
-
-      const metaData = metaResult.status === 'fulfilled' ? metaResult.value : null;
-      const supData = supResult.status === 'fulfilled' ? supResult.value : null;
-
-      const meta_id: string | undefined = metaData?.success ? metaData.data?.media_id : undefined;
+      // Supabase primeiro (preview no chat); Meta em seguida (media_id para envio confiável)
+      const supRes = await fetch('/api/chat/whatsapp-official/upload-media', {
+        method: 'POST',
+        body: makeFormData(),
+        headers: authHeaders(),
+      });
+      const supData = await supRes.json();
       const url: string = supData?.success ? supData.data?.url : '';
 
-      if (!meta_id && !url) return null;
+      let meta_id: string | undefined;
+      let metaError: string | undefined;
+      try {
+        const metaRes = await fetch('/api/chat/whatsapp-official/upload-audio-meta', {
+          method: 'POST',
+          body: makeFormData(),
+          headers: authHeaders(),
+        });
+        const metaData = await metaRes.json();
+        if (metaData?.success && metaData.data?.media_id) {
+          meta_id = metaData.data.media_id;
+        } else {
+          metaError = metaData?.error || metaData?.message || `HTTP ${metaRes.status}`;
+        }
+      } catch (e) {
+        metaError = (e as Error)?.message || 'Falha no upload para Meta';
+      }
 
-      return { meta_id, url };
+      if (!meta_id && !url) {
+        console.error('[Chat] upload áudio:', metaError);
+        return null;
+      }
+
+      return { meta_id, url, metaError: meta_id ? undefined : metaError };
     } catch (e) {
       console.error('[Chat] upload áudio:', e);
       return null;
     } finally {
       setUploading(false);
-    }
-  };
-
-  const handleSendRecordedAudio = async () => {
-    if (!recordedBlob || !selectedChannel || selectedChannel.type !== 'whatsapp_official' || !selectedConversationId) return;
-    const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return;
-    setSendError(null);
-    setSending(true);
-    try {
-      const uploaded = await uploadRecordedAudio(recordedBlob, recordedMimeType);
-      if (!uploaded) {
-        setSendError('Falha ao processar áudio. Tente novamente.');
-        return;
-      }
-      const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
-      const body: Record<string, string | undefined> = {
-        config_id: selectedChannel.id,
-        to,
-        type: 'audio',
-        ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
-        media_url: uploaded.url || undefined,
-      };
-      const response = await fetch('/api/chat/whatsapp-official/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(body),
-      });
-      let result: { success?: boolean; error?: string; message?: string } = {};
-      try { result = await response.json(); } catch { result = {}; }
-      if (response.ok && result.success) {
-        discardRecordedAudio();
-      } else {
-        const errMsg = result.error || result.message || '';
-        setSendError(getSendErrorMessage(response.status, errMsg));
-        const isTokenError = response.status === 401 ||
-          (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
-        if (isTokenError) {
-          setShowTokenAlert(true);
-          setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
-        }
-      }
-    } finally {
-      setSending(false);
     }
   };
 
@@ -2113,7 +2108,8 @@ export default function ChatPage() {
   const handleSendMessage = async () => {
     const hasText = messageText.trim().length > 0;
     const hasMedia = !!attachedMedia;
-    if ((!hasText && !hasMedia) || !selectedConversationId || !selectedChannel || sending) return;
+    const hasRecordedAudio = !!(recordedBlob && !isRecording);
+    if ((!hasText && !hasMedia && !hasRecordedAudio) || !selectedConversationId || !selectedChannel || sending) return;
     if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
       setSendError('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
       return;
@@ -2125,6 +2121,55 @@ export default function ChatPage() {
     setSendError(null);
     setSending(true);
     try {
+      if (hasRecordedAudio) {
+        if (selectedChannel.type !== 'whatsapp_official') {
+          setSendError('Gravação de áudio disponível apenas para WhatsApp Oficial');
+          return;
+        }
+        const uploaded = await uploadRecordedAudio(recordedBlob!, recordedMimeType);
+        if (!uploaded) {
+          setSendError(
+            'Falha ao processar áudio. Se o erro mencionar FFmpeg, instale com: brew install ffmpeg e reinicie o servidor.'
+          );
+          return;
+        }
+        if (!uploaded.meta_id && !uploaded.url) {
+          setSendError(uploaded.metaError || 'Falha ao enviar áudio para o WhatsApp.');
+          return;
+        }
+        const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+        const body: Record<string, string | undefined> = {
+          config_id: selectedChannel.id,
+          to,
+          type: 'audio',
+          ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
+          media_url: uploaded.url || undefined,
+        };
+        if (!uploaded.meta_id && uploaded.url) {
+          console.warn('[Chat] envio de áudio via media_url (Meta upload falhou):', uploaded.metaError);
+        }
+        const response = await fetch('/api/chat/whatsapp-official/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body),
+        });
+        let result: { success?: boolean; error?: string; message?: string } = {};
+        try { result = await response.json(); } catch { result = {}; }
+        if (response.ok && result.success) {
+          discardRecordedAudio();
+        } else {
+          const errMsg = result.error || result.message || '';
+          setSendError(getSendErrorMessage(response.status, errMsg));
+          const isTokenError = response.status === 401 ||
+            (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
+          if (isTokenError) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+          }
+        }
+        return;
+      }
+
       if (selectedChannel.type === 'evolution') {
         const response = await fetch('/api/chat/send', {
           method: 'POST',
@@ -2180,6 +2225,12 @@ export default function ChatPage() {
                 ? { meta_id: attachedMedia!.meta_id, media_url: attachedMedia!.url || undefined }
                 : { media_url: attachedMedia!.url }),
               caption: hasText ? messageText.trim() : undefined,
+              ...(attachedMedia!.type === 'document'
+                ? {
+                    filename: attachedMedia!.name,
+                    ...(!hasText ? { caption: attachedMedia!.name } : {}),
+                  }
+                : {}),
             }
           : { config_id: selectedChannel.id, to, type: 'text', text: messageText.trim() };
 
@@ -2331,10 +2382,7 @@ export default function ChatPage() {
   const getInitials = (name: string) =>
     name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
 
-  const isWithin24hWindow = (conv: Conversation): boolean => {
-    if (!conv.whatsapp_config_id || !conv.last_customer_message_at) return false;
-    return Date.now() - new Date(conv.last_customer_message_at).getTime() < 24 * 60 * 60 * 1000;
-  };
+  const isWithin24hWindow = (conv: Conversation): boolean => isWithin24hWindowInbox(conv);
 
   const getConversationColor = (title: string) => {
     const colors = ['#8CD955', '#7BC84A', '#6AB83D', '#A8E677', '#5AA832', '#4C9628', '#3E841E', '#2F7214'];
@@ -2345,13 +2393,7 @@ export default function ChatPage() {
   // isActiveConversation:
   //   - WhatsApp Oficial: dentro da janela 24h E não resolvida
   //   - Evolution: qualquer conversa não resolvida (sem conceito de janela 24h)
-  const isActiveConversation = (conv: Conversation): boolean => {
-    const resolved = conv.attendance_status === 'resolvido';
-    if (conv.whatsapp_config_id) {
-      return isWithin24hWindow(conv) && !resolved;
-    }
-    return !resolved;
-  };
+  const isActiveConversation = (conv: Conversation): boolean => isActiveInboxConversation(conv);
 
   const filteredConversations = conversations.filter((conv) => {
     const term = (searchTerm || '').trim().toLowerCase();
@@ -2378,16 +2420,7 @@ export default function ChatPage() {
     }
   });
 
-  // Ordenação: 24h ativos primeiro, depois por última mensagem
-  const sortedConversations = [...filteredConversations].sort((a, b) => {
-    const a24 = isWithin24hWindow(a);
-    const b24 = isWithin24hWindow(b);
-    if (a24 && !b24) return -1;
-    if (!a24 && b24) return 1;
-    return (
-      new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
-    );
-  });
+  const sortedConversations = sortConversationsForInbox(filteredConversations) as Conversation[];
 
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
@@ -3184,12 +3217,6 @@ export default function ChatPage() {
                   }
                 }}
               >
-                {(waHistorySyncing || evoHistorySyncing) && conversations.length === 0 && (
-                  <div className="px-3 py-2 flex items-center gap-2 bg-[#8CD95510] border-b border-[#8CD95530] text-[#5a9e2f] dark:text-[#8CD955] text-xs">
-                    <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                    <span>Sincronizando histórico de conversas...</span>
-                  </div>
-                )}
                 {conversationsLoading && conversations.length === 0 ? (
                   <div className="p-4 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -3608,6 +3635,7 @@ export default function ChatPage() {
                                 <MessageContent
                                   msg={msg}
                                   fromMe={msg.from_me}
+                                  userId={userId}
                                   onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })}
                                   onMediaResolved={(msgId, url) => setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, media_url: url } : m))}
                                 />
@@ -3659,9 +3687,9 @@ export default function ChatPage() {
 
                 {/* ── Barra de mensagem ────────────────────────────────── */}
                 <div className="flex-shrink-0 w-full bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-3">
-                  <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf" onChange={handleFileSelect} />
+                  <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
-                  <input ref={docInputRef} type="file" className="hidden" accept="application/pdf" onChange={handleFileSelect} />
+                  <input ref={docInputRef} type="file" className="hidden" accept="application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   {/* ── Prévia de áudio gravado ──────────────────────────── */}
                   {recordedBlob && !isRecording && (
                     <div className="mb-2 p-3 bg-gray-50 dark:bg-[#2a2a2a] rounded-xl border border-[#8CD955]/40 dark:border-[#8CD955]/30 flex flex-col gap-2">
@@ -3684,27 +3712,6 @@ export default function ChatPage() {
                       </div>
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <audio src={recordedBlobUrl!} controls className="w-full" style={{ height: '36px' }} />
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={discardRecordedAudio}
-                          disabled={uploading || sending}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50 transition-colors"
-                        >
-                          <Trash2 size={12} />
-                          Descartar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSendRecordedAudio}
-                          disabled={uploading || sending || !canSendFreeMessage}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-white disabled:opacity-50 transition-colors"
-                          style={{ backgroundColor: '#8CD955' }}
-                        >
-                          {uploading || sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                          Enviar nota de voz
-                        </button>
-                      </div>
                     </div>
                   )}
                   {attachedMedia && (
@@ -3862,8 +3869,19 @@ export default function ChatPage() {
                       </button>
                       <button
                         onClick={handleSendMessage}
-                        disabled={(!messageText.trim() && !attachedMedia) || sending || !canSendFreeMessage}
-                        title={!canSendFreeMessage ? 'Fora da janela 24h' : 'Enviar'}
+                        disabled={
+                          (!messageText.trim() && !attachedMedia && !recordedBlob) ||
+                          sending ||
+                          uploading ||
+                          !canSendFreeMessage
+                        }
+                        title={
+                          !canSendFreeMessage
+                            ? 'Fora da janela 24h'
+                            : recordedBlob
+                              ? 'Enviar nota de voz'
+                              : 'Enviar'
+                        }
                         className="px-3 py-2 text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
                         style={{ backgroundColor: '#8CD955' }}
                       >

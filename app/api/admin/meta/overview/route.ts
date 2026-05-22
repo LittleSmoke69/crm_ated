@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 const META_OVERVIEW_CAMPAIGNS_FIELDS = 'banca_id, campaign_id, name, status, effective_status, updated_at, campaign_kind';
 const META_OVERVIEW_INSIGHTS_FIELDS =
@@ -203,35 +204,16 @@ export async function GET(req: NextRequest) {
           insights = fallbackInsightsRes.data ?? [];
           appliedDateFrom = fallbackDate;
           appliedDateTo = fallbackDate;
-          console.log('[admin/meta/overview] fallback período sem insights no dia', {
-            requested_date: dateFrom,
-            applied_date: fallbackDate,
-            insights_rows: insights.length,
-          });
+          if (isMetaVerboseLogEnabled()) {
+            console.log('[admin/meta/overview] fallback período sem insights no dia', {
+              requested_date: dateFrom,
+              applied_date: fallbackDate,
+              insights_rows: insights.length,
+            });
+          }
         }
       }
     }
-
-    const firstInsight = insights[0] as Record<string, unknown> | undefined;
-    const firstCampaign = campaigns[0] as Record<string, unknown> | undefined;
-    console.log('[admin/meta/overview] DB meta_insights_daily', {
-      rows: insights.length,
-      fields: firstInsight ? Object.keys(firstInsight) : [],
-      sample: firstInsight ?? null,
-    });
-    console.log('[admin/meta/overview] DB meta_campaigns', {
-      rows: campaigns.length,
-      fields: firstCampaign ? Object.keys(firstCampaign) : [],
-      sample: firstCampaign ?? null,
-      requested_fields: META_OVERVIEW_CAMPAIGNS_FIELDS,
-      filters: { date_from: dateFrom ?? null, date_to: dateTo ?? null },
-      applied_filters: { date_from: appliedDateFrom ?? null, date_to: appliedDateTo ?? null },
-    });
-    console.log('[admin/meta/overview] DB meta_insights_daily requested_fields', {
-      requested_fields: META_OVERVIEW_INSIGHTS_FIELDS,
-      filters: { date_from: dateFrom ?? null, date_to: dateTo ?? null },
-      applied_filters: { date_from: appliedDateFrom ?? null, date_to: appliedDateTo ?? null },
-    });
 
     const configById = new Map<string, MetaIntegrationConfigRow>(
       (configs as MetaIntegrationConfigRow[]).map((c) => [String(c.id), c])
@@ -498,18 +480,13 @@ export async function GET(req: NextRequest) {
           cost_per_action_type: cpaMap ? costPerActionMapForLog(cpaMap) : {},
         };
       });
-    console.log('[admin/meta/overview] SOMA visão geral (base para cards de Gasto/Leads)', {
-      totals: {
-        ...totalsOverview,
-        cost_per_action_type: costPerActionMapForLog(globalCostPerAction),
-      },
-      contributors_count: topContributors.length,
-      top_contributors: topContributors,
-      kind_summary: kindSummary,
-      kind_mapping_debug: {
-        insights_without_kind_match: insightsWithoutKindMatch,
-      },
-    });
+    if (isMetaVerboseLogEnabled()) {
+      console.log('[admin/meta/overview] SOMA visão geral', {
+        totals: totalsOverview,
+        contributors_count: topContributors.length,
+        kind_summary: kindSummary,
+      });
+    }
 
     // Conta campanhas com insights (mesma regra da soma de métricas — evita “1 sincronizada” com cards zerados)
     const campaignsWithInsights = new Set<string>();

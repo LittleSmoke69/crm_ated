@@ -268,12 +268,6 @@ export async function listCampaigns(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
-  const sample = results[0] as unknown as Record<string, unknown> | undefined;
-  console.log('[Meta Graph] listCampaigns', {
-    count: results.length,
-    fields: sample ? Object.keys(sample) : [],
-    sample: sample ?? null,
-  });
   return results;
 }
 
@@ -296,12 +290,6 @@ export async function listAdSets(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
-  const adSample = results[0] as unknown as Record<string, unknown> | undefined;
-  console.log('[Meta Graph] listAdSets', {
-    count: results.length,
-    fields: adSample ? Object.keys(adSample) : [],
-    sample: adSample ?? null,
-  });
   return results;
 }
 
@@ -348,14 +336,6 @@ export async function getInsightsDaily(
     if (nextData?.data) results.push(...nextData.data);
     next = nextData?.paging?.next;
   }
-  const insSample = results[0] as unknown as Record<string, unknown> | undefined;
-  console.log('[Meta Graph] getInsightsDaily', {
-    count: results.length,
-    fields: insSample ? Object.keys(insSample) : [],
-    sample: insSample ?? null,
-    requestedFields:
-      'date_start,date_stop,campaign_id,campaign_name,reach,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values,cost_per_action_type',
-  });
   return results;
 }
 
@@ -473,8 +453,6 @@ export async function getAdAccountBillingCharges(
   const url = `${baseUrl.replace(/\/+$/, '')}/${cleanId}/activities?${params.toString()}`;
 
   const charges: MetaBillingChargeEntry[] = [];
-  const eventTypeCounts: Record<string, number> = {};
-  let totalActivities = 0;
   let pageUrl: string | null = url;
   let pageCount = 0;
 
@@ -484,29 +462,13 @@ export async function getAdAccountBillingCharges(
         ? await getJson<{ data?: MetaAdAccountActivity[]; paging?: MetaPaging }>(pageUrl, token)
         : await metaGraphGetJson<{ data?: MetaAdAccountActivity[]; paging?: MetaPaging }>(pageUrl);
     const items = data?.data ?? [];
-    totalActivities += items.length;
     for (const item of items) {
-      const t = String(item?.event_type ?? '').trim();
-      if (t) eventTypeCounts[t] = (eventTypeCounts[t] ?? 0) + 1;
       const entry = mapBillingChargeActivity(item);
       if (entry) charges.push(entry);
     }
     pageUrl = data?.paging?.next ?? null;
     pageCount += 1;
   }
-
-  console.log('[Meta Graph] getAdAccountBillingCharges', {
-    ad_account_id: cleanId,
-    since_input: since ?? null,
-    until_input: until ?? null,
-    since_unix: sinceUnix,
-    until_unix: untilUnix,
-    pages: pageCount,
-    activities_total: totalActivities,
-    event_type_counts: eventTypeCounts,
-    billing_charges: charges.length,
-    sample: charges[0] ?? null,
-  });
 
   return charges;
 }

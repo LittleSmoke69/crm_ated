@@ -1,30 +1,19 @@
 import { NextRequest } from 'next/server';
 import {
   assertConsultantAllowedForVslUser,
-  canAssignConsultorWithoutBancaCheck,
-  fetchConsultantsForProject,
+  fetchUsersForConsultantPicker,
   isMissingConsultantColumnError,
   REDIRECT_GROUPS_COLUMNS_BASE,
   validateConsultantUserId,
 } from '@/lib/admin/redirect-group-consultant';
-import { getBancasDoUsuario } from '@/lib/crm/user-bancas';
+import { isMissingIpHashColumnError } from '@/lib/redirect/client-ip';
+import { ensureCanonicalRedirectSlug } from '@/lib/redirect/ensure-canonical-slug';
 import { requireVslProjectAccess } from '@/lib/middleware/vsl-admin';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import {
-  fetchMetaBillingSnapshot,
-  getDecryptedToken,
-  getMetaConfig,
-  summarizeMetaBillingSnapshots,
-} from '@/lib/services/meta-sync-service';
 import { fetchAllSupabasePages } from '@/lib/supabase/fetch-all-pages';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 
 const WHATSAPP_INVITE_PREFIX = 'https://chat.whatsapp.com/';
-
-function isMissingRedirectProjectColumnError(err: { code?: string; message?: string } | null): boolean {
-  const msg = String(err?.message ?? '').toLowerCase();
-  return err?.code === '42703' || msg.includes('redirect_project_id');
-}
 
 /**
  * GET /api/admin/redirect/groups?project_id=xxx
@@ -52,7 +41,7 @@ export async function GET(req: NextRequest) {
       projectId = proj.id;
     }
     if (!projectId) return errorResponse('Projeto não encontrado', 404);
-    const { userId, profile } = await requireVslProjectAccess(req, projectId);
+    await requireVslProjectAccess(req, projectId);
 
     const { data: project } = await supabaseServiceRole
       .from('vsl_projects')
@@ -119,52 +108,8 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const isElevated = canAssignConsultorWithoutBancaCheck(profile);
-    const bancasGestor = isElevated ? [] : await getBancasDoUsuario(userId);
-    const consultantUi =
-      !isElevated && bancasGestor.length > 0
-        ? {
-            mode: 'by_banca' as const,
-            bancas: bancasGestor.map((b) => ({ id: b.id, name: b.name, url: b.url })),
-          }
-        : { mode: 'flat' as const, bancas: [] as { id: string; name: string; url: string }[] };
-
-    const consultantsForSelect =
-      consultantUi.mode === 'by_banca'
-        ? []
-        : await fetchConsultantsForProject(project.banca_id ?? null);
-
-    const emptyUtmSummary = { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 };
-
-    // Slug canônico = mesmo slug do projeto. Projetos antigos podem não ter linha em redirect_slugs
-    // ou ter sido criados sem esse passo (aí o GET antigo devolvia tudo vazio).
-    let { data: redirectRow } = await supabaseServiceRole
-      .from('redirect_slugs')
-      .select('id')
-      .eq('project_id', projectId)
-      .eq('slug', project.slug)
-      .maybeSingle();
-
-    if (!redirectRow?.id) {
-      const { data: anySlug } = await supabaseServiceRole
-        .from('redirect_slugs')
-        .select('id')
-        .eq('project_id', projectId)
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle();
-      redirectRow = anySlug ?? null;
-    }
-
-    // Nenhum slug no projeto: cria o canônico (igual ao POST de criação de projeto VSL).
-    if (!redirectRow?.id) {
-      const { data: inserted, error: insErr } = await supabaseServiceRole
-        .from('redirect_slugs')
-        .insert({ project_id: projectId, slug: project.slug, is_active: true })
-        .select('id')
-        .single();
-      if (!insErr && inserted?.id) redirectRow = inserted;
-    }
+    const consultantsForSelect = await fetchUsersForConsultantPicker();
+    const redirectRow = await ensureCanonicalRedirectSlug(projectId, project.slug);
 
     let groups: Array<Record<string, unknown>> | null = null;
     {
@@ -189,22 +134,55 @@ export async function GET(req: NextRequest) {
 
     const groupIds = (groups ?? []).map((g) => String((g as { id: string }).id));
     const counts: Record<string, number> = {};
+    const uniqueIpCounts: Record<string, number> = {};
+    const uniqueIpsProject = new Set<string>();
+    let total_completed_clicks = 0;
+    let ip_hash_migration_pending = false;
+
     if (groupIds.length > 0) {
-      // Agrega por projeto; PostgREST limita linhas por request — paginar para não travar em 100/1000.
-      const { data: clicks, error: clicksErr } = await fetchAllSupabasePages<{ group_id: string }>(
-        async (from, to) =>
+      type ClickRow = { group_id: string; ip_hash?: string | null; completed_at?: string | null };
+      let clicks: ClickRow[] = [];
+      const detailed = await fetchAllSupabasePages<ClickRow>(async (from, to) =>
+        supabaseServiceRole
+          .from('redirect_clicks')
+          .select('group_id, ip_hash, completed_at')
+          .eq('project_id', projectId)
+          .range(from, to)
+      );
+      if (detailed.error && isMissingIpHashColumnError(detailed.error)) {
+        ip_hash_migration_pending = true;
+        const fallback = await fetchAllSupabasePages<{ group_id: string }>(async (from, to) =>
           supabaseServiceRole
             .from('redirect_clicks')
             .select('group_id')
             .eq('project_id', projectId)
             .range(from, to)
-      );
-      if (clicksErr) {
-        console.error('[admin/redirect/groups GET] redirect_clicks', clicksErr.message);
+        );
+        if (fallback.error) {
+          console.error('[admin/redirect/groups GET] redirect_clicks', fallback.error.message);
+          return errorResponse('Erro ao contar cliques do redirect', 500);
+        }
+        clicks = (fallback.data ?? []).map((c) => ({ group_id: c.group_id }));
+      } else if (detailed.error) {
+        console.error('[admin/redirect/groups GET] redirect_clicks', detailed.error.message);
         return errorResponse('Erro ao contar cliques do redirect', 500);
+      } else {
+        clicks = detailed.data ?? [];
       }
+
+      const uniqueByGroup = new Map<string, Set<string>>();
       for (const c of clicks) {
         counts[c.group_id] = (counts[c.group_id] ?? 0) + 1;
+        if (c.completed_at) total_completed_clicks += 1;
+        if (c.ip_hash) {
+          uniqueIpsProject.add(c.ip_hash);
+          const set = uniqueByGroup.get(c.group_id) ?? new Set<string>();
+          set.add(c.ip_hash);
+          uniqueByGroup.set(c.group_id, set);
+        }
+      }
+      for (const [gid, set] of uniqueByGroup) {
+        uniqueIpCounts[gid] = set.size;
       }
     }
 
@@ -241,134 +219,13 @@ export async function GET(req: NextRequest) {
       return {
         ...g,
         clicks: counts[g.id] ?? 0,
+        unique_ip_clicks: uniqueIpCounts[g.id] ?? counts[g.id] ?? 0,
         consultant: cid ? profileById[cid] ?? null : null,
       };
     });
 
     const total_clicks = Object.values(counts).reduce((a, b) => a + b, 0);
-
-    const { data: utmVisits } = await supabaseServiceRole
-      .from('redirect_visits')
-      .select('id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, status, created_at')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    const { count: utmTotalCount } = await supabaseServiceRole
-      .from('redirect_visits')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId);
-
-    const { data: utmRows } = await supabaseServiceRole
-      .from('redirect_visits')
-      .select('utm_source, utm_medium, utm_campaign, created_at')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(5000);
-
-    const bySource: Record<string, number> = {};
-    const byMedium: Record<string, number> = {};
-    const byCampaign: Record<string, number> = {};
-    const bySourceMedium: Record<string, number> = {};
-    const byDay: Record<string, number> = {};
-    for (const r of utmRows ?? []) {
-      const row = r as { utm_source: string | null; utm_medium: string | null; utm_campaign: string | null; created_at: string };
-      const src = row.utm_source?.trim() || '(vazio)';
-      const med = row.utm_medium?.trim() || '(vazio)';
-      const camp = row.utm_campaign?.trim() || '(vazio)';
-      bySource[src] = (bySource[src] ?? 0) + 1;
-      byMedium[med] = (byMedium[med] ?? 0) + 1;
-      byCampaign[camp] = (byCampaign[camp] ?? 0) + 1;
-      const key = `${src} | ${med}`;
-      bySourceMedium[key] = (bySourceMedium[key] ?? 0) + 1;
-      const day = row.created_at ? row.created_at.slice(0, 10) : '';
-      if (day) byDay[day] = (byDay[day] ?? 0) + 1;
-    }
-
-    const utm_summary = {
-      total: utmTotalCount ?? 0,
-      by_source: bySource,
-      by_medium: byMedium,
-      by_campaign: byCampaign,
-      by_source_medium: bySourceMedium,
-      by_day: byDay,
-      sample_size: (utmRows ?? []).length,
-    };
-
-    const metaRedirectSummary: {
-      migration_pending: boolean;
-      period: { since: string; until: string };
-      campaigns_count: number;
-      spend: number;
-      billing: ReturnType<typeof summarizeMetaBillingSnapshots> | null;
-      error?: string;
-    } = {
-      migration_pending: false,
-      period: {
-        since: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10),
-        until: new Date().toISOString().slice(0, 10),
-      },
-      campaigns_count: 0,
-      spend: 0,
-      billing: null,
-    };
-
-    if (project.banca_id) {
-      const linkedCampaigns = await supabaseServiceRole
-        .from('meta_campaigns')
-        .select('campaign_id')
-        .eq('banca_id', project.banca_id)
-        .eq('redirect_project_id', projectId);
-
-      if (linkedCampaigns.error) {
-        if (isMissingRedirectProjectColumnError(linkedCampaigns.error)) {
-          metaRedirectSummary.migration_pending = true;
-          metaRedirectSummary.error =
-            'Migração pendente: aplique migrations/add_redirect_project_to_meta_campaigns.sql.';
-        } else {
-          metaRedirectSummary.error = linkedCampaigns.error.message;
-        }
-      } else {
-        const campaignIds = Array.from(
-          new Set((linkedCampaigns.data ?? []).map((row: { campaign_id?: string | null }) => row.campaign_id).filter(Boolean))
-        ) as string[];
-        metaRedirectSummary.campaigns_count = campaignIds.length;
-        if (campaignIds.length > 0) {
-          const { data: insightsRows, error: insightsErr } = await supabaseServiceRole
-            .from('meta_insights_daily')
-            .select('spend')
-            .eq('banca_id', project.banca_id)
-            .in('campaign_id', campaignIds)
-            .gte('date', metaRedirectSummary.period.since)
-            .lte('date', metaRedirectSummary.period.until);
-          if (!insightsErr) {
-            metaRedirectSummary.spend = (insightsRows ?? []).reduce(
-              (sum: number, row: { spend?: unknown }) => sum + (Number(row.spend) || 0),
-              0
-            );
-          }
-        }
-
-        try {
-          const [token, metaConfig] = await Promise.all([
-            getDecryptedToken(project.banca_id),
-            getMetaConfig(project.banca_id),
-          ]);
-          const adAccountId = metaConfig?.ad_account_id?.trim() || null;
-          if (token && adAccountId) {
-            const billingSnapshot = await fetchMetaBillingSnapshot(
-              metaConfig?.base_url?.trim() || 'https://graph.facebook.com/v25.0',
-              token,
-              adAccountId,
-              { cardChargesPeriod: metaRedirectSummary.period }
-            );
-            metaRedirectSummary.billing = summarizeMetaBillingSnapshots([billingSnapshot]);
-          }
-        } catch (error: any) {
-          metaRedirectSummary.error = metaRedirectSummary.error || error?.message || 'Falha ao carregar billing Meta.';
-        }
-      }
-    }
+    const total_unique_ips = uniqueIpsProject.size;
 
     return successResponse({
       groups: list,
@@ -382,13 +239,12 @@ export async function GET(req: NextRequest) {
       pixel_id: project.pixel_id ?? null,
       redirect_timer_seconds: project.redirect_timer_seconds ?? 3,
       total_clicks,
+      total_completed_clicks,
+      total_unique_ips,
+      ip_hash_migration_pending,
       total_groups: list.length,
       active_groups: list.filter((g: { is_active: boolean }) => g.is_active).length,
-      utm_visits: utmVisits ?? [],
-      utm_summary,
-      meta_redirect_summary: metaRedirectSummary,
       consultants_for_select: consultantsForSelect,
-      consultant_ui: consultantUi,
     });
   } catch (e: unknown) {
     if (e instanceof Error && e.message.includes('Acesso negado')) {
@@ -428,35 +284,9 @@ export async function POST(req: NextRequest) {
       .single();
     if (!project) return errorResponse('Projeto não encontrado', 404);
 
-    let { data: redirectRow } = await supabaseServiceRole
-      .from('redirect_slugs')
-      .select('id')
-      .eq('project_id', project_id)
-      .eq('slug', project.slug)
-      .maybeSingle();
-
+    const redirectRow = await ensureCanonicalRedirectSlug(project_id, project.slug);
     if (!redirectRow?.id) {
-      const { data: anySlug } = await supabaseServiceRole
-        .from('redirect_slugs')
-        .select('id')
-        .eq('project_id', project_id)
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle();
-      redirectRow = anySlug ?? null;
-    }
-
-    if (!redirectRow?.id) {
-      const { data: inserted, error: insErr } = await supabaseServiceRole
-        .from('redirect_slugs')
-        .insert({ project_id: project_id, slug: project.slug, is_active: true })
-        .select('id')
-        .single();
-      if (insErr || !inserted?.id) {
-        console.error('[admin/redirect/groups POST] redirect_slugs', insErr?.message);
-        return errorResponse('Redirect do projeto não encontrado e não foi possível criar o slug.', 500);
-      }
-      redirectRow = inserted;
+      return errorResponse('Redirect do projeto não encontrado e não foi possível criar o slug.', 500);
     }
 
     const weight = Math.min(100, Math.max(0, body.weight_percent ?? 0));

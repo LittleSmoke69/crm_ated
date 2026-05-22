@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from '@/components/WhitelabelLink';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { BookOpen, Play, ChevronRight, Loader2, GraduationCap, TrendingUp } from 'lucide-react';
 
@@ -31,10 +32,10 @@ export default function AcademyHomePage() {
   useEffect(() => {
     (async () => {
       try {
-        const modHeaders: HeadersInit = userId ? { 'x-user-id': userId } : {};
+        const authInit = mergeAuthInit(userId);
         const [modRes, progRes] = await Promise.all([
-          fetch('/api/academy/modules', { headers: modHeaders }),
-          userId ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }) : null,
+          fetch('/api/academy/modules', authInit),
+          userId ? fetch('/api/academy/progress', authInit) : null,
         ]);
         if (modRes.ok) {
           const data = await modRes.json();

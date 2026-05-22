@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequest, validateUser } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isLessonVisibleForProfile } from '@/lib/academy/lesson-role-access';
 
@@ -19,15 +21,10 @@ export async function GET(
     return NextResponse.json({ error: 'Slug obrigatório' }, { status: 400 });
   }
   try {
-    const viewerId =
-      req.headers.get('x-user-id') || req.nextUrl.searchParams.get('userId') || null;
     let profileStatus: string | null = null;
-    if (viewerId) {
-      const { data: prof } = await supabaseServiceRole
-        .from('profiles')
-        .select('status')
-        .eq('id', viewerId)
-        .maybeSingle();
+    const auth = await authenticateRequest(req);
+    if (auth?.userId && (await validateUser(auth.userId))) {
+      const prof = await getUserProfile(auth.userId);
       profileStatus = prof?.status ?? null;
     }
 

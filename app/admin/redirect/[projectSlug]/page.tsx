@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
@@ -8,8 +8,6 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Loader2, Plus, Copy, Pencil, Trash2, Percent, Scale, Settings, ExternalLink, X } from 'lucide-react';
 import RedirectClicksDashboard from '@/components/Redirect/RedirectClicksDashboard';
 import ConsultantSearchPicker from '@/components/Redirect/ConsultantSearchPicker';
-
-const CONSULTANT_FETCH_MS = 28000;
 
 function whatsappInviteHref(raw: string): string | null {
   const t = raw.trim();
@@ -27,11 +25,7 @@ interface ConsultantOption {
   id: string;
   full_name: string | null;
   email: string | null;
-}
-
-interface ConsultantUi {
-  mode: 'flat' | 'by_banca';
-  bancas: { id: string; name: string; url: string }[];
+  status?: string | null;
 }
 
 interface Group {
@@ -101,6 +95,8 @@ export default function AdminRedirectPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [redirectSlug, setRedirectSlug] = useState<string | null>(null);
   const [totalClicks, setTotalClicks] = useState(0);
+  const [totalUniqueIps, setTotalUniqueIps] = useState(0);
+  const [totalCompletedClicks, setTotalCompletedClicks] = useState(0);
   const [totalGroups, setTotalGroups] = useState(0);
   const [activeGroups, setActiveGroups] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -109,10 +105,7 @@ export default function AdminRedirectPage() {
   const [modalWeights, setModalWeights] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [consultantOptions, setConsultantOptions] = useState<ConsultantOption[]>([]);
-  const [consultantUi, setConsultantUi] = useState<ConsultantUi>({ mode: 'flat', bancas: [] });
-  const [consultantBancaIdModal, setConsultantBancaIdModal] = useState('');
-  const [consultantsByBanca, setConsultantsByBanca] = useState<ConsultantOption[]>([]);
-  const [loadingConsultantsByBanca, setLoadingConsultantsByBanca] = useState(false);
+  const [loadingUtmMeta, setLoadingUtmMeta] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', invite_url: '', weight_percent: 0, consultant_user_id: '' as string });
   const [editForm, setEditForm] = useState<{
     id: string;
@@ -140,8 +133,6 @@ export default function AdminRedirectPage() {
   const [projectEditForm, setProjectEditForm] = useState({ name: '', slug: '' });
   const [savingProjectEdit, setSavingProjectEdit] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
-  const consultantFetchAbortRef = useRef<AbortController | null>(null);
-
   useEffect(() => {
     if (!userId) return;
     setLoadError(null);
@@ -172,6 +163,8 @@ export default function AdminRedirectPage() {
         setGroups(json.data.groups ?? []);
         setRedirectSlug(json.data.redirect_slug ?? projectSlug);
         setTotalClicks(json.data.total_clicks ?? 0);
+        setTotalUniqueIps(json.data.total_unique_ips ?? 0);
+        setTotalCompletedClicks(json.data.total_completed_clicks ?? 0);
         setTotalGroups(json.data.total_groups ?? 0);
         setActiveGroups(json.data.active_groups ?? 0);
         if (json.data.project_id) setProjectId(json.data.project_id);
@@ -182,10 +175,16 @@ export default function AdminRedirectPage() {
         setMetaRedirectSummary(json.data.meta_redirect_summary ?? null);
         setPixelId(json.data.pixel_id ?? '');
         setRedirectTimerSeconds(json.data.redirect_timer_seconds ?? 3);
-        setUtmVisits(json.data.utm_visits ?? []);
-        setUtmSummary(json.data.utm_summary ?? { total: 0, by_source: {}, by_medium: {}, by_campaign: {}, by_source_medium: {}, by_day: {}, sample_size: 0 });
-        setConsultantOptions(json.data.consultants_for_select ?? []);
-        setConsultantUi(json.data.consultant_ui ?? { mode: 'flat', bancas: [] });
+        setConsultantOptions(
+          (json.data.consultants_for_select ?? []).map(
+            (c: { id: string; full_name: string | null; email: string | null; status?: string | null }) => ({
+              id: c.id,
+              full_name: c.full_name,
+              email: c.email,
+              status: c.status ?? null,
+            })
+          )
+        );
         setLoading(false);
       })
       .catch(() => {
@@ -194,40 +193,39 @@ export default function AdminRedirectPage() {
       });
   }, [userId, projectSlug, router]);
 
-  const loadConsultantsForBanca = async (bancaId: string) => {
-    if (!userId || !bancaId) return;
-    consultantFetchAbortRef.current?.abort();
-    const ac = new AbortController();
-    consultantFetchAbortRef.current = ac;
-    const timeoutId = setTimeout(() => ac.abort(), CONSULTANT_FETCH_MS);
-    setLoadingConsultantsByBanca(true);
-    try {
-      const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(bancaId)}`, {
-        headers: { 'X-User-Id': userId },
-        signal: ac.signal,
-      });
-      const j = await r.json();
-      if (consultantFetchAbortRef.current !== ac) return;
-      if (j?.success && Array.isArray(j.data)) setConsultantsByBanca(j.data as ConsultantOption[]);
-      else setConsultantsByBanca([]);
-    } catch (e) {
-      if (consultantFetchAbortRef.current === ac) {
-        setConsultantsByBanca([]);
-        if (e instanceof Error && e.name === 'AbortError') {
-          console.warn('[redirect] consultores: requisição cancelada ou tempo esgotado');
+  useEffect(() => {
+    if (!userId || !projectSlug) return;
+    setLoadingUtmMeta(true);
+    const headers = { 'X-User-Id': userId };
+    Promise.all([
+      fetch(`/api/admin/redirect/utm-summary?project_id=${encodeURIComponent(projectSlug)}`, { headers }).then((r) =>
+        r.json()
+      ),
+      fetch(`/api/admin/redirect/meta-summary?project_id=${encodeURIComponent(projectSlug)}`, { headers }).then((r) =>
+        r.json()
+      ),
+    ])
+      .then(([utmJson, metaJson]) => {
+        if (utmJson?.success && utmJson.data) {
+          setUtmVisits(utmJson.data.utm_visits ?? []);
+          setUtmSummary(
+            utmJson.data.utm_summary ?? {
+              total: 0,
+              by_source: {},
+              by_medium: {},
+              by_campaign: {},
+              by_source_medium: {},
+              by_day: {},
+              sample_size: 0,
+            }
+          );
         }
-      }
-    } finally {
-      clearTimeout(timeoutId);
-      if (consultantFetchAbortRef.current === ac) {
-        setLoadingConsultantsByBanca(false);
-        consultantFetchAbortRef.current = null;
-      }
-    }
-  };
-
-  const isConsultantByBanca = consultantUi.mode === 'by_banca' && consultantUi.bancas.length > 0;
-  const consultantPickList = isConsultantByBanca ? consultantsByBanca : consultantOptions;
+        if (metaJson?.success && metaJson.data) {
+          setMetaRedirectSummary(metaJson.data);
+        }
+      })
+      .finally(() => setLoadingUtmMeta(false));
+  }, [userId, projectSlug]);
 
   const addGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -254,14 +252,11 @@ export default function AdminRedirectPage() {
       if (json?.data) {
         const row = json.data as Group & { clicks?: number };
         const cid = row.consultant_user_id ?? null;
-        const list = isConsultantByBanca ? consultantsByBanca : consultantOptions;
-        const opt = cid ? list.find((c) => c.id === cid) : null;
+        const opt = cid ? consultantOptions.find((c) => c.id === cid) : null;
         const consultant = opt ? { full_name: opt.full_name, email: opt.email } : null;
         setGroups((g) => [...g, { ...row, clicks: 0, consultant }]);
         setModalAdd(false);
         setAddForm({ name: '', invite_url: '', weight_percent: 0, consultant_user_id: '' });
-        setConsultantBancaIdModal('');
-        setConsultantsByBanca([]);
       } else {
         alert('Resposta inválida do servidor.');
       }
@@ -282,8 +277,6 @@ export default function AdminRedirectPage() {
   };
 
   const openEditModal = (g: Group) => {
-    setConsultantBancaIdModal('');
-    setConsultantsByBanca([]);
     setEditForm({
       id: g.id,
       name: g.name,
@@ -291,49 +284,6 @@ export default function AdminRedirectPage() {
       consultant_user_id: g.consultant_user_id ?? '',
     });
     setModalEdit(true);
-
-    const byBanca = consultantUi.mode === 'by_banca' && consultantUi.bancas.length > 0;
-    const cid = g.consultant_user_id?.trim();
-    if (byBanca && userId && cid) {
-      consultantFetchAbortRef.current?.abort();
-      const ac = new AbortController();
-      consultantFetchAbortRef.current = ac;
-      const timeoutId = setTimeout(() => ac.abort(), CONSULTANT_FETCH_MS);
-      setLoadingConsultantsByBanca(true);
-      void (async () => {
-        try {
-          const results = await Promise.all(
-            consultantUi.bancas.map(async (b) => {
-              try {
-                const r = await fetch(`/api/admin/redirect/consultants?banca_id=${encodeURIComponent(b.id)}`, {
-                  headers: { 'X-User-Id': userId },
-                  signal: ac.signal,
-                });
-                const j = await r.json();
-                const arr: ConsultantOption[] = j?.success && Array.isArray(j.data) ? j.data : [];
-                return { bancaId: b.id, arr };
-              } catch {
-                return { bancaId: b.id, arr: [] as ConsultantOption[] };
-              }
-            })
-          );
-          if (consultantFetchAbortRef.current !== ac) return;
-          for (const { bancaId, arr } of results) {
-            if (arr.some((c) => c.id === cid)) {
-              setConsultantBancaIdModal(bancaId);
-              setConsultantsByBanca(arr);
-              return;
-            }
-          }
-        } finally {
-          clearTimeout(timeoutId);
-          if (consultantFetchAbortRef.current === ac) {
-            setLoadingConsultantsByBanca(false);
-            consultantFetchAbortRef.current = null;
-          }
-        }
-      })();
-    }
   };
 
   const saveEdit = async (e: React.FormEvent) => {
@@ -361,8 +311,7 @@ export default function AdminRedirectPage() {
         setGroups((prev) =>
           prev.map((row) => {
             if (row.id !== editForm.id) return row;
-            const list = isConsultantByBanca ? consultantsByBanca : consultantOptions;
-            const opt = cid ? list.find((c) => c.id === cid) : null;
+            const opt = cid ? consultantOptions.find((c) => c.id === cid) : null;
             const consultant = opt
               ? { full_name: opt.full_name, email: opt.email }
               : cid
@@ -373,8 +322,6 @@ export default function AdminRedirectPage() {
         );
         setModalEdit(false);
         setEditForm(null);
-        setConsultantBancaIdModal('');
-        setConsultantsByBanca([]);
       } else {
         alert('Resposta inválida do servidor.');
       }
@@ -700,7 +647,11 @@ export default function AdminRedirectPage() {
                 <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
                 <span>{activeGroups} ativo{activeGroups !== 1 ? 's' : ''}</span>
                 <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
-                <span>{totalClicks.toLocaleString('pt-BR')} clique{totalClicks !== 1 ? 's' : ''}</span>
+                <span>{totalUniqueIps.toLocaleString('pt-BR')} IP único{totalUniqueIps !== 1 ? 's' : ''}</span>
+                <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
+                <span>{totalCompletedClicks.toLocaleString('pt-BR')} concluído{totalCompletedClicks !== 1 ? 's' : ''}</span>
+                <span className="mx-2 text-gray-300 dark:text-[#555]">·</span>
+                <span>{totalClicks.toLocaleString('pt-BR')} registro{totalClicks !== 1 ? 's' : ''}</span>
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
                 <div className={`rounded-xl border px-3 py-2 ${projectBanca ? 'border-[#8CD955]/30 bg-[#8CD955]/10 dark:bg-[#8CD955]/10' : 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30'}`}>
@@ -787,11 +738,7 @@ export default function AdminRedirectPage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setConsultantBancaIdModal('');
-                  setConsultantsByBanca([]);
-                  setModalAdd(true);
-                }}
+                onClick={() => setModalAdd(true)}
                 className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#8CD955] text-white text-sm font-semibold rounded-xl hover:opacity-90 transition shadow-sm"
               >
                 <Plus className="w-4 h-4" />
@@ -813,8 +760,16 @@ export default function AdminRedirectPage() {
                 <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Grupos Ativos</p>
                 <p className="text-xl font-bold text-gray-800 dark:text-white">{activeGroups}</p>
               </div>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">IPs únicos</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalUniqueIps.toLocaleString('pt-BR')}</p>
+              </div>
+              <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4">
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Concluídos</p>
+                <p className="text-xl font-bold text-gray-800 dark:text-white">{totalCompletedClicks.toLocaleString('pt-BR')}</p>
+              </div>
               <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-sm p-4 col-span-2">
-                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Total de Cliques</p>
+                <p className="text-xs text-gray-500 dark:text-[#aaa] mb-0.5">Registros (pageviews)</p>
                 <p className="text-xl font-bold text-gray-800 dark:text-white">{totalClicks.toLocaleString('pt-BR')}</p>
               </div>
             </div>
@@ -1167,7 +1122,11 @@ export default function AdminRedirectPage() {
               <p className="text-xs text-gray-500 dark:text-[#aaa] mt-0.5">Visitas à página /r/{redirectSlug ?? ''} com utm_source, utm_medium, utm_campaign, utm_content ou utm_term na URL (últimas 100).</p>
             </div>
             <div className="overflow-auto max-h-[320px]">
-              {utmVisits.length === 0 ? (
+              {loadingUtmMeta ? (
+                <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando UTM…
+                </p>
+              ) : utmVisits.length === 0 ? (
                 <p className="py-6 px-4 text-gray-600 dark:text-[#aaa] text-sm text-center">Nenhum acesso com UTM registrado ainda.</p>
               ) : (
                 <table className="w-full">
@@ -1289,70 +1248,24 @@ export default function AdminRedirectPage() {
                     required
                   />
                 </div>
-                {isConsultantByBanca ? (
-                  <>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Banca</label>
-                      <select
-                        value={consultantBancaIdModal}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setConsultantBancaIdModal(v);
-                          setEditForm((f) => f && { ...f, consultant_user_id: '' });
-                          if (v) void loadConsultantsForBanca(v);
-                          else setConsultantsByBanca([]);
-                        }}
-                        className={inputClass}
-                      >
-                        <option value="">Selecione a banca</option>
-                        {consultantUi.bancas.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {(b.name || b.url || b.id).slice(0, 80)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">
-                        Opcional para filtrar a lista de consultores. Você pode salvar o grupo sem consultor mesmo sem escolher banca.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                      <ConsultantSearchPicker
-                        value={editForm.consultant_user_id}
-                        onChange={(id) => setEditForm((f) => f && { ...f, consultant_user_id: id })}
-                        options={consultantPickList}
-                        loading={loadingConsultantsByBanca}
-                        emptyListHint={
-                          consultantBancaIdModal
-                            ? undefined
-                            : 'Selecione uma banca acima para carregar os consultores vinculados a ela. O grupo pode ficar sem consultor.'
-                        }
-                        inputClass={inputClass}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                    <ConsultantSearchPicker
-                      value={editForm.consultant_user_id}
-                      onChange={(id) => setEditForm((f) => f && { ...f, consultant_user_id: id })}
-                      options={consultantOptions}
-                      loading={false}
-                      emptyListHint={
-                        consultantOptions.length === 0
-                          ? 'Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.'
-                          : undefined
-                      }
-                      inputClass={inputClass}
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Usuário vinculado (opcional)</label>
+                  <ConsultantSearchPicker
+                    value={editForm.consultant_user_id}
+                    onChange={(id) => setEditForm((f) => f && { ...f, consultant_user_id: id })}
+                    options={consultantOptions}
+                    loading={false}
+                    emptyListHint={
+                      consultantOptions.length === 0 ? 'Nenhum usuário carregado. Recarregue a página.' : undefined
+                    }
+                    inputClass={inputClass}
+                  />
+                </div>
                 <div className="flex gap-3 pt-2">
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
+                  <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
                     Cancelar
                   </button>
                 </div>
@@ -1396,70 +1309,24 @@ export default function AdminRedirectPage() {
                     className={`w-28 ${inputClass}`}
                   />
                 </div>
-                {isConsultantByBanca ? (
-                  <>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Banca</label>
-                      <select
-                        value={consultantBancaIdModal}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setConsultantBancaIdModal(v);
-                          setAddForm((f) => ({ ...f, consultant_user_id: '' }));
-                          if (v) void loadConsultantsForBanca(v);
-                          else setConsultantsByBanca([]);
-                        }}
-                        className={inputClass}
-                      >
-                        <option value="">Selecione a banca</option>
-                        {consultantUi.bancas.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {(b.name || b.url || b.id).slice(0, 80)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-gray-500 dark:text-[#aaa] mt-1">
-                        Opcional: use para filtrar consultores. Dá para criar o grupo sem banca e sem consultor.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                      <ConsultantSearchPicker
-                        value={addForm.consultant_user_id}
-                        onChange={(id) => setAddForm((f) => ({ ...f, consultant_user_id: id }))}
-                        options={consultantPickList}
-                        loading={loadingConsultantsByBanca}
-                        emptyListHint={
-                          consultantBancaIdModal
-                            ? undefined
-                            : 'Selecione uma banca acima para carregar os consultores vinculados a ela. O grupo pode ficar sem consultor.'
-                        }
-                        inputClass={inputClass}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Consultor vinculado (opcional)</label>
-                    <ConsultantSearchPicker
-                      value={addForm.consultant_user_id}
-                      onChange={(id) => setAddForm((f) => ({ ...f, consultant_user_id: id }))}
-                      options={consultantOptions}
-                      loading={false}
-                      emptyListHint={
-                        consultantOptions.length === 0
-                          ? 'Nenhum consultor na lista. Com banca no projeto, só aparecem consultores vinculados a ela; sem banca, até 500 consultores do sistema.'
-                          : undefined
-                      }
-                      inputClass={inputClass}
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-1.5">Usuário vinculado (opcional)</label>
+                  <ConsultantSearchPicker
+                    value={addForm.consultant_user_id}
+                    onChange={(id) => setAddForm((f) => ({ ...f, consultant_user_id: id }))}
+                    options={consultantOptions}
+                    loading={false}
+                    emptyListHint={
+                      consultantOptions.length === 0 ? 'Nenhum usuário carregado. Recarregue a página.' : undefined
+                    }
+                    inputClass={inputClass}
+                  />
+                </div>
                 <div className="flex gap-3 pt-2">
                   <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
-                  <button type="button" onClick={() => { setModalAdd(false); setConsultantBancaIdModal(''); setConsultantsByBanca([]); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
+                  <button type="button" onClick={() => setModalAdd(false)} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
                     Cancelar
                   </button>
                 </div>

@@ -7,6 +7,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { runSync } from '@/lib/services/meta-sync-service';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,26 +22,19 @@ export async function POST(req: NextRequest) {
 
     const result = await runSync(bancaId, datePreset);
     if (!result.success) {
-      console.log('[admin/meta API] POST sync resposta', {
-        banca_id: bancaId,
-        date_preset: datePreset,
-        success: false,
-        error: result.error ?? null,
-      });
       return successResponse({
         success: false,
         error: result.error,
       });
     }
 
-    console.log('[admin/meta API] POST sync resposta', {
-      banca_id: bancaId,
-      date_preset: datePreset,
-      success: true,
-      campaignsCount: result.campaignsCount ?? 0,
-      adsetsCount: result.adsetsCount ?? 0,
-      insightsCount: result.insightsCount ?? 0,
-    });
+    if (isMetaVerboseLogEnabled()) {
+      console.log('[admin/meta API] POST sync ok', {
+        banca_id: bancaId,
+        campaignsCount: result.campaignsCount ?? 0,
+        insightsCount: result.insightsCount ?? 0,
+      });
+    }
     return successResponse({
       success: true,
       campaignsCount: result.campaignsCount,

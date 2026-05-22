@@ -1,16 +1,24 @@
 /**
  * POST /api/chat/evolution-events/process-pending
  *
- * Processa em lote eventos pendentes da tabela evolution_webhook_events
- * nas tabelas de chat (chat_conversations + chat_messages).
+ * Backfill de chat_conversations/chat_messages a partir de evolution_webhook_events.
+ * Em operação normal, o worker RabbitMQ (rabbitmq-worker) já popula chat em tempo
+ * real e marca `processed_at`. Este endpoint serve como rede de segurança para:
+ *   - eventos antigos pré-worker
+ *   - falhas de chat persistence no worker (worker continua, evento fica !processed_at)
+ *   - reprocessamento manual quando o admin solicita
  *
  * Parâmetros:
- *   instance_name  string   — filtra por instância (obrigatório)
- *   limit          number   — eventos por lote (padrão 200, max 1000)
- *   offset         number   — paginação
- *   reprocess_all  boolean  — true = reprocessa todos (inclusive já processados)
+ *   instance_name        string   obrigatório — filtra por instância
+ *   limit                number   default 200, max 1000
+ *   offset               number   paginação
+ *   since                ISO8601  só processa eventos com received_at >= since
+ *                                 (default: 1h atrás — evita varrer backlog antigo)
+ *   reprocess_all        boolean  default false — true reprocessa já processados
+ *   verify_all_messages  boolean  default true  — verifica se chat_messages tem
+ *                                 a mensagem; se faltar, força reprocessamento
  *
- * O processamento é idempotente: saveMessage usa ignoreDuplicates internamente.
+ * Idempotência: saveMessage/upsertConversation usam ignoreDuplicates/upsert.
  */
 
 import { NextRequest } from 'next/server';
@@ -51,6 +59,7 @@ export async function POST(req: NextRequest) {
       instance_name?: string;
       limit?: number;
       offset?: number;
+      since?: string;
       reprocess_all?: boolean;
       verify_all_messages?: boolean;
     };
@@ -64,6 +73,18 @@ export async function POST(req: NextRequest) {
     const offset = Math.max(0, Number(body.offset) || 0);
     const reprocessAll = body.reprocess_all === true;
     const verifyAllMessages = body.verify_all_messages !== false;
+
+    // since default = 1h atrás. Evita escanear backlog inteiro a cada abertura
+    // do chat (era a causa do 5min de espera). Frontend pode passar timestamp
+    // específico, ex.: "última mensagem conhecida".
+    let sinceIso: string | null = null;
+    if (typeof body.since === 'string' && body.since.trim()) {
+      const parsed = new Date(body.since);
+      if (!isNaN(parsed.getTime())) sinceIso = parsed.toISOString();
+    }
+    if (!sinceIso && !reprocessAll) {
+      sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    }
 
     const { data: instanceRow, error: instanceError } = await supabaseServiceRole
       .from('evolution_instances')
@@ -84,6 +105,7 @@ export async function POST(req: NextRequest) {
       .in('event_type', CHAT_EVENT_TYPES);
 
     if (!reprocessAll) countQuery = countQuery.is('processed_at', null);
+    if (sinceIso) countQuery = countQuery.gte('received_at', sinceIso);
     const { count: totalCount } = await countQuery;
 
     // Busca os eventos
@@ -96,6 +118,7 @@ export async function POST(req: NextRequest) {
       .range(offset, offset + limit - 1);
 
     if (!reprocessAll) query = query.is('processed_at', null);
+    if (sinceIso) query = query.gte('received_at', sinceIso);
 
     const { data: events, error: fetchError } = await query;
 
@@ -163,6 +186,8 @@ export async function POST(req: NextRequest) {
       total_fetched: list.length,
       offset,
       limit,
+      since: sinceIso,
+      reprocess_all: reprocessAll,
       has_more: hasMore,
       next_offset: hasMore ? offset + list.length : null,
       processed,

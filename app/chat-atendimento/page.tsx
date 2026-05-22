@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { withTenantSlug } from '@/lib/utils/tenant-href';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
+import { DocumentMessageView } from '@/components/chat/DocumentMessageView';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import Link from '@/components/WhitelabelLink';
 import { supabase } from '@/lib/supabase';
 import {
@@ -433,11 +435,13 @@ function MediaRetryButton({
   chatMessageId,
   mediaType,
   fromMe,
+  userId,
   onResolved,
 }: {
   chatMessageId: string;
   mediaType: string;
   fromMe: boolean;
+  userId?: string | null;
   onResolved: (url: string) => void;
 }) {
   const [retrying, setRetrying] = useState(false);
@@ -450,12 +454,14 @@ function MediaRetryButton({
     setRetrying(true);
     setError(null);
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
-      const res = await fetch('/api/chat/messages/retry-media', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ chat_message_id: chatMessageId }),
-      });
+      const res = await fetch(
+        '/api/chat/messages/retry-media',
+        mergeAuthInit(userId, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_message_id: chatMessageId }),
+        })
+      );
       const json = await res.json();
       if (json.success && json.data?.media_url) {
         onResolved(json.data.media_url);
@@ -648,11 +654,13 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
 function MessageContent({
   msg,
   fromMe,
+  userId,
   onMediaClick,
   onMediaResolved,
 }: {
   msg: Message;
   fromMe: boolean;
+  userId?: string | null;
   onMediaClick: (url: string, type: 'image' | 'video', caption?: string | null) => void;
   onMediaResolved?: (messageId: string, url: string) => void;
 }) {
@@ -671,15 +679,18 @@ function MessageContent({
     if (msg.provider !== 'whatsapp_official') return;
     if (!msg.media_type || msg.media_type === 'text') return;
 
+    const delayMs = msg.media_type === 'document' ? 5000 : 1500;
     const timer = setTimeout(async () => {
       setAutoRetried(true);
       try {
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') || '' : '';
-        const res = await fetch('/api/chat/messages/retry-media', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ chat_message_id: msg.id }),
-        });
+        const res = await fetch(
+          '/api/chat/messages/retry-media',
+          mergeAuthInit(userId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_message_id: msg.id }),
+          })
+        );
         const json = await res.json();
         if (json.success && json.data?.media_url) {
           handleMediaResolved(json.data.media_url);
@@ -687,10 +698,10 @@ function MessageContent({
       } catch {
         // silencioso — o botão de retry manual continua disponível
       }
-    }, 1500);
+    }, delayMs);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaUrl, autoRetried, msg.id, msg.provider, msg.media_type]);
+  }, [mediaUrl, autoRetried, msg.id, msg.provider, msg.media_type, userId]);
 
   const canRetry = msg.provider === 'whatsapp_official';
 
@@ -700,6 +711,7 @@ function MessageContent({
         chatMessageId={msg.id}
         mediaType={mediaType}
         fromMe={fromMe}
+        userId={userId}
         onResolved={handleMediaResolved}
       />
     ) : null;
@@ -743,19 +755,18 @@ function MessageContent({
       )}
       {msg.media_type === 'document' && (
         mediaUrl ? (
-          <a
-            href={mediaUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`flex items-center gap-2 text-sm underline ${fromMe ? 'text-white/90' : 'text-blue-400'}`}
-          >
-            <FileText size={16} /> {msg.caption ?? 'Documento'}
-          </a>
+          <DocumentMessageView
+            url={mediaUrl}
+            caption={msg.caption}
+            fromMe={fromMe}
+            chatMessageId={msg.id}
+            userId={userId}
+          />
         ) : (
           retryFallback('document') || <span className={`text-sm italic ${textClass}`}>📄 Documento não disponível</span>
         )
       )}
-      {msg.caption && msg.media_type && msg.media_type !== 'text' && (
+      {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'document' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
@@ -3013,7 +3024,10 @@ export default function ChatPage() {
     setRecordedBlobUrl(null);
   };
 
-  const uploadRecordedAudio = async (blob: Blob, mimeType: string): Promise<{ meta_id?: string; url: string } | null> => {
+  const uploadRecordedAudio = async (
+    blob: Blob,
+    mimeType: string
+  ): Promise<{ meta_id?: string; url: string; metaError?: string } | null> => {
     if (!selectedChannel || !userId) return null;
     setUploading(true);
     try {
@@ -3051,24 +3065,38 @@ export default function ChatPage() {
         return fd;
       };
 
-      const [metaResult, supResult] = await Promise.allSettled([
-        fetch('/api/chat/whatsapp-official/upload-audio-meta', {
-          method: 'POST', body: makeFormData(), headers: authHeaders(),
-        }).then((r) => r.json()),
-        fetch('/api/chat/whatsapp-official/upload-media', {
-          method: 'POST', body: makeFormData(), headers: authHeaders(),
-        }).then((r) => r.json()),
-      ]);
-
-      const metaData = metaResult.status === 'fulfilled' ? metaResult.value : null;
-      const supData = supResult.status === 'fulfilled' ? supResult.value : null;
-
-      const meta_id: string | undefined = metaData?.success ? metaData.data?.media_id : undefined;
+      const supRes = await fetch('/api/chat/whatsapp-official/upload-media', {
+        method: 'POST',
+        body: makeFormData(),
+        headers: authHeaders(),
+      });
+      const supData = await supRes.json();
       const url: string = supData?.success ? supData.data?.url : '';
 
-      if (!meta_id && !url) return null;
+      let meta_id: string | undefined;
+      let metaError: string | undefined;
+      try {
+        const metaRes = await fetch('/api/chat/whatsapp-official/upload-audio-meta', {
+          method: 'POST',
+          body: makeFormData(),
+          headers: authHeaders(),
+        });
+        const metaData = await metaRes.json();
+        if (metaData?.success && metaData.data?.media_id) {
+          meta_id = metaData.data.media_id;
+        } else {
+          metaError = metaData?.error || metaData?.message || `HTTP ${metaRes.status}`;
+        }
+      } catch (e) {
+        metaError = (e as Error)?.message || 'Falha no upload para Meta';
+      }
 
-      return { meta_id, url };
+      if (!meta_id && !url) {
+        console.error('[Chat Atendimento] upload áudio:', metaError);
+        return null;
+      }
+
+      return { meta_id, url, metaError: meta_id ? undefined : metaError };
     } catch (e) {
       console.error('[Chat] upload áudio:', e);
       return null;
@@ -3077,73 +3105,6 @@ export default function ChatPage() {
     }
   };
 
-  const handleSendRecordedAudio = async () => {
-    if (!recordedBlob || !selectedChannel || !selectedConversationId) return;
-    const conversation = conversations.find((c) => c.id === selectedConversationId);
-    if (!conversation) return;
-    setSendError(null);
-    setSending(true);
-    try {
-      const uploaded = await uploadRecordedAudio(recordedBlob, recordedMimeType);
-      if (!uploaded) {
-        setSendError('Falha ao processar áudio. Tente novamente.');
-        return;
-      }
-
-      if (selectedChannel.type === 'evolution') {
-        const response = await fetch('/api/chat/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({
-            instance_id: selectedChannel.id,
-            remoteJid: conversation.remote_jid,
-            type: 'media',
-            media: uploaded.url,
-            mimetype: recordedMimeType.split(';')[0].trim() || 'audio/ogg',
-            mediatype: 'audio',
-            fileName: 'audio.ogg',
-          }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (response.ok && result.success) {
-          discardRecordedAudio();
-        } else {
-          setSendError(result.error || result.message || 'Falha ao enviar áudio.');
-        }
-        return;
-      }
-
-      const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
-      const body: Record<string, string | undefined> = {
-        config_id: selectedChannel.id,
-        to,
-        type: 'audio',
-        ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
-        media_url: uploaded.url || undefined,
-      };
-      const response = await fetch('/api/chat/whatsapp-official/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(body),
-      });
-      let result: { success?: boolean; error?: string; message?: string } = {};
-      try { result = await response.json(); } catch { result = {}; }
-      if (response.ok && result.success) {
-        discardRecordedAudio();
-      } else {
-        const errMsg = result.error || result.message || '';
-        setSendError(getSendErrorMessage(response.status, errMsg));
-        const isTokenError = response.status === 401 ||
-          (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
-        if (isTokenError) {
-          setShowTokenAlert(true);
-          setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
-        }
-      }
-    } finally {
-      setSending(false);
-    }
-  };
 
   // ── Corretor ortográfico ───────────────────────────────────────────────────
   const handleSpellCheck = async () => {
@@ -3329,7 +3290,8 @@ export default function ChatPage() {
   const handleSendMessage = async () => {
     const hasText = messageText.trim().length > 0;
     const hasMedia = !!attachedMedia;
-    if ((!hasText && !hasMedia) || !selectedConversationId || !selectedChannel || sending) return;
+    const hasRecordedAudio = !!(recordedBlob && !isRecording);
+    if ((!hasText && !hasMedia && !hasRecordedAudio) || !selectedConversationId || !selectedChannel || sending) return;
     if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
       setSendError('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
       return;
@@ -3341,6 +3303,75 @@ export default function ChatPage() {
     setSendError(null);
     setSending(true);
     try {
+      if (hasRecordedAudio) {
+        const uploaded = await uploadRecordedAudio(recordedBlob!, recordedMimeType);
+        if (!uploaded) {
+          setSendError(
+            'Falha ao processar áudio. Se o erro mencionar FFmpeg, instale com: brew install ffmpeg e reinicie o servidor.'
+          );
+          return;
+        }
+        if (!uploaded.meta_id && !uploaded.url) {
+          setSendError(uploaded.metaError || 'Falha ao enviar áudio para o WhatsApp.');
+          return;
+        }
+
+        if (selectedChannel.type === 'evolution') {
+          const response = await fetch('/api/chat/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+              instance_id: selectedChannel.id,
+              remoteJid: conversation.remote_jid,
+              type: 'media',
+              media: uploaded.url,
+              mimetype: recordedMimeType.split(';')[0].trim() || 'audio/ogg',
+              mediatype: 'audio',
+              fileName: 'audio.ogg',
+            }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (response.ok && result.success) {
+            discardRecordedAudio();
+          } else {
+            setSendError(result.error || result.message || 'Falha ao enviar áudio.');
+          }
+          return;
+        }
+
+        const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+        const body: Record<string, string | undefined> = {
+          config_id: selectedChannel.id,
+          to,
+          type: 'audio',
+          ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
+          media_url: uploaded.url || undefined,
+        };
+        if (!uploaded.meta_id && uploaded.url) {
+          console.warn('[Chat Atendimento] áudio via media_url (Meta upload falhou):', uploaded.metaError);
+        }
+        const response = await fetch('/api/chat/whatsapp-official/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body),
+        });
+        let result: { success?: boolean; error?: string; message?: string } = {};
+        try { result = await response.json(); } catch { result = {}; }
+        if (response.ok && result.success) {
+          discardRecordedAudio();
+        } else {
+          const errMsg = result.error || result.message || '';
+          setSendError(getSendErrorMessage(response.status, errMsg));
+          const isTokenError = response.status === 401 ||
+            (response.status === 502 && (errMsg.toLowerCase().includes('token') || errMsg.includes('190') || errMsg.includes('OAuthException')));
+          if (isTokenError) {
+            setShowTokenAlert(true);
+            setTokenAlertMessage('Token de acesso inválido ou expirado. Renove o token em Admin > WhatsApp Oficial.');
+          }
+        }
+        return;
+      }
+
       if (selectedChannel.type === 'evolution') {
         const response = await fetch('/api/chat/send', {
           method: 'POST',
@@ -3422,6 +3453,12 @@ export default function ChatPage() {
                 ? { meta_id: attachedMedia!.meta_id, media_url: attachedMedia!.url || undefined }
                 : { media_url: attachedMedia!.url }),
               caption: hasText ? messageText.trim() : undefined,
+              ...(attachedMedia!.type === 'document'
+                ? {
+                    filename: attachedMedia!.name,
+                    ...(!hasText ? { caption: attachedMedia!.name } : {}),
+                  }
+                : {}),
             }
           : { config_id: selectedChannel.id, to, type: 'text', text: messageText.trim() };
 
@@ -6175,6 +6212,7 @@ export default function ChatPage() {
                               <MessageContent
                                 msg={msg}
                                 fromMe={msg.from_me}
+                                userId={userId}
                                 onMediaClick={(url, type, caption) => setMediaModal({ url, type, caption })}
                                 onMediaResolved={(msgId, url) => setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, media_url: url } : m))}
                               />
@@ -6313,9 +6351,9 @@ export default function ChatPage() {
 
                 {/* ── Barra de mensagem ────────────────────────────────── */}
                 <div className="flex-shrink-0 w-full bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-3">
-                  <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf" onChange={handleFileSelect} />
+                  <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
-                  <input ref={docInputRef} type="file" className="hidden" accept="application/pdf" onChange={handleFileSelect} />
+                  <input ref={docInputRef} type="file" className="hidden" accept="application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   {/* ── Prévia de áudio gravado ──────────────────────────── */}
                   {recordedBlob && !isRecording && (
                     <div className="mb-2 p-3 bg-gray-50 dark:bg-[#2a2a2a] rounded-xl border border-[#8CD955]/40 dark:border-[#8CD955]/30 flex flex-col gap-2">
@@ -6338,27 +6376,6 @@ export default function ChatPage() {
                       </div>
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <audio src={recordedBlobUrl!} controls className="w-full" style={{ height: '36px' }} />
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={discardRecordedAudio}
-                          disabled={uploading || sending}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50 transition-colors"
-                        >
-                          <Trash2 size={12} />
-                          Descartar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSendRecordedAudio}
-                          disabled={uploading || sending || (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-white disabled:opacity-50 transition-colors"
-                          style={{ backgroundColor: '#8CD955' }}
-                        >
-                          {uploading || sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                          Enviar nota de voz
-                        </button>
-                      </div>
                     </div>
                   )}
                   {attachedMedia && (
@@ -6536,14 +6553,17 @@ export default function ChatPage() {
                       <button
                         onClick={handleSendMessage}
                         disabled={
-                          (!messageText.trim() && !attachedMedia) ||
+                          (!messageText.trim() && !attachedMedia && !recordedBlob) ||
                           sending ||
+                          uploading ||
                           (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)
                         }
                         title={
                           selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage
                             ? 'Fora da janela 24h'
-                            : 'Enviar'
+                            : recordedBlob
+                              ? 'Enviar nota de voz'
+                              : 'Enviar'
                         }
                         className="px-3 py-2 text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
                         style={{ backgroundColor: '#8CD955' }}

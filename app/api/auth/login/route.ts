@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getTenantByIdOrSlug } from '@/lib/services/zaploto-tenant-service';
+import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
+import { appendSessionCookie } from '@/lib/server/session-token';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 
 const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
@@ -13,6 +15,9 @@ const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
  */
 export async function POST(req: NextRequest) {
   try {
+    const rateLimited = checkIpRateLimit(req, 'auth-login', 20, 15 * 60 * 1000);
+    if (rateLimited) return errorResponse(rateLimited, 429);
+
     const body = await req.json();
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
@@ -60,14 +65,15 @@ export async function POST(req: NextRequest) {
       .update({ last_login_at: new Date().toISOString() })
       .eq('id', user.id);
 
-    // status = role do usuário no banco (super_admin, admin, consultor, gerente, dono_banca, gestor, auditoria, suporte)
-    return successResponse({
+    const res = successResponse({
       userId: user.id,
       email: user.email,
       status: user.status ?? null,
       zaploto_id:
         (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID,
     });
+    await appendSessionCookie(res, user.id);
+    return res;
   } catch (err) {
     console.error('[Auth Login] Erro:', err);
     return errorResponse('Erro ao efetuar login.', 500);

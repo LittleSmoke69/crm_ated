@@ -1,27 +1,15 @@
-function decodeSafely(value: string): string {
-  let out = value;
-  try {
-    for (let i = 0; i < 3; i += 1) {
-      const decoded = decodeURIComponent(out);
-      if (decoded === out) break;
-      out = decoded;
-    }
-  } catch {
-    // Ignora decode inválido e segue com valor bruto.
-  }
-  return out;
-}
+import { decodeRedirectSlug } from '@/lib/redirect/decode-slug';
 
 /** Normaliza entradas como "slug", "/r/slug", "https://dominio/r/slug?..." para apenas "slug". */
 export function normalizeRedirectSlug(raw: string | null | undefined): string {
-  const input = decodeSafely(String(raw ?? '').trim());
+  const input = decodeRedirectSlug(String(raw ?? ''));
   if (!input) return '';
 
   // Caso venha URL completa
   if (/^https?:\/\//i.test(input)) {
     try {
       const u = new URL(input);
-      const path = decodeSafely(u.pathname).replace(/^\/+/, '');
+      const path = decodeRedirectSlug(u.pathname).replace(/^\/+/, '');
       if (path.toLowerCase().startsWith('r/')) {
         return path.slice(2).replace(/^\/+/, '').split('/')[0]?.trim() ?? '';
       }

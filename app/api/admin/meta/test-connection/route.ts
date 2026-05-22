@@ -7,6 +7,7 @@ import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { isMetaIntegrationLinkedToBanca, testConnection } from '@/lib/services/meta-sync-service';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,23 +29,15 @@ export async function POST(req: NextRequest) {
 
     const result = await testConnection(String(bancaId), integrationId);
     if (!result.success) {
-      console.log('[admin/meta API] POST test-connection resposta', {
-        banca_id: bancaId,
-        success: false,
-        error: result.error ?? null,
-      });
       return successResponse({
         success: false,
         error: result.error,
       });
     }
 
-    console.log('[admin/meta API] POST test-connection resposta', {
-      banca_id: bancaId,
-      success: true,
-      me_id: result.me?.id ?? null,
-      ad_accounts_returned: result.adAccounts?.length ?? 0,
-    });
+    if (isMetaVerboseLogEnabled()) {
+      console.log('[admin/meta API] POST test-connection ok', { banca_id: bancaId });
+    }
     return successResponse({
       success: true,
       me: result.me,

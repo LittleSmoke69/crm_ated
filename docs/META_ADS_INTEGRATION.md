@@ -8,6 +8,7 @@ Integração com Meta Graph API para alimentar o Gestor de Tráfego com métrica
 
 - `ENCRYPTION_PEPPER`: Chave usada para criptografar o token da Meta no banco. Configure em produção.
 - O token é armazenado criptografado em `meta_integrations.access_token_encrypted`.
+- **Logs Meta (opcional, só diagnóstico):** em produção os logs verbosos ficam **desligados**. Para depurar, use `LOG_META_DEBUG=1` (ou legado `LOG_META_ADS_HIERARCHY=1`). **Não** deixe essas flags ativas em prod — geram muito `JSON.stringify` a cada request da Meta.
 
 ### Migração
 

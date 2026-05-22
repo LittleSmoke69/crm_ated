@@ -8,6 +8,7 @@ import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { isMetaIntegrationLinkedToBanca, loadCampaigns } from '@/lib/services/meta-sync-service';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,11 +27,6 @@ export async function GET(req: NextRequest) {
 
     const result = await loadCampaigns(bancaId, integrationId);
     if (!result.success) {
-      console.log('[admin/meta API] GET campaigns resposta', {
-        banca_id: bancaId,
-        success: false,
-        error: result.error ?? null,
-      });
       return successResponse({
         success: false,
         error: result.error,
@@ -56,11 +52,9 @@ export async function GET(req: NextRequest) {
       ...c,
       campaign_kind: (kindMap.get(c.id) ?? 'normal') as 'normal' | 'bolao',
     }));
-    console.log('[admin/meta API] GET campaigns resposta', {
-      banca_id: bancaId,
-      success: true,
-      campaigns_count: list.length,
-    });
+    if (isMetaVerboseLogEnabled()) {
+      console.log('[admin/meta API] GET campaigns', { banca_id: bancaId, count: list.length });
+    }
     return successResponse({
       success: true,
       campaigns: enriched,

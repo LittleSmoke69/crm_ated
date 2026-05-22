@@ -6,9 +6,15 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import {
+  CENTRAL_TENANT_SLUG,
   CENTRAL_ZAPLOTO_AUTH_FIRST_SEGMENTS,
+  isCentralTenantSlug,
   ZAPLOTO_SLUG_COOKIE,
 } from '@/lib/constants/white-label';
+import {
+  isLegacyUserIdAuthAllowed,
+  readSessionUserIdFromRequest,
+} from '@/lib/server/session-token';
 import { RESERVED_FIRST_SEGMENTS } from '@/lib/middleware/reserved-first-segments';
 import { isActiveTenantSlug } from '@/lib/middleware/tenant-slug-validate';
 
@@ -31,6 +37,15 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith('/api') || pathname.startsWith('/_next') || pathname.includes('.')) {
+    if (pathname.startsWith('/api/admin')) {
+      const sessionUser = await readSessionUserIdFromRequest(req);
+      if (!sessionUser && !isLegacyUserIdAuthAllowed()) {
+        return NextResponse.json(
+          { success: false, error: 'Não autenticado' },
+          { status: 401 }
+        );
+      }
+    }
     return NextResponse.next();
   }
 
@@ -65,8 +80,12 @@ export async function middleware(req: NextRequest) {
       return NextResponse.next();
     }
     const slugFromCookie = req.cookies.get(ZAPLOTO_SLUG_COOKIE)?.value?.trim();
-    if (!slugFromCookie) {
-      return NextResponse.next();
+    if (!slugFromCookie || isCentralTenantSlug(slugFromCookie)) {
+      const res = NextResponse.next();
+      if (slugFromCookie && isCentralTenantSlug(slugFromCookie)) {
+        res.cookies.delete(ZAPLOTO_SLUG_COOKIE);
+      }
+      return res;
     }
     const normalized = slugFromCookie.toLowerCase();
     const validSlug = await isActiveTenantSlug(normalized);
@@ -78,6 +97,16 @@ export async function middleware(req: NextRequest) {
     const redirectUrl = req.nextUrl.clone();
     redirectUrl.pathname = `/${normalized}${pathname}`;
     return NextResponse.redirect(redirectUrl);
+  }
+
+  /** Tenant central: canonical na raiz (`/crm`), não `/zaploto/crm`. */
+  if (first === CENTRAL_TENANT_SLUG && (await isActiveTenantSlug(first))) {
+    const restCentral = segments.slice(1);
+    const redirectUrl = req.nextUrl.clone();
+    redirectUrl.pathname = restCentral.length > 0 ? `/${restCentral.join('/')}` : '/';
+    const res = NextResponse.redirect(redirectUrl);
+    res.cookies.delete(ZAPLOTO_SLUG_COOKIE);
+    return res;
   }
 
   if (!(await isActiveTenantSlug(first))) {

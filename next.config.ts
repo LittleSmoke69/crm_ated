@@ -1,10 +1,12 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // Skip type checking and linting during Docker build (handled in dev/CI)
+  // Skip type checking during Docker build (handled in dev/CI).
+  // Next 16 não roda lint no build, então não há flag equivalente para eslint aqui.
   typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
   images: { unoptimized: true },
+  /** Binário nativo do ffmpeg-static — não empacotar no bundle do servidor */
+  serverExternalPackages: ['ffmpeg-static'],
   // Raiz absoluta do Turbopack (process.cwd() = diretório do projeto ao rodar build)
   turbopack: { root: process.cwd() },
   /**

@@ -350,22 +350,43 @@ function formatCostPerActionTypeCell(raw: unknown): { short: string; title: stri
   return { short, title };
 }
 
-/** Opções de imposto no card «Cobrado no Cartão» (percentual somado ao valor da Meta). */
-const CARD_CHARGE_TAX_OPTIONS = [12.25, 13, 14, 15] as const;
-type CardChargeTaxPct = (typeof CARD_CHARGE_TAX_OPTIONS)[number];
+/** Sugestões de imposto no card «Cobrado no Cartão» (percentual somado ao valor da Meta). */
+const CARD_CHARGE_TAX_PRESETS = [12.15, 12.25, 13, 13.8, 14, 15] as const;
+const CARD_CHARGE_TAX_DEFAULT = 12.25;
+const CARD_CHARGE_TAX_MIN = 0;
+const CARD_CHARGE_TAX_MAX = 50;
 const CARD_CHARGE_TAX_STORAGE_KEY = 'admin_meta_card_charge_tax_pct';
 
-function parseCardChargeTaxPct(raw: string | null): CardChargeTaxPct {
-  if (raw == null || raw === '') return 12.25;
-  const n = Number(String(raw).replace(',', '.'));
-  if (!Number.isFinite(n)) return 12.25;
-  const found = CARD_CHARGE_TAX_OPTIONS.find((o) => Math.abs(o - n) < 0.0001);
-  return found ?? 12.25;
+function parseCardChargeTaxPct(raw: string | number | null): number {
+  if (raw == null || raw === '') return CARD_CHARGE_TAX_DEFAULT;
+  const n = Number(String(raw).replace(',', '.').trim());
+  if (!Number.isFinite(n)) return CARD_CHARGE_TAX_DEFAULT;
+  const clamped = Math.min(CARD_CHARGE_TAX_MAX, Math.max(CARD_CHARGE_TAX_MIN, n));
+  return Math.round(clamped * 100) / 100;
 }
 
-function formatCardTaxPercentLabel(pct: CardChargeTaxPct): string {
-  return pct === 12.25 ? '12,25%' : `${pct}%`;
+function formatCardTaxPercentLabel(pct: number): string {
+  const rounded = Math.round(pct * 100) / 100;
+  const formatted = rounded.toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  return `${formatted}%`;
 }
+
+function formatCardTaxPercentForInput(pct: number): string {
+  const rounded = Math.round(pct * 100) / 100;
+  return rounded.toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+function isCardChargeTaxPreset(pct: number): boolean {
+  return CARD_CHARGE_TAX_PRESETS.some((p) => Math.abs(p - pct) < 0.0001);
+}
+
+const CARD_CHARGE_TAX_CUSTOM_OPTION = '__custom__';
 
 export default function AdminMetaPage() {
   const { checking, userId } = useRequireAuth();
@@ -561,14 +582,49 @@ export default function AdminMetaPage() {
   /** Chave da campanha com o dropdown de consultores aberto (banca_id:campaign_id). */
   const [openAdsDropdownKey, setOpenAdsDropdownKey] = useState<string | null>(null);
   /** Imposto estimado sobre cobranças no cartão (soma ao valor Meta no card e no selo de resumo). */
-  const [cardChargeTaxPercent, setCardChargeTaxPercent] = useState<CardChargeTaxPct>(() => {
-    if (typeof window === 'undefined') return 12.25;
+  const [cardChargeTaxPercent, setCardChargeTaxPercent] = useState<number>(() => {
+    if (typeof window === 'undefined') return CARD_CHARGE_TAX_DEFAULT;
     try {
       return parseCardChargeTaxPct(localStorage.getItem(CARD_CHARGE_TAX_STORAGE_KEY));
     } catch {
-      return 12.25;
+      return CARD_CHARGE_TAX_DEFAULT;
     }
   });
+  /** UI: lista de presets ou campo «Outro valor» (formato 12,15). */
+  const [cardChargeTaxUiCustom, setCardChargeTaxUiCustom] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const pct = parseCardChargeTaxPct(localStorage.getItem(CARD_CHARGE_TAX_STORAGE_KEY));
+      return !isCardChargeTaxPreset(pct);
+    } catch {
+      return false;
+    }
+  });
+  const [cardChargeTaxInput, setCardChargeTaxInput] = useState(() =>
+    formatCardTaxPercentForInput(
+      typeof window === 'undefined'
+        ? CARD_CHARGE_TAX_DEFAULT
+        : (() => {
+            try {
+              return parseCardChargeTaxPct(localStorage.getItem(CARD_CHARGE_TAX_STORAGE_KEY));
+            } catch {
+              return CARD_CHARGE_TAX_DEFAULT;
+            }
+          })()
+    )
+  );
+
+  const commitCardChargeTaxInput = useCallback(() => {
+    const trimmed = cardChargeTaxInput.trim();
+    if (!trimmed) {
+      setCardChargeTaxPercent(CARD_CHARGE_TAX_DEFAULT);
+      setCardChargeTaxInput(formatCardTaxPercentForInput(CARD_CHARGE_TAX_DEFAULT));
+      return;
+    }
+    const parsed = parseCardChargeTaxPct(trimmed);
+    setCardChargeTaxPercent(parsed);
+    setCardChargeTaxInput(formatCardTaxPercentForInput(parsed));
+  }, [cardChargeTaxInput]);
   const [consultorModalOpen, setConsultorModalOpen] = useState(false);
   const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
   const [consultorModalSearch, setConsultorModalSearch] = useState('');
@@ -981,15 +1037,6 @@ export default function AdminMetaPage() {
       if (data.success && data.data) {
         setSyncedData(data.data);
         setSyncedDataPage({ campaigns: 1, adsets: 1, insights: 1 });
-        const d = data.data as { campaigns?: any[]; adsets?: any[]; insights?: any[] };
-        const c0 = d.campaigns?.[0];
-        const a0 = d.adsets?.[0];
-        const i0 = d.insights?.[0];
-        console.log('[admin/meta] dados sincronizados (campos por tabela)', {
-          campaigns: { n: d.campaigns?.length ?? 0, fields: c0 ? Object.keys(c0) : [], sample: c0 },
-          adsets: { n: d.adsets?.length ?? 0, fields: a0 ? Object.keys(a0) : [], sample: a0 },
-          insights: { n: d.insights?.length ?? 0, fields: i0 ? Object.keys(i0) : [], sample: i0 },
-        });
       } else {
         setSyncedData(null);
       }
@@ -3015,30 +3062,6 @@ export default function AdminMetaPage() {
     });
   }, [selectedConsultorModalRow, consultorsByBanca, consultorModalSearch]);
 
-  useEffect(() => {
-    const contributors = filteredOverviewRowsUniqueBanca.map((row) => ({
-      banca_id: row.banca_id,
-      banca_name: row.banca_name,
-      spend: Number(row.metrics.spend) || 0,
-      leads: Number(row.metrics.leads) || 0,
-      insights_rows: Number(row.metrics.insights_rows) || 0,
-    }));
-    console.log('[admin/meta page] SOMA cards visão geral (Total gasto / Total de leads)', {
-      selected_banca_ids: overviewSelectedBancaIds,
-      rows_considered: contributors.length,
-      totals: {
-        totalSpend: overviewTotals.totalSpend,
-        totalLeads: overviewTotals.totalLeads,
-      },
-      contributors,
-    });
-  }, [
-    filteredOverviewRowsUniqueBanca,
-    overviewSelectedBancaIds,
-    overviewTotals.totalLeads,
-    overviewTotals.totalSpend,
-  ]);
-
   if (checking || !userId) {
     return (
       <Layout>
@@ -3284,25 +3307,84 @@ export default function AdminMetaPage() {
                 Cobrado no Cartão
               </p>
               {usingLiveMetaCards && liveAggregate?.billing ? (
-                <label className="flex items-center gap-1 shrink-0 text-[10px] text-gray-600 dark:text-gray-300">
-                  <span className="whitespace-nowrap hidden sm:inline">Imposto</span>
-                  <select
-                    value={String(cardChargeTaxPercent)}
-                    onChange={(e) => setCardChargeTaxPercent(parseCardChargeTaxPct(e.target.value))}
-                    title="Percentual somado ao valor cobrado pela Meta (imposto estimado)."
-                    className="max-w-[5.5rem] rounded-md border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-1.5 py-0.5 text-[10px] font-semibold text-gray-800 dark:text-gray-100 cursor-pointer"
-                  >
-                    {CARD_CHARGE_TAX_OPTIONS.map((pct) => (
-                      <option key={pct} value={String(pct)}>
-                        {formatCardTaxPercentLabel(pct)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="flex flex-col items-end gap-0.5 shrink-0 min-w-0">
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                    Imposto s/ Meta
+                  </span>
+                  {cardChargeTaxUiCustom ? (
+                    <div className="flex items-center gap-1">
+                      <span className="inline-flex items-center rounded-md border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] px-1.5 py-0.5">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={cardChargeTaxInput}
+                          onChange={(e) => setCardChargeTaxInput(e.target.value)}
+                          onBlur={commitCardChargeTaxInput}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              (e.target as HTMLInputElement).blur();
+                            }
+                            if (e.key === 'Escape') {
+                              setCardChargeTaxInput(formatCardTaxPercentForInput(cardChargeTaxPercent));
+                              setCardChargeTaxUiCustom(isCardChargeTaxPreset(cardChargeTaxPercent));
+                            }
+                          }}
+                          placeholder="12,15"
+                          title="Digite o percentual (vírgula ou ponto). Enter confirma. Entre 0% e 50%."
+                          className="w-[3.5rem] border-0 bg-transparent text-[11px] font-semibold text-gray-800 dark:text-gray-100 tabular-nums focus:outline-none [appearance:textfield]"
+                          aria-label="Percentual personalizado de imposto"
+                        />
+                        <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">%</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          commitCardChargeTaxInput();
+                          setCardChargeTaxUiCustom(false);
+                        }}
+                        className="text-[10px] font-medium text-[#5a9e38] dark:text-[#8CD955] hover:underline whitespace-nowrap"
+                        title="Voltar à lista (valores fora da lista aparecem como «Outro valor»)"
+                      >
+                        Lista
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={
+                        isCardChargeTaxPreset(cardChargeTaxPercent)
+                          ? String(cardChargeTaxPercent)
+                          : CARD_CHARGE_TAX_CUSTOM_OPTION
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === CARD_CHARGE_TAX_CUSTOM_OPTION) {
+                          setCardChargeTaxInput(formatCardTaxPercentForInput(cardChargeTaxPercent));
+                          setCardChargeTaxUiCustom(true);
+                          return;
+                        }
+                        setCardChargeTaxPercent(parseCardChargeTaxPct(v));
+                        setCardChargeTaxInput(formatCardTaxPercentForInput(parseCardChargeTaxPct(v)));
+                        setCardChargeTaxUiCustom(false);
+                      }}
+                      title="Percentual somado ao valor cobrado pela Meta. Escolha «Outro valor» para digitar (ex.: 12,15 ou 13,8)."
+                      className="max-w-[7.5rem] rounded-md border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] pl-2 pr-7 py-1 text-[11px] font-semibold text-gray-800 dark:text-gray-100 cursor-pointer"
+                      aria-label="Percentual de imposto sobre cobrança no cartão"
+                    >
+                      {CARD_CHARGE_TAX_PRESETS.map((pct) => (
+                        <option key={pct} value={String(pct)}>
+                          {formatCardTaxPercentLabel(pct)}
+                        </option>
+                      ))}
+                      <option value={CARD_CHARGE_TAX_CUSTOM_OPTION}>Outro valor…</option>
+                    </select>
+                  )}
+                </div>
               ) : null}
             </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
-              Débitos reais no cartão pela Meta no período. O total em destaque inclui o imposto do menu ao lado.
+              Débitos reais no cartão pela Meta no período. O total em destaque inclui o imposto selecionado ao lado.
             </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
@@ -3446,7 +3528,7 @@ export default function AdminMetaPage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
             <div className="min-w-0">
               <h3 className="text-lg font-bold text-gray-900 dark:text-gray-50 tracking-tight">
-                Métricas e cadastro no CRM
+                Métricas de Campanhas
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                 Campanhas de <span className="font-semibold text-gray-800 dark:text-gray-200">todas as integrações Meta</span>{' '}

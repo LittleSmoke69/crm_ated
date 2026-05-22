@@ -1,6 +1,7 @@
 /**
  * Lógica de processamento de webhook Evolution.
- * Compartilhada entre o route.ts (modo after()) e o webhook-queue-worker.ts (modo fila).
+ * Chamada pelos workers RabbitMQ (scripts/rabbitmq-worker.ts) ao consumir
+ * eventos publicados pelo endpoint /api/webhooks/evolution/prod.
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { normalizationService } from '@/lib/services/normalization-service';
@@ -8,6 +9,7 @@ import { flowExecutorService } from '@/lib/services/flow-executor-service';
 import { participantExitAuditService } from '@/lib/services/participant-exit-audit-service';
 import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
 import { processEventForAntiSpam } from '@/lib/anti-spam/antiSpamWorker';
+import { processEvolutionPayloadToChat } from '@/lib/services/evolution-webhook-processor';
 
 const PARTICIPANT_DEDUP_WINDOW_MS = 30_000;
 const POST_INSERT_DEDUP_LIMIT = 120;
@@ -178,6 +180,23 @@ export async function processWebhookEvent(payload: any, opts: WebhookProcessOpts
         }
       }
     }
+  }
+
+  // Chat persistence (chat_conversations + chat_messages).
+  // Isolada por try/catch: falha aqui NÃO bloqueia flows nem anti-spam.
+  // Marca processed_at no evento quando chat persiste com sucesso — assim o
+  // /api/chat/evolution-events/process-pending NÃO reprocessa em outra abertura.
+  // saveMessage/upsertConversation são idempotentes (ignoreDuplicates).
+  try {
+    const chatResult = await processEvolutionPayloadToChat(payload);
+    if (chatResult.processed) {
+      await supabaseServiceRole
+        .from('evolution_webhook_events')
+        .update({ processed_at: new Date().toISOString() })
+        .eq('id', event.id);
+    }
+  } catch (chatErr: any) {
+    console.error('❌ [WEBHOOK] Falha persistência chat:', chatErr?.message || chatErr);
   }
 
   // Anti-Spam

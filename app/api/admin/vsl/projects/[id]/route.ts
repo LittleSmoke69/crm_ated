@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireVslProjectAccess } from '@/lib/middleware/vsl-admin';
+import { normalizeMetaPixelId } from '@/lib/redirect/pixel-id';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 
@@ -52,10 +53,15 @@ export async function PATCH(
     await requireVslProjectAccess(req, id);
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-    const allowed = ['name', 'is_active', 'redirect_timer_seconds', 'logo_path', 'pixel_id', 'meta_graph_base_url', 'banca_id'];
+    const allowed = ['name', 'is_active', 'redirect_timer_seconds', 'logo_path', 'meta_graph_base_url', 'banca_id'];
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
     for (const k of allowed) {
       if (body[k] !== undefined) payload[k] = body[k];
+    }
+    if (body.pixel_id !== undefined) {
+      const pixelCheck = normalizeMetaPixelId(body.pixel_id);
+      if (!pixelCheck.ok) return errorResponse(pixelCheck.message, 400);
+      payload.pixel_id = pixelCheck.value;
     }
 
     const { data: current, error: curErr } = await supabaseServiceRole

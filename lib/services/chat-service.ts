@@ -250,6 +250,28 @@ export class ChatService {
       timestamp: toTimestampNumber(message.timestamp as number | string),
     };
 
+    // Webhook `failed` pode chegar antes do save do send; não sobrescrever erro da Meta com "sent"/"Nota de voz".
+    if (normalized.conversation_id && normalized.message_id) {
+      const { data: existing } = await supabaseServiceRole
+        .from('chat_messages')
+        .select('status, text')
+        .eq('conversation_id', normalized.conversation_id)
+        .eq('message_id', normalized.message_id)
+        .maybeSingle();
+
+      if (existing?.status === 'failed') {
+        normalized.status = 'failed';
+        const existingText = String(existing.text ?? '');
+        const isDeliveryError =
+          existingText.includes('Falha na entrega') ||
+          existingText.includes('Entrega falhou') ||
+          /^#\d+/.test(existingText);
+        if (isDeliveryError) {
+          normalized.text = existingText;
+        }
+      }
+    }
+
     let msg: ChatMessage | null = null;
 
     for (let attempt = 1; attempt <= SAVE_MESSAGE_MAX_RETRIES; attempt += 1) {

@@ -23,14 +23,25 @@ export async function validateConsultantUserId(
   if (raw === null || raw === undefined || raw === '') return { ok: true, id: null };
   const id = String(raw).trim();
   if (!UUID_RE.test(id)) return { ok: false, message: 'consultant_user_id inválido' };
-  const { data: prof } = await supabaseServiceRole
-    .from('profiles')
-    .select('id')
-    .eq('id', id)
-    .eq('status', 'consultor')
-    .maybeSingle();
-  if (!prof) return { ok: false, message: 'Consultor não encontrado ou perfil não é consultor' };
+  const { data: prof } = await supabaseServiceRole.from('profiles').select('id').eq('id', id).maybeSingle();
+  if (!prof) return { ok: false, message: 'Usuário não encontrado' };
   return { ok: true, id };
+}
+
+/** Lista todos os usuários para vincular consultor ao grupo (busca no picker). */
+export async function fetchUsersForConsultantPicker(): Promise<
+  { id: string; full_name: string | null; email: string | null; status: string | null }[]
+> {
+  const { data: profs, error } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, full_name, email, status')
+    .order('full_name', { ascending: true, nullsFirst: false })
+    .limit(5000);
+  if (error) {
+    console.error('[fetchUsersForConsultantPicker]', error.message);
+    return [];
+  }
+  return profs ?? [];
 }
 
 /** Consultores com perfil consultor vinculados à banca (user_bancas.banca_ids contém o UUID). */
@@ -106,17 +117,11 @@ export async function consultantBelongsToAnyUserBanca(
 
 export async function assertConsultantAllowedForVslUser(
   consultantId: string | null,
-  profile: { status: string | null },
-  userId: string
+  _profile: { status: string | null },
+  _userId: string
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   if (!consultantId) return { ok: true };
-  if (canAssignConsultorWithoutBancaCheck(profile)) return { ok: true };
-  const allowed = await consultantBelongsToAnyUserBanca(consultantId, userId);
-  if (!allowed) {
-    return {
-      ok: false,
-      message: 'Este consultor não pertence às bancas em que você está vinculado.',
-    };
-  }
+  const chk = await validateConsultantUserId(consultantId);
+  if (!chk.ok) return { ok: false, message: chk.message };
   return { ok: true };
 }

@@ -173,6 +173,7 @@ add_meta_campaign_consultors.sql
 add_meta_campaign_kind.sql
 add_meta_insights_cost_per_action_type.sql
 add_redirect_group_consultant.sql
+add_redirect_clicks_ip_hash.sql
 add_activation_mass_send_group_results.sql
 add_activation_mass_send_inter_group_delay.sql
 add_activation_mass_send_instance_names.sql

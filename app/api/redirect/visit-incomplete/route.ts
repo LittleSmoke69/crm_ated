@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { verifyRedirectVisitToken } from '@/lib/redirect/tracking-token';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 
@@ -6,24 +7,31 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/redirect/visit-incomplete
- * Marca redirect_visits.status = 'incomplete' quando o usuário saiu sem concluir o redirect.
- * Body: { visit_id }
+ * Body: { visit_id, visit_token }
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({})) as { visit_id?: string };
-    const { visit_id } = body;
+    const body = (await req.json().catch(() => ({}))) as { visit_id?: string; visit_token?: string };
+    const { visit_id, visit_token } = body;
     if (!visit_id) {
       return errorResponse('visit_id é obrigatório', 400);
     }
 
-    const { error } = await supabaseServiceRole
+    const visitOk = await verifyRedirectVisitToken(visit_id, visit_token);
+    if (!visitOk) {
+      return errorResponse('Token de visita inválido ou expirado', 403);
+    }
+
+    const { data: visit, error } = await supabaseServiceRole
       .from('redirect_visits')
       .update({ status: 'incomplete' })
-      .eq('id', visit_id);
+      .eq('id', visit_id)
+      .eq('status', 'pending')
+      .select('id')
+      .maybeSingle();
 
-    if (error) {
-      return errorResponse('Visita não encontrada', 404);
+    if (error || !visit) {
+      return errorResponse('Visita não encontrada ou já finalizada', 404);
     }
 
     return successResponse({ ok: true });

@@ -4,6 +4,7 @@ import { useCallback, useMemo } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   CENTRAL_ZAPLOTO_AUTH_FIRST_SEGMENTS,
+  isCentralTenantSlug,
   ZAPLOTO_SLUG_COOKIE,
 } from '@/lib/constants/white-label';
 import { RESERVED_FIRST_SEGMENTS } from '@/lib/middleware/reserved-first-segments';
@@ -34,7 +35,7 @@ export function getActiveTenantSlug(): string | null {
   if (typeof window === 'undefined') return null;
   const path = window.location.pathname;
   const fromPath = getPathnameTenantSlug(path);
-  if (fromPath) return fromPath;
+  if (fromPath) return isCentralTenantSlug(fromPath) ? null : fromPath;
   if (isCentralZaplotoAuthPath(path)) {
     return null;
   }
@@ -43,7 +44,8 @@ export function getActiveTenantSlug(): string | null {
     return null;
   }
   const c = readBrowserCookie(ZAPLOTO_SLUG_COOKIE)?.trim();
-  return c ? c.toLowerCase() : null;
+  if (!c || isCentralTenantSlug(c)) return null;
+  return c.toLowerCase();
 }
 
 /** Remove o cookie de slug WL (ex.: após login na ZapLoto central). */
@@ -73,7 +75,7 @@ export function withTenantSlug(href: string, slugOverride?: string | null): stri
   let slug =
     slugOverride ??
     (typeof window !== 'undefined' ? getActiveTenantSlug() : null);
-  if (!slug?.trim()) return href;
+  if (!slug?.trim() || isCentralTenantSlug(slug)) return href;
   slug = slug.trim().toLowerCase();
   if (!href.startsWith('/') || href.startsWith('//')) return href;
   if (href.startsWith('/#')) return href;

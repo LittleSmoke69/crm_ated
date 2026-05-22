@@ -10,6 +10,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
+import { reconcileOfficialOutboundStatus } from '@/lib/services/whatsapp-official-webhook-processor';
 import {
   extensionForWhatsAppMedia,
   storageContentTypeForWhatsAppMedia,
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
       media_url,
       meta_id,
       caption,
+      filename,
       reply_to_message_id: replyToMessageId,
     } = body as {
       config_id?: string;
@@ -76,6 +78,7 @@ export async function POST(req: NextRequest) {
       media_url?: string;
       meta_id?: string;
       caption?: string;
+      filename?: string;
       reply_to_message_id?: string;
     };
 
@@ -91,10 +94,9 @@ export async function POST(req: NextRequest) {
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
       return errorResponse('text é obrigatório quando type=text', 400);
     }
-    // Para áudio oficial, exige media_id da Meta para garantir compatibilidade de formato
-    if (sendType === 'audio' && !meta_id) {
+    if (sendType === 'audio' && !meta_id && (!media_url || typeof media_url !== 'string')) {
       return errorResponse(
-        'Para áudio na API oficial, envie primeiro em /api/chat/whatsapp-official/upload-audio-meta e use meta_id.',
+        'Áudio requer media_id (upload-audio-meta) ou media_url pública após upload-media.',
         400
       );
     }
@@ -182,22 +184,35 @@ export async function POST(req: NextRequest) {
           replyToMessageId
         );
       } else if (sendType === 'document') {
+        const docFilename =
+          (typeof filename === 'string' && filename.trim()) ||
+          (typeof caption === 'string' && caption.includes('.') ? caption.trim() : undefined) ||
+          (() => {
+            try {
+              const part = new URL(media_url!).pathname.split('/').pop() || '';
+              const decoded = decodeURIComponent(part.replace(/^\d+-/, ''));
+              return decoded.includes('.') ? decoded : undefined;
+            } catch {
+              return undefined;
+            }
+          })();
         metaResponse = await whatsappOfficial.sendDocument(
           configForApi,
           normalizedTo,
           media_url!,
           caption,
-          undefined,
+          docFilename,
           replyToMessageId
         );
       } else {
-        // meta_id = upload direto nos servidores da Meta (preferencial, garante entrega)
-        // media_url = fallback via link público (pode falhar para audio/webm)
-        const audioMedia = { id: meta_id! };
+        const audioMedia =
+          meta_id && String(meta_id).trim()
+            ? { id: String(meta_id).trim(), voice: true as const }
+            : { link: media_url! };
         console.info('[WA Official][send route] audio send mode', {
           config_id,
           to: normalizedTo,
-          mode: 'media_id',
+          mode: 'id' in audioMedia ? 'media_id_voice' : 'link',
           has_reply_to: Boolean(replyToMessageId),
         });
         metaResponse = await whatsappOfficial.sendAudio(
@@ -250,16 +265,45 @@ export async function POST(req: NextRequest) {
       direction: 'out' as const,
       from_me: true,
       sender_jid: config.phone_number_id,
-      text: sendType === 'text' ? String(bodyText).trim() : '',
+      text:
+        sendType === 'text'
+          ? String(bodyText).trim()
+          : sendType === 'audio'
+            ? 'Nota de voz'
+            : '',
       media_type: sendType === 'text' ? 'text' : sendType,
       media_url: resolvedMediaUrl,
-      caption: (sendType === 'image' || sendType === 'video' || sendType === 'document') ? caption || '' : '',
+      caption:
+        sendType === 'document'
+          ? (typeof filename === 'string' && filename.trim()) ||
+            caption ||
+            (() => {
+              try {
+                const part = new URL(media_url || '').pathname.split('/').pop() || '';
+                return decodeURIComponent(part.replace(/^\d+-/, '')) || '';
+              } catch {
+                return '';
+              }
+            })()
+          : sendType === 'image' || sendType === 'video'
+            ? caption || ''
+            : '',
       status: 'sent',
       timestamp: Math.floor(Date.now() / 1000),
       provider: 'whatsapp_official' as const,
     };
 
     const savedMessage = await chatService.saveMessage(messageData);
+
+    after(async () => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await reconcileOfficialOutboundStatus(externalMessageId).catch((err) => {
+        console.warn('[WA Official][send route] reconcile status failed', {
+          message_id: externalMessageId,
+          error: err instanceof Error ? err.message : err,
+        });
+      });
+    });
 
     const savedId = savedMessage?.id;
     if (sendType === 'audio' && !resolvedMediaUrl && meta_id && savedId) {

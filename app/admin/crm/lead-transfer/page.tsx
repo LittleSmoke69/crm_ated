@@ -40,7 +40,11 @@ import {
   Lock,
   SlidersHorizontal,
   ArrowRight,
+  Download,
 } from 'lucide-react';
+import { buildCsv, downloadCsv } from '@/lib/utils/csv-export';
+import type { CsvColumn } from '@/lib/utils/csv-export';
+import { canUserExportCrmLeadsCsv, firstNameFromFullName } from '@/lib/crm/export-leads-csv';
 import { DateInputDDMMYYYY, getTodaySãoPaulo, getLast30DaysRangeSãoPaulo } from '@/components/Admin/CRMSection';
 import { ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
 
@@ -792,6 +796,38 @@ interface GerenteLeadRequest {
 
 function normalizePhoneDigitsForSearch(s: string): string {
   return String(s).replace(/\D/g, '');
+}
+
+/** Telefone do lead (CRM / enriquecimento) para exibição, busca e CSV. */
+function getLeadPhoneFromRecord(rec: Record<string, unknown>): string {
+  const phoneRaw =
+    rec.phone ?? rec.mobile ?? rec.telefone ?? rec.whatsapp ?? rec.phone_number ?? rec.cellphone;
+  if (phoneRaw == null) return '';
+  return String(phoneRaw).trim();
+}
+
+function slugSegmentForCsvFilename(raw: string | null | undefined, maxLen = 32): string {
+  const s = (raw ?? '').trim();
+  if (!s) return '';
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u0000-\u001F<>:\"/\\|?*]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .toLowerCase()
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLen);
+}
+
+/** Ex.: `todos` | `inativo07d` | `inativo90d` */
+function buildStep3LeadsCsvFilterSlug(daysInactivePreset: string, daysInactive: string): string {
+  if (daysInactivePreset === 'all') return 'todos';
+  const daysStr = daysInactivePreset === 'other' ? daysInactive.trim() : daysInactivePreset;
+  const n = parseInt(daysStr, 10);
+  const days = Number.isFinite(n) && n >= 0 ? n : 0;
+  return `inativo${String(days).padStart(2, '0')}d`;
 }
 
 /** Campo destacado para filtrar a lista já carregada por nome, e-mail, telefone ou ID. */
@@ -3075,15 +3111,7 @@ export default function AdminLeadTransferPage() {
         const rec = lead as Record<string, unknown>;
         const name = String(rec.name ?? rec.full_name ?? rec.email ?? '').toLowerCase();
         const email = String(rec.email ?? '').toLowerCase();
-        const phoneRaw = String(
-          rec.phone ??
-            rec.mobile ??
-            rec.telefone ??
-            rec.whatsapp ??
-            rec.phone_number ??
-            rec.cellphone ??
-            ''
-        ).toLowerCase();
+        const phoneRaw = getLeadPhoneFromRecord(rec).toLowerCase();
         const phoneDigits = normalizePhoneDigitsForSearch(phoneRaw);
         const idStr = String(lead.id ?? '').toLowerCase();
         if (name.includes(leadSearchLower) || email.includes(leadSearchLower)) return true;
@@ -3200,6 +3228,101 @@ export default function AdminLeadTransferPage() {
     () => filteredLeads.reduce((acc, l) => (stockTransferredToGerenteIdsSet.has(String(l.id)) ? acc + 1 : acc), 0),
     [filteredLeads, stockTransferredToGerenteIdsSet]
   );
+  const canExportStep3LeadsCsv = canUserExportCrmLeadsCsv(userStatus);
+
+  const handleDownloadStep3LeadsCsv = useCallback(() => {
+    type Step3CsvRow = {
+      id: string;
+      name: string;
+      phone: string;
+      email: string;
+      totalDepositado: number | null;
+      balance: number | null;
+      totalApostado: number | null;
+      totalGanho: number | null;
+      availableWithdraw: number | null;
+      status: string;
+      transferred: string;
+    };
+    const parseNum = (v: unknown): number | null => {
+      if (v == null || v === '') return null;
+      const n = parseFloat(String(v));
+      return Number.isFinite(n) ? n : null;
+    };
+    const rows: Step3CsvRow[] = filteredLeads.map((lead) => {
+      const rec = lead as Record<string, unknown>;
+      const transferred = rec._transferred;
+      return {
+        id: String(lead.id ?? ''),
+        name: String(rec.name ?? rec.full_name ?? rec.email ?? '').trim(),
+        phone: getLeadPhoneFromRecord(rec),
+        email: String(rec.email ?? '').trim(),
+        totalDepositado: parseNum(rec.total_depositado),
+        balance: parseNum(rec.balance ?? rec.saldo),
+        totalApostado: parseNum(rec.total_apostado),
+        totalGanho: parseNum(rec.total_ganho),
+        availableWithdraw: parseNum(rec.available_withdraw),
+        status: getStatusLabel(rec.status as string | null | undefined),
+        transferred: transferred === true ? 'Sim' : transferred === false ? 'Não' : '',
+      };
+    });
+    const columns: CsvColumn<Step3CsvRow>[] = [
+      { header: 'ID', get: (r) => r.id },
+      { header: 'Nome', get: (r) => r.name },
+      { header: 'Telefone', get: (r) => r.phone },
+      { header: 'E-mail', get: (r) => r.email },
+      { header: 'Total depositado', get: (r) => r.totalDepositado, numeric: true },
+      { header: 'Total na carteira', get: (r) => r.balance, numeric: true },
+      { header: 'Total apostado', get: (r) => r.totalApostado, numeric: true },
+      { header: 'Total prêmio', get: (r) => r.totalGanho, numeric: true },
+      { header: 'Saque disponível', get: (r) => r.availableWithdraw, numeric: true },
+      { header: 'Status', get: (r) => r.status },
+      { header: 'Transferido', get: (r) => r.transferred },
+    ];
+    const bancaLabel = selectedBanca?.name ?? selectedBanca?.url ?? bancaId ?? 'banca';
+    const inactivityLabel =
+      daysInactivePreset === 'all' ? 'Todos os leads' : `${daysInactive.trim() || '0'} dia(s) de inatividade`;
+    const content = buildCsv(rows, columns, {
+      banca: bancaLabel,
+      bancaUrl: selectedBanca?.url ?? null,
+      dateFrom: null,
+      dateTo: null,
+      scope: `Transferência de leads — filtros e buscar (origem: ${sourceEmail?.trim() || 'n/a'})`,
+      extra: [
+        { label: 'Inatividade', value: inactivityLabel },
+        { label: 'Leads exportados', value: String(rows.length) },
+        ...(leadSearchQuery.trim() ? [{ label: 'Busca cliente', value: leadSearchQuery.trim() }] : []),
+      ],
+    });
+    const sourceLower = (sourceEmail ?? '').trim().toLowerCase();
+    const sourceConsultant = consultants.find((c) => (c.email ?? '').trim().toLowerCase() === sourceLower);
+    const consultantSlug =
+      slugSegmentForCsvFilename(
+        firstNameFromFullName(sourceConsultant?.full_name) ||
+          sourceConsultant?.full_name ||
+          sourceEmail?.split('@')[0]
+      ) || 'consultor';
+    const filterSlug = buildStep3LeadsCsvFilterSlug(daysInactivePreset, daysInactive);
+    const csvFilename = `${consultantSlug}_${filterSlug}.csv`;
+    downloadCsv(content, csvFilename);
+    showToast(
+      rows.length === 0
+        ? 'CSV gerado sem linhas (nenhum lead com os filtros atuais).'
+        : `CSV com ${rows.length.toLocaleString('pt-BR')} lead(s) baixado (${csvFilename}).`,
+      'success'
+    );
+  }, [
+    filteredLeads,
+    selectedBanca,
+    bancaId,
+    sourceEmail,
+    consultants,
+    daysInactivePreset,
+    daysInactive,
+    leadSearchQuery,
+    showToast,
+  ]);
+
   /** Step 4: valida rapidamente se os IDs de estoque aparecem entre os clientes da tabela atual do consultor. */
   const verifyStockIdsInConsultorTable = useCallback(() => {
     if (!stockLeadIdsLoaded) {
@@ -10101,9 +10224,27 @@ export default function AdminLeadTransferPage() {
                         </div>
                       ) : (
                     <>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">
-                        <strong>{filteredLeads.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalFilteredBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, filteredLeads.length)}</strong> serão auto-selecionados no próximo passo.
-                      </p>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          <strong>{filteredLeads.length}</strong> lead(s) {minSumBalance.trim() ? `(soma mín. R$ ${minSumBalance.trim()})` : ''}. Soma dos saldos: <strong>R$ {totalFilteredBalanceSum.toFixed(2).replace('.', ',')}</strong>. Até <strong>{Math.min(parseInt(quantity, 10) || 0, MAX_LEADS_SELECT, filteredLeads.length)}</strong> serão auto-selecionados no próximo passo.
+                        </p>
+                        {canExportStep3LeadsCsv && (
+                          <button
+                            type="button"
+                            onClick={handleDownloadStep3LeadsCsv}
+                            disabled={loadingLeads || enrichmentLoading}
+                            title={
+                              loadingLeads || enrichmentLoading
+                                ? 'Aguarde o carregamento dos leads'
+                                : 'Baixar CSV com os leads visíveis (filtros e busca aplicados)'
+                            }
+                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                          >
+                            <Download className="w-4 h-4" aria-hidden />
+                            Baixar CSV
+                          </button>
+                        )}
+                      </div>
                       {enrichmentLoading && (
                         <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
@@ -10121,11 +10262,12 @@ export default function AdminLeadTransferPage() {
                         </p>
                       )}
                       <div className="overflow-x-auto border border-gray-200 dark:border-[#404040] rounded-lg mt-3 max-h-[320px] overflow-y-auto">
-                        <table className="w-full text-sm min-w-[520px]">
+                        <table className="w-full text-sm min-w-[640px]">
                           <thead className="bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040] sticky top-0 z-10">
                             <tr>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">ID</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Nome / Email</th>
+                              <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Telefone</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total Depositado</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total na Carteira</th>
                               <th className="text-left p-2 font-semibold text-gray-700 dark:text-gray-200">Total apostado</th>
@@ -10137,8 +10279,10 @@ export default function AdminLeadTransferPage() {
                           </thead>
                           <tbody>
                             {filteredLeads.slice(0, 100).map((lead) => {
-                              const name = String(lead.name ?? lead.full_name ?? lead.email ?? '-');
-                              const email = String(lead.email ?? '');
+                              const rec = lead as Record<string, unknown>;
+                              const name = String(rec.name ?? rec.full_name ?? rec.email ?? '-');
+                              const email = String(rec.email ?? '');
+                              const phone = getLeadPhoneFromRecord(rec);
                               const isInStockNow = stockLeadIdsSet.has(String(lead.id));
                               const isTransferredToGerenteStock = stockTransferredToGerenteIdsSet.has(String(lead.id));
                               const totalDepositado = lead.total_depositado != null ? parseFloat(String(lead.total_depositado)) : null;
@@ -10169,6 +10313,15 @@ export default function AdminLeadTransferPage() {
                                     <span className="block font-medium text-gray-800 dark:text-gray-200 truncate" title={name}>{name}</span>
                                     {email ? <span className="block text-xs text-gray-500 dark:text-gray-400 truncate" title={email}>{email}</span> : null}
                                   </td>
+                                  <td className="p-2 min-w-0 max-w-[140px] text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                                    {phone ? (
+                                      <span className="truncate block font-mono text-xs" title={phone}>
+                                        {phone}
+                                      </span>
+                                    ) : (
+                                      <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>
+                                    )}
+                                  </td>
                                   <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(totalDepositado)}</td>
                                   <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(balance)}</td>
                                   <td className="p-2 text-gray-700 dark:text-gray-300">{fmt(totalApostado)}</td>
@@ -10187,7 +10340,11 @@ export default function AdminLeadTransferPage() {
                             })}
                           </tbody>
                         </table>
-                        {filteredLeads.length > 100 && <p className="text-xs text-gray-500 dark:text-gray-400 p-2 border-t border-gray-100 dark:border-[#404040]">Exibindo 100 de {filteredLeads.length} leads.</p>}
+                        {filteredLeads.length > 100 && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 p-2 border-t border-gray-100 dark:border-[#404040]">
+                            Exibindo 100 de {filteredLeads.length} leads. O CSV inclui todos os leads filtrados.
+                          </p>
+                        )}
                       </div>
                     </>
                       )}

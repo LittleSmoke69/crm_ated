@@ -3,21 +3,8 @@
 import React, { useState } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useTenantRouter, useTenantHref } from '@/lib/utils/tenant-href';
-import { supabase } from '@/lib/supabase';
-import bcrypt from 'bcryptjs';
 import { Mail, Lock, User, UserPlus, AlertCircle, CheckCircle2, Sun, Moon } from 'lucide-react';
 import Logo from '@/components/Logo';
-
-const PROFILE_TABLE = 'profiles';
-
-const makeUuid = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-  return 'xxxxxx4xxxyxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
 
 export default function RegisterPage() {
   const router = useTenantRouter();
@@ -40,104 +27,33 @@ export default function RegisterPage() {
       return;
     }
 
-    if (password.length < 6) {
-      setErrorMsg('A senha deve ter pelo menos 6 caracteres.');
+    if (password.length < 8) {
+      setErrorMsg('A senha deve ter pelo menos 8 caracteres.');
       return;
     }
 
     try {
       setLoading(true);
-      const normalizedEmail = email.trim().toLowerCase();
-
-      // 1) Checa e-mail existente
-      const { data: exists, error: existsErr } = await supabase
-        .from(PROFILE_TABLE)
-        .select('user_id')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      if (existsErr) console.error('[REGISTER] existsErr:', existsErr);
-
-      if (exists?.user_id) {
-        setErrorMsg('Este e-mail já está cadastrado.');
-        setLoading(false);
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim().toLowerCase(),
+          password,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || data.message || 'Não foi possível criar a conta.');
         return;
       }
-
-      // 2) Gera user_id
-      const newUserId = makeUuid();
-
-      // 3) Hash da senha
-      const password_hash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
-
-      // 4) Insere perfil (somente user_id como PK)
-      const { data: inserted, error: insertErr } = await supabase
-        .from(PROFILE_TABLE)
-        .upsert(
-          [
-            {
-              user_id: newUserId,
-              full_name: fullName.trim(),
-              email: normalizedEmail,
-              password_hash,
-              created_at: new Date().toISOString(),
-            },
-          ],
-          { onConflict: 'email', ignoreDuplicates: false }
-        )
-        .select('id, user_id, email')
-        .single();
-
-      if (insertErr || (!inserted?.id && !inserted?.user_id)) {
-        console.error('[REGISTER] insertErr:', insertErr);
-        setErrorMsg(insertErr?.message || 'Erro ao salvar o perfil.');
-        setLoading(false);
-        return;
-      }
-
-      // Obtém o ID do usuário (pode ser 'id' ou 'user_id' dependendo da estrutura)
-      const userId = inserted.id || inserted.user_id;
-
-      // 5) Cria configurações padrão do usuário (user_settings)
-      // O trigger também faz isso automaticamente, mas garantimos aqui como fallback
-      const { error: settingsErr } = await supabase
-        .from('user_settings')
-        .upsert(
-          [
-            {
-              user_id: userId, // Usa o ID retornado (id ou user_id)
-              max_leads_per_day: 100,
-              max_instances: 20,
-              is_admin: false,
-              is_active: true,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-          ],
-          { onConflict: 'user_id', ignoreDuplicates: false }
-        );
-
-      if (settingsErr) {
-        console.warn('[REGISTER] Erro ao criar user_settings (pode ser que o trigger já tenha criado):', settingsErr);
-        // Não bloqueia o registro se falhar, pois o trigger pode ter criado
-      }
-
-      // 6) Sessão curta (fecha o navegador ⇒ volta pro login)
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('user_id', userId);
-        sessionStorage.setItem('profile_id', userId);
-        sessionStorage.setItem('email', inserted.email);
-        // cookie de sessão (sem Max-Age) para middleware
-        document.cookie = `user_id=${userId}; Path=/; SameSite=Lax`;
-      }
-
-      setSuccessMsg('Conta criada com sucesso! Redirecionando...');
-      setTimeout(() => {
-        router.push('/login');
-      }, 1500);
-    } catch (err: any) {
+      setSuccessMsg(data.message || 'Conta criada! Redirecionando para o login...');
+      setTimeout(() => router.push('/login'), 1500);
+    } catch (err: unknown) {
       console.error('[REGISTER] Error:', err);
-      setErrorMsg(err?.message || 'Erro ao criar a conta.');
+      setErrorMsg(err instanceof Error ? err.message : 'Erro ao criar a conta.');
     } finally {
       setLoading(false);
     }

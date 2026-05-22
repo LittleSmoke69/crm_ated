@@ -3,21 +3,38 @@
  * Adequado para VPS/PM2/Docker onde há um único processo long-lived.
  * NÃO use em serverless (Netlify/Vercel) — cada invocação cria novo processo.
  *
+ * Leader election: rotinas in-process só rodam em UMA réplica (IS_TICKER_LEADER=true).
+ * Hoje a única rotina ativa é o poller opcional de flow-question. O ticker do
+ * maturador foi removido daqui — agora roda exclusivamente pelo cron container
+ * (scripts/linux/scheduled-jobs.ts → /api/maturation/cron-tick), evitando:
+ *   - sobreposição entre ticker (30s) e cron (60s) competindo por claim_maturation_steps
+ *   - race condition em runGroupMessaging (sem lock cross-process)
+ *   - carga extra de CPU disputada com o servidor HTTP do Next
+ *
  * Variáveis (flow-question):
  * - FLOW_QUESTION_POLL_ENABLED=true
  * - FLOW_QUESTION_POLL_INTERVAL_MS=1000  (padrão 1000ms)
  * - URL | SITE_URL | NEXT_PUBLIC_SITE_URL
  * - CRON_SECRET | INTERNAL_CRON_SECRET
  *
- * Variáveis (maturation ticker):
- * - MATURATION_TICK_ENABLED=true         ← ativa o loop do maturador mesh
- * - MATURATION_TICK_INTERVAL_MS=30000    ← intervalo entre ticks (padrão 30s)
+ * Variáveis (leader election):
+ * - IS_TICKER_LEADER=true                ← se ausente, rotinas in-process não iniciam
  */
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
-  // ── Flow-question timeout poller ────────────────────────────────────────────
+  const isTickerLeader = process.env.IS_TICKER_LEADER === 'true';
+  if (!isTickerLeader) {
+    console.log('[instrumentation] IS_TICKER_LEADER!=true — rotinas in-process desabilitadas nesta réplica');
+    return;
+  }
+
+  console.log('[instrumentation] IS_TICKER_LEADER=true — iniciando rotinas in-process');
+
+  // ── Flow-question timeout poller (opcional) ────────────────────────────────
+  // Útil quando se quer reagir a timeouts em < 1min. O cron equivalente
+  // (flow-question-timeouts a cada 1min) cobre o caso geral.
   if (process.env.FLOW_QUESTION_POLL_ENABLED === 'true') {
     const intervalMs = Math.max(
       1000,
@@ -47,65 +64,5 @@ export async function register() {
         `[instrumentation] Polling flow-question-timeouts a cada ${intervalMs}ms → ${url.split('?')[0]}`
       );
     }
-  }
-
-  // ── Maturation mesh ticker ──────────────────────────────────────────────────
-  // Roda runMaturationTick diretamente no processo Node — sem HTTP, sem cron externo.
-  // Ative com MATURATION_TICK_ENABLED=true no .env do VPS.
-  if (process.env.MATURATION_TICK_ENABLED === 'true') {
-    const tickIntervalMs = Math.max(
-      15_000,
-      parseInt(process.env.MATURATION_TICK_INTERVAL_MS || '30000', 10) || 30_000
-    );
-
-    const { runMaturationTick } = await import('./lib/services/maturation/processor');
-    const { supabaseServiceRole } = await import('./lib/services/supabase-service');
-
-    // Loop da maturação mútua (mesh)
-    let tickRunning = false;
-    const runTick = async () => {
-      if (tickRunning) return;
-      tickRunning = true;
-      try {
-        await runMaturationTick(supabaseServiceRole);
-      } catch (e) {
-        console.error('[instrumentation] maturation-tick erro:', e instanceof Error ? e.message : e);
-      } finally {
-        tickRunning = false;
-      }
-    };
-
-    // Aguarda 5s para o app terminar de inicializar
-    setTimeout(runTick, 5_000);
-    setInterval(runTick, tickIntervalMs);
-
-    console.log(`[instrumentation] Maturation ticker ativo: intervalo ${tickIntervalMs}ms`);
-  }
-
-  // ── Group messaging ticker ──────────────────────────────────────────────────
-  // Sempre roda no processo Node (independente de MATURATION_TICK_ENABLED).
-  // Envia estrofes de João de Santo Cristo ao grupo de maturação a cada 30s.
-  {
-    const { runGroupMessaging } = await import('./lib/services/maturation/processor');
-    const { supabaseServiceRole } = await import('./lib/services/supabase-service');
-
-    let groupRunning = false;
-    const runGroup = async () => {
-      if (groupRunning) return;
-      groupRunning = true;
-      try {
-        await runGroupMessaging(supabaseServiceRole);
-      } catch (e) {
-        console.error('[instrumentation] group-messaging erro:', e instanceof Error ? e.message : e);
-      } finally {
-        groupRunning = false;
-      }
-    };
-
-    // Aguarda 15s para o app terminar de inicializar antes do primeiro disparo
-    setTimeout(runGroup, 15_000);
-    setInterval(runGroup, 30_000);
-
-    console.log('[instrumentation] Group messaging ativo: intervalo 30s');
   }
 }

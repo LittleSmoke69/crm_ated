@@ -5,8 +5,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 
 /**
  * PATCH /api/admin/redirect/weights
- * Atualiza pesos em lote. Body: { project_id, weights: [{ group_id, weight_percent }] }.
- * Exige soma = 100.
+ * Body: { project_id, weights: [{ group_id, weight_percent }] } — soma deve ser 100.
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -25,8 +24,12 @@ export async function PATCH(req: NextRequest) {
       return errorResponse('A soma das porcentagens deve ser 100', 400);
     }
 
-    for (const w of weights) {
-      const percent = Math.min(100, Math.max(0, Number(w.weight_percent)));
+    const normalized = weights.map((w) => ({
+      group_id: w.group_id,
+      percent: Math.min(100, Math.max(0, Number(w.weight_percent))),
+    }));
+
+    for (const w of normalized) {
       const { data: g } = await supabaseServiceRole
         .from('redirect_groups')
         .select('project_id')
@@ -35,10 +38,22 @@ export async function PATCH(req: NextRequest) {
       if (!g || g.project_id !== project_id) {
         return errorResponse(`Grupo ${w.group_id} não pertence ao projeto`, 400);
       }
-      await supabaseServiceRole
-        .from('redirect_groups')
-        .update({ weight_percent: percent, updated_at: new Date().toISOString() })
-        .eq('id', w.group_id);
+    }
+
+    const now = new Date().toISOString();
+    const results = await Promise.all(
+      normalized.map((w) =>
+        supabaseServiceRole
+          .from('redirect_groups')
+          .update({ weight_percent: w.percent, updated_at: now })
+          .eq('id', w.group_id)
+      )
+    );
+
+    const failed = results.find((r) => r.error);
+    if (failed?.error) {
+      console.error('[admin/redirect/weights]', failed.error.message);
+      return errorResponse('Erro ao atualizar pesos', 500);
     }
 
     return successResponse({ ok: true });

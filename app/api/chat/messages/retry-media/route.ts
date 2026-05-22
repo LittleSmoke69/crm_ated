@@ -19,6 +19,7 @@ const CHAT_MEDIA_BUCKET = 'chat-media';
 interface WaMediaObj {
   id?: string;
   mime_type?: string;
+  filename?: string;
 }
 
 function extractMediaIdFromPayload(rawPayload: unknown, targetMessageId: string): WaMediaObj | null {
@@ -143,8 +144,12 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await downloadRes.arrayBuffer());
     const mimeCombined = metaJson.mime_type || mediaObj.mime_type;
     const mediaCat = chatMsg.media_type as 'image' | 'audio' | 'video' | 'document';
-    const ext = extensionForWhatsAppMedia(mimeCombined, mediaCat);
-    const contentType = storageContentTypeForWhatsAppMedia(mimeCombined, ext, mediaCat);
+    const fileNameHint =
+      mediaCat === 'document'
+        ? mediaObj.filename || (chatMsg.caption as string | null) || undefined
+        : undefined;
+    const ext = extensionForWhatsAppMedia(mimeCombined, mediaCat, fileNameHint);
+    const contentType = storageContentTypeForWhatsAppMedia(mimeCombined, ext, mediaCat, fileNameHint);
     const storagePath = `${config.id}/${mediaObj.id}${ext}`;
 
     const { error: uploadError } = await supabaseServiceRole.storage

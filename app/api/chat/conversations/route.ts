@@ -12,6 +12,54 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 import { syncEvolutionDirectoryToChatConversations } from '@/lib/server/evolution-chat-directory-sync';
 import { chatService } from '@/lib/services/chat-service';
+import {
+  applyLastCustomerMessageFromInbound,
+  buildEnrichBatches,
+  conversationIdsNeedingCustomerBackfill,
+  ENRICH_ROWS_PER_BATCH,
+  sortConversationsForInbox,
+} from '@/lib/chat/conversation-inbox';
+
+/** Preenche last_customer_message_at (lote por conversa — evita pegar só msgs das conversas mais recentes). */
+async function enrichWhatsAppOfficialConversations(
+  conversations: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  const convIds = conversationIdsNeedingCustomerBackfill(
+    conversations as Array<{
+      id: string;
+      whatsapp_config_id?: string | null;
+      last_customer_message_at?: string | null;
+    }>
+  );
+  if (convIds.length === 0) return conversations;
+
+  const allInbound: Array<{ conversation_id: string; timestamp: number | string }> = [];
+  const batches = buildEnrichBatches(convIds);
+
+  await Promise.all(
+    batches.map(async (batch) => {
+      const { data } = await supabaseServiceRole
+        .from('chat_messages')
+        .select('conversation_id, timestamp')
+        .in('conversation_id', batch)
+        .eq('direction', 'in')
+        .order('timestamp', { ascending: false })
+        .limit(ENRICH_ROWS_PER_BATCH);
+
+      for (const row of data ?? []) {
+        allInbound.push({
+          conversation_id: row.conversation_id as string,
+          timestamp: row.timestamp as number | string,
+        });
+      }
+    })
+  );
+
+  return applyLastCustomerMessageFromInbound(
+    conversations as Array<Record<string, unknown> & { id: string }>,
+    allInbound
+  );
+}
 
 function normalizeToBrWhatsappPhone(rawPhone: string): string {
   const digits = String(rawPhone || '').replace(/\D/g, '');
@@ -140,7 +188,15 @@ export async function GET(req: NextRequest) {
         console.error('[Zaploto Chat] conversations GET — instance_id:', instance_id, '| erro:', error.message);
         return errorResponse(`Erro ao buscar conversas: ${error.message}`);
       }
-      const list = conversations ?? [];
+      const list = sortConversationsForInbox(
+        (conversations ?? []) as Array<{
+          id: string;
+          whatsapp_config_id?: string | null;
+          last_message_at?: string | null;
+          last_customer_message_at?: string | null;
+          attendance_status?: 'pendente' | 'resolvido' | null;
+        }>
+      );
       return successResponse(list, evolutionSyncMeta ? { meta: evolutionSyncMeta } : undefined);
     }
 
@@ -169,7 +225,16 @@ export async function GET(req: NextRequest) {
       console.error('[Zaploto Chat] conversations GET — whatsapp_config_id:', whatsapp_config_id, '| erro:', error.message);
       return errorResponse(`Erro ao buscar conversas: ${error.message}`);
     }
-    const list = conversations ?? [];
+    const enriched = await enrichWhatsAppOfficialConversations(conversations ?? []);
+    const list = sortConversationsForInbox(
+      enriched as Array<{
+        id: string;
+        whatsapp_config_id?: string | null;
+        last_message_at?: string | null;
+        last_customer_message_at?: string | null;
+        attendance_status?: 'pendente' | 'resolvido' | null;
+      }>
+    );
     return successResponse(list);
   } catch (err: any) {
     return serverErrorResponse(err);

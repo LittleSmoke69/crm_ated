@@ -3,19 +3,23 @@
  * Define nova senha usando reset_token e retorna dados para logar o usuário.
  */
 import { NextRequest } from 'next/server';
+import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import bcrypt from 'bcryptjs';
 
 export async function POST(req: NextRequest) {
   try {
+    const rateLimited = checkIpRateLimit(req, 'forgot-set-password', 10, 15 * 60 * 1000);
+    if (rateLimited) return errorResponse(rateLimited, 429);
+
     const body = await req.json().catch(() => ({}));
     const resetToken = typeof body.reset_token === 'string' ? body.reset_token.trim() : '';
     const newPassword = typeof body.new_password === 'string' ? body.new_password : '';
 
     if (!resetToken) return errorResponse('Token de redefinição é obrigatório', 400);
-    if (!newPassword || newPassword.length < 6) {
-      return errorResponse('A senha deve ter no mínimo 6 caracteres', 400);
+    if (!newPassword || newPassword.length < 8) {
+      return errorResponse('A senha deve ter no mínimo 8 caracteres', 400);
     }
 
     const now = new Date().toISOString();

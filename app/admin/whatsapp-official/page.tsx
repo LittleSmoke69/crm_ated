@@ -810,8 +810,15 @@ export default function WhatsAppOfficialAdmin() {
                               <div className="text-xs text-[var(--muted-foreground)]">{f.conversation_remote_jid ?? '—'}</div>
                             </td>
                             <td className="py-2 pr-4">
-                              <div className="font-mono text-xs">{f.message_id}</div>
-                              <div className="text-xs text-[var(--muted-foreground)]">{f.text || 'Áudio sem texto'}</div>
+                              <div className="font-mono text-xs break-all">{f.message_id}</div>
+                              <div className="text-xs font-medium text-red-600 dark:text-red-400 mt-0.5">
+                                Entrega falhou (webhook Meta: status failed)
+                              </div>
+                              <div className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                                {f.text?.startsWith('Falha na entrega')
+                                  ? f.text
+                                  : f.text || 'Sem detalhe do erro — verifique webhook_events com este wamid'}
+                              </div>
                             </td>
                           </tr>
                         ))}

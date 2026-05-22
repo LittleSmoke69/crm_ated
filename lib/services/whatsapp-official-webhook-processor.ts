@@ -30,7 +30,7 @@ interface WaMessage {
   image?: { id?: string; caption?: string; mime_type?: string };
   audio?: { id?: string; mime_type?: string };
   video?: { id?: string; caption?: string; mime_type?: string };
-  document?: { id?: string; caption?: string; mime_type?: string };
+  document?: { id?: string; caption?: string; mime_type?: string; filename?: string };
   sticker?: { id?: string; mime_type?: string };
   reaction?: { message_id?: string; emoji?: string };
   location?: { latitude?: number; longitude?: number; name?: string; address?: string };
@@ -48,7 +48,17 @@ export interface WaValue {
   metadata?: WaMetadata;
   contacts?: WaContact[];
   messages?: WaMessage[];
-  statuses?: Array<{ id: string; status?: string; recipient_id?: string }>;
+  statuses?: Array<{
+    id: string;
+    status?: string;
+    recipient_id?: string;
+    errors?: Array<{
+      code?: number;
+      title?: string;
+      message?: string;
+      error_data?: { details?: string; messaging_product?: string };
+    }>;
+  }>;
 }
 
 interface ParsedMessage {
@@ -191,7 +201,12 @@ function resolveMediaInfo(msg: WaMessage): { text: string; mediaType: string; ca
   if (msg.type === 'image' && msg.image) return { text: msg.image.caption || '', mediaType: 'image', caption: msg.image.caption || '' };
   if (msg.type === 'audio' && msg.audio) return { text: 'Áudio', mediaType: 'audio', caption: '' };
   if (msg.type === 'video' && msg.video) return { text: msg.video.caption || 'Vídeo', mediaType: 'video', caption: msg.video.caption || '' };
-  if (msg.type === 'document' && msg.document) return { text: msg.document.caption || 'Documento', mediaType: 'document', caption: msg.document.caption || '' };
+  if (msg.type === 'document' && msg.document) {
+    const fileName = msg.document.filename?.trim() || '';
+    const cap = msg.document.caption?.trim() || '';
+    const display = fileName || cap || 'Documento';
+    return { text: display, mediaType: 'document', caption: display };
+  }
   if (msg.type === 'sticker') return { text: '🖼️ Figurinha', mediaType: 'image', caption: '' };
   if (msg.type === 'reaction') return { text: msg.reaction?.emoji || '👍', mediaType: 'text', caption: '' };
   if (msg.type === 'location') {
@@ -240,7 +255,8 @@ async function resolveAndStoreMediaOnce(
   graphVersion: string,
   mimeType: string | undefined,
   configId: string,
-  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker',
+  fileNameHint?: string | null
 ): Promise<string | null> {
   const version = graphVersion.replace(/^v/, '');
   const mediaApiUrl = `https://graph.facebook.com/v${version}/${mediaId}`;
@@ -282,8 +298,8 @@ async function resolveAndStoreMediaOnce(
   }
   const buffer = Buffer.from(await downloadRes.arrayBuffer());
   const mimeFromMeta = metaJson.mime_type || mimeType;
-  const ext = extensionForWhatsAppMedia(mimeFromMeta, mediaCategory);
-  const contentType = storageContentTypeForWhatsAppMedia(mimeFromMeta, ext, mediaCategory);
+  const ext = extensionForWhatsAppMedia(mimeFromMeta, mediaCategory, fileNameHint);
+  const contentType = storageContentTypeForWhatsAppMedia(mimeFromMeta, ext, mediaCategory, fileNameHint);
   const storagePath = `${configId}/${mediaId}${ext}`;
   const { error: uploadError } = await supabaseServiceRole.storage
     .from(CHAT_MEDIA_BUCKET)
@@ -302,7 +318,8 @@ async function resolveAndStoreMedia(
   graphVersion: string,
   mimeType: string | undefined,
   configId: string,
-  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker'
+  mediaCategory: 'audio' | 'image' | 'video' | 'document' | 'sticker',
+  fileNameHint?: string | null
 ): Promise<string | null> {
   for (let attempt = 0; attempt <= MEDIA_MAX_RETRIES; attempt++) {
     try {
@@ -312,7 +329,8 @@ async function resolveAndStoreMedia(
         graphVersion,
         mimeType,
         configId,
-        mediaCategory
+        mediaCategory,
+        fileNameHint
       );
       if (url) return url;
       if (attempt < MEDIA_MAX_RETRIES) {
@@ -416,9 +434,15 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
       let mediaUrl: string | null = null;
 
       if (['image', 'audio', 'video', 'document', 'sticker'].includes(msg.type)) {
-        const mediaObj = msg[msg.type as keyof WaMessage] as { id?: string; mime_type?: string } | undefined;
+        const mediaObj = msg[msg.type as keyof WaMessage] as
+          | { id?: string; mime_type?: string; filename?: string }
+          | undefined;
         const mediaId = mediaObj?.id;
         const mimeType = mediaObj?.mime_type;
+        const fileNameHint =
+          msg.type === 'document'
+            ? mediaObj?.filename || msg.document?.filename || caption
+            : undefined;
         if (mediaId && accessToken) {
           try {
             mediaUrl = await resolveAndStoreMedia(
@@ -427,7 +451,8 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
               graphVersion,
               mimeType,
               config.id,
-              msg.type as 'image' | 'audio' | 'video' | 'document' | 'sticker'
+              msg.type as 'image' | 'audio' | 'video' | 'document' | 'sticker',
+              fileNameHint
             );
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -490,6 +515,26 @@ const STATUS_MAP: Record<string, string> = {
   pending: 'sent',
 };
 
+function formatMetaStatusErrors(
+  errors: Array<{
+    code?: number;
+    title?: string;
+    message?: string;
+    error_data?: { details?: string };
+  }> | undefined
+): string | null {
+  if (!errors?.length) return null;
+  const e = errors[0];
+  const parts: string[] = [];
+  if (e.code != null) parts.push(`#${e.code}`);
+  const detail = e.error_data?.details || e.message || e.title;
+  if (detail) parts.push(String(detail));
+  return parts.length > 0 ? parts.join(' — ') : null;
+}
+
+/** Webhook `failed` pode chegar antes do save do send (~2–4s); cobrir essa janela. */
+const STATUS_UPDATE_MAX_ATTEMPTS = 40;
+
 async function handleStatusUpdates(value: WaValue): Promise<void> {
   const statuses = value.statuses ?? [];
   for (const st of statuses) {
@@ -498,11 +543,40 @@ async function handleStatusUpdates(value: WaValue): Promise<void> {
       .toLowerCase();
     const newStatus =
       raw && STATUS_MAP[raw] !== undefined ? STATUS_MAP[raw] : raw ? raw : 'sent';
-    await supabaseServiceRole
-      .from('chat_messages')
-      .update({ status: newStatus })
-      .eq('message_id', st.id)
-      .eq('provider', 'whatsapp_official');
+
+    const updateFields: { status: string; text?: string } = { status: newStatus };
+    if (newStatus === 'failed') {
+      const errText = formatMetaStatusErrors(st.errors);
+      if (errText) {
+        updateFields.text = `Falha na entrega (Meta): ${errText}`;
+      }
+      console.warn('[Zaploto Chat] Mensagem oficial falhou na entrega', {
+        message_id: st.id,
+        recipient_id: st.recipient_id,
+        errors: st.errors,
+      });
+    }
+
+    for (let attempt = 1; attempt <= STATUS_UPDATE_MAX_ATTEMPTS; attempt += 1) {
+      const { data, error } = await supabaseServiceRole
+        .from('chat_messages')
+        .update(updateFields)
+        .eq('message_id', st.id)
+        .eq('provider', 'whatsapp_official')
+        .select('id');
+
+      if (error) {
+        console.error('[Zaploto Chat] Falha ao atualizar status da mensagem', {
+          message_id: st.id,
+          error: error.message,
+        });
+        break;
+      }
+      if (data?.length) break;
+      if (attempt < STATUS_UPDATE_MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
   }
 }
 
@@ -516,6 +590,36 @@ function isWhatsAppOfficialPayload(payload: unknown): payload is { object: strin
  * Idempotente para mensagens (saveMessage usa upsert com ON CONFLICT UPDATE).
  * Retorna tokenAlert: true se houve erro de token ao baixar mídia (para a API sinalizar alerta na UI).
  */
+/**
+ * Reaplica status de webhook (ex.: failed) após o save do send, quando o webhook chegou antes da linha no banco.
+ */
+export async function reconcileOfficialOutboundStatus(messageId: string): Promise<void> {
+  if (!messageId) return;
+  const since = new Date(Date.now() - 120_000).toISOString();
+  const { data: events } = await supabaseServiceRole
+    .from('webhook_events')
+    .select('raw_payload')
+    .eq('source', 'whatsapp_official')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(40);
+
+  for (const ev of events ?? []) {
+    const payload = ev.raw_payload as { entry?: Array<{ changes?: Array<{ value?: WaValue }> }> };
+    for (const entry of payload.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        const statuses = change.value?.statuses;
+        if (!statuses?.length) continue;
+        const match = statuses.find((s) => s.id === messageId);
+        if (match) {
+          await handleStatusUpdates({ statuses: [match] } as WaValue);
+          return;
+        }
+      }
+    }
+  }
+}
+
 export async function processMetaPayloadToChat(payload: unknown): Promise<{ tokenAlert?: boolean }> {
   if (!isWhatsAppOfficialPayload(payload)) return {};
   const entries = Array.isArray(payload.entry) ? payload.entry : [];

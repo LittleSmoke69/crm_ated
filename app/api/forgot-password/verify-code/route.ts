@@ -3,12 +3,16 @@
  * Valida o código de 6 dígitos e retorna um reset_token para a próxima etapa.
  */
 import { NextRequest } from 'next/server';
+import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { randomUUID } from 'crypto';
 
 export async function POST(req: NextRequest) {
   try {
+    const rateLimited = checkIpRateLimit(req, 'forgot-verify-code', 20, 15 * 60 * 1000);
+    if (rateLimited) return errorResponse(rateLimited, 429);
+
     const body = await req.json().catch(() => ({}));
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const code = typeof body.code === 'string' ? body.code.replace(/\D/g, '').slice(0, 6) : '';
@@ -23,7 +27,7 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (!profile) {
-      return errorResponse('E-mail não encontrado', 404);
+      return errorResponse('Código inválido ou expirado.', 400);
     }
 
     const now = new Date().toISOString();

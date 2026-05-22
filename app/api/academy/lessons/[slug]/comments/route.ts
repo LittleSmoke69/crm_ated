@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/middleware/auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-
-function getUserId(req: NextRequest): string | null {
-  return req.headers.get('x-user-id') ?? null;
-}
 
 /**
  * GET /api/academy/lessons/[slug]/comments
@@ -50,8 +47,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  const userId = getUserId(req);
-  if (!userId) return NextResponse.json({ error: 'Faça login para comentar' }, { status: 401 });
+  let userId: string;
+  try {
+    ({ userId } = await requireAuth(req));
+  } catch {
+    return NextResponse.json({ error: 'Faça login para comentar' }, { status: 401 });
+  }
   const slug = (await params).slug;
   if (!slug) return NextResponse.json({ error: 'Slug obrigatório' }, { status: 400 });
   let body: { body?: string; parent_id?: string };

@@ -1,25 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { requireAuth } from '@/lib/middleware/auth';
+import { ApiHttpError } from '@/lib/utils/response';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { isLessonVisibleForProfile } from '@/lib/academy/lesson-role-access';
 
-function getUserId(req: NextRequest): string | null {
-  return (
-    req.headers.get('x-user-id') ||
-    req.nextUrl.searchParams.get('userId') ||
-    null
-  );
-}
-
 /**
- * GET /api/academy/progress?userId=xxx (ou header x-user-id)
- * Lista progresso do usuário (lesson_id, status, completed_at).
+ * GET /api/academy/progress — progresso do usuário autenticado (sessão).
  */
 export async function GET(req: NextRequest) {
-  const userId = getUserId(req);
-  if (!userId) {
-    return NextResponse.json({ error: 'Usuário não identificado' }, { status: 401 });
-  }
   try {
+    const { userId } = await requireAuth(req);
     const { data, error } = await supabaseServiceRole
       .from('academy_user_progress')
       .select('lesson_id, status, completed_at, last_seen_at')
@@ -30,41 +21,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     return NextResponse.json(data ?? []);
-  } catch (e) {
-    console.error('[academy/progress] GET', e);
+  } catch (e: unknown) {
+    if (e instanceof ApiHttpError) {
+      return NextResponse.json({ error: e.message }, { status: e.statusCode });
+    }
     return NextResponse.json({ error: 'Erro ao buscar progresso' }, { status: 500 });
   }
 }
 
 /**
  * POST /api/academy/progress
- * Body: { lessonId: string, status: 'not_started' | 'in_progress' | 'completed' }
- * Header: x-user-id
+ * Body: { lessonId, status }
  */
 export async function POST(req: NextRequest) {
-  const userId = getUserId(req);
-  if (!userId) {
-    return NextResponse.json({ error: 'Usuário não identificado' }, { status: 401 });
-  }
-  let body: { lessonId: string; status: 'not_started' | 'in_progress' | 'completed' };
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Body JSON inválido' }, { status: 400 });
-  }
-  const { lessonId, status } = body;
-  if (!lessonId || !status) {
-    return NextResponse.json({ error: 'lessonId e status obrigatórios' }, { status: 400 });
-  }
-  if (!['not_started', 'in_progress', 'completed'].includes(status)) {
-    return NextResponse.json({ error: 'status inválido' }, { status: 400 });
-  }
-  try {
-    const { data: profile } = await supabaseServiceRole
-      .from('profiles')
-      .select('status')
-      .eq('id', userId)
-      .maybeSingle();
+    const { userId } = await requireAuth(req);
+    let body: { lessonId: string; status: 'not_started' | 'in_progress' | 'completed' };
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Body JSON inválido' }, { status: 400 });
+    }
+    const { lessonId, status } = body;
+    if (!lessonId || !status) {
+      return NextResponse.json({ error: 'lessonId e status obrigatórios' }, { status: 400 });
+    }
+    if (!['not_started', 'in_progress', 'completed'].includes(status)) {
+      return NextResponse.json({ error: 'status inválido' }, { status: 400 });
+    }
+
+    const profile = await getUserProfile(userId);
     const { data: lessonRow } = await supabaseServiceRole
       .from('academy_lessons')
       .select('id, allowed_role_codes')
@@ -109,8 +95,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     return NextResponse.json(data);
-  } catch (e) {
-    console.error('[academy/progress] POST', e);
+  } catch (e: unknown) {
+    if (e instanceof ApiHttpError) {
+      return NextResponse.json({ error: e.message }, { status: e.statusCode });
+    }
     return NextResponse.json({ error: 'Erro ao salvar progresso' }, { status: 500 });
   }
 }

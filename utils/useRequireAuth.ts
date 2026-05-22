@@ -12,6 +12,7 @@ const ADMIN_PROFILE_SESSION_OK_KEY = 'zaploto_v1_admin_profile_session_ok_uid';
 function clearClientAuthSlice() {
   if (typeof window === 'undefined') return;
   try {
+    void fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
     sessionStorage.removeItem('user_id');
     sessionStorage.removeItem('profile_id');
     sessionStorage.removeItem('profile_email');

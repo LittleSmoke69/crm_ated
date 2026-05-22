@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
+import { assertEvolutionWebhookAuthorized } from '@/lib/server/evolution-webhook-auth';
 import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
 import { publishWebhookEvent } from '@/lib/queue/rabbitmq';
 
@@ -11,20 +13,33 @@ export const maxDuration = 10;
 /**
  * POST /api/webhooks/evolution/prod
  *
- * Retorna 200 em < 5ms: apenas enfileira o payload no Redis (BullMQ).
- * O webhook-queue-worker processa com concorrência controlada (WEBHOOK_WORKER_CONCURRENCY).
- *
- * Isso elimina completamente o problema de after() sem limite de concorrência
- * que causava acúmulo de callbacks e alta CPU no next-server.
+ * Retorna 200 em < 5ms: apenas enfileira o payload no RabbitMQ.
+ * Workers RabbitMQ (zaplotov3-worker1..3) consomem com prefetch controlado e
+ * chamam processWebhookEvent. Falha de publish degrada para fallback: a request
+ * ainda retorna 200 (evita retry-storm da Evolution) mas loga o evento para audit.
  */
 export async function POST(req: NextRequest) {
+  const authFail = assertEvolutionWebhookAuthorized(req, 'prod');
+  if (authFail) return authFail;
+  const rateLimited = checkIpRateLimit(req, 'webhook-evolution-prod', 600, 60 * 1000);
+  if (rateLimited) {
+    return new Response(JSON.stringify({ ok: false, error: rateLimited }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  let zaplotoId: string | null = null;
+  let payloadSize = 0;
   try {
-    const zaplotoId = await resolveZaplotoIdFromWebhookRequest(req);
+    zaplotoId = await resolveZaplotoIdFromWebhookRequest(req);
 
     let payload: any;
     try {
       const buf = await req.arrayBuffer();
-      if (buf.byteLength > MAX_WEBHOOK_BODY_BYTES) {
+      payloadSize = buf.byteLength;
+      if (payloadSize > MAX_WEBHOOK_BODY_BYTES) {
+        console.warn(`[WEBHOOK PROD] Payload rejeitado: ${payloadSize} bytes > ${MAX_WEBHOOK_BODY_BYTES}`);
         return new Response(JSON.stringify({ ok: false, error: 'Payload muito grande' }), {
           status: 413,
           headers: { 'Content-Type': 'application/json' },
@@ -36,17 +51,21 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    // Publica no RabbitMQ — push-based, < 2ms, nunca bloqueia
     await publishWebhookEvent(payload, zaplotoId);
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (err) {
-    console.error('❌ [WEBHOOK PROD] Erro ao enfileirar:', err);
-    // Retorna 200 mesmo assim para evitar retries desnecessários da Evolution API
-    return new Response(JSON.stringify({ ok: true }), {
+  } catch (err: any) {
+    console.error('[WEBHOOK PROD] Erro ao enfileirar:', {
+      message: err?.message,
+      zaplotoId,
+      payloadSize,
+    });
+    // Retorna 200 para evitar retry-storm da Evolution API (mensagem é perdida,
+    // mas o log acima permite auditoria; alternativa pior seria explodir os apps).
+    return new Response(JSON.stringify({ ok: true, queued: false }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });

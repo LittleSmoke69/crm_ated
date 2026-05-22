@@ -18,7 +18,7 @@ const TOKEN = process.env.WA_TOKEN || '';
 const PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID || '';
 const TO = (process.env.WA_TO || '').replace(/\D/g, '');
 const AUDIO_FILE = process.env.WA_AUDIO_FILE || '';
-const AUDIO_MIME = process.env.WA_AUDIO_MIME || 'audio/ogg; codecs=opus';
+const AUDIO_MIME = process.env.WA_AUDIO_MIME || 'audio/ogg';
 
 function ensureEnv(name: string, value: string) {
   if (!value) {
@@ -58,7 +58,7 @@ async function sendAudio(mediaId: string): Promise<void> {
     recipient_type: 'individual',
     to: TO,
     type: 'audio',
-    audio: { id: mediaId },
+    audio: { id: mediaId, voice: true },
   };
 
   const url = `${GRAPH_BASE}/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/messages`;

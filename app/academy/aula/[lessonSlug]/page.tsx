@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from '@/components/WhitelabelLink';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import {
@@ -71,11 +72,11 @@ export default function AcademyLessonPage() {
     setLessonsInModule([]);
     (async () => {
       try {
-        const hdr: HeadersInit = userId ? { 'x-user-id': userId } : {};
+        const authInit = mergeAuthInit(userId);
         const [lessonRes, progRes] = await Promise.all([
-          fetch(`/api/academy/lessons/${lessonSlug}`, { headers: hdr }),
+          fetch(`/api/academy/lessons/${lessonSlug}`, authInit),
           userId
-            ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : [])
+            ? fetch('/api/academy/progress', authInit).then((r) => (r.ok ? r.json() : []))
             : Promise.resolve([]),
         ]);
         setProgress(progRes);
@@ -93,7 +94,7 @@ export default function AcademyLessonPage() {
         if (data.module?.slug) {
           const listRes = await fetch(
             `/api/academy/lessons?moduleSlug=${encodeURIComponent(data.module.slug)}`,
-            { headers: hdr }
+            authInit
           );
           if (listRes.ok) {
             const listJson = await listRes.json();
@@ -117,11 +118,14 @@ export default function AcademyLessonPage() {
     if (!userId || !lesson?.id) return;
     setMarkingComplete(true);
     try {
-      const res = await fetch('/api/academy/progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-        body: JSON.stringify({ lessonId: lesson.id, status: 'completed' }),
-      });
+      const res = await fetch(
+        '/api/academy/progress',
+        mergeAuthInit(userId, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lessonId: lesson.id, status: 'completed' }),
+        })
+      );
       if (res.ok) {
         setCompleted(true);
         setProgress((prev) => [...prev.filter((p) => p.lesson_id !== lesson.id), { lesson_id: lesson.id, status: 'completed' }]);
@@ -132,7 +136,10 @@ export default function AcademyLessonPage() {
   };
 
   const getSignedUrl = async (path: string) => {
-    const res = await fetch(`/api/academy/signed-url?path=${encodeURIComponent(path)}`);
+    const res = await fetch(
+      `/api/academy/signed-url?path=${encodeURIComponent(path)}`,
+      mergeAuthInit(userId)
+    );
     const data = await res.json();
     if (data.url) window.open(data.url, '_blank');
   };

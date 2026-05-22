@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from '@/components/WhitelabelLink';
+import { mergeAuthInit } from '@/lib/utils/authenticated-fetch';
 import { useParams } from 'next/navigation';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Check, Play, Clock, Loader2, ChevronRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
@@ -40,10 +41,10 @@ export default function AcademyModulePage() {
     setModuleNotFound(false);
     (async () => {
       try {
-        const hdr: HeadersInit = userId ? { 'x-user-id': userId } : {};
+        const authInit = mergeAuthInit(userId);
         const [lessRes, progRes] = await Promise.all([
-          fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(moduleSlug)}`, { headers: hdr }),
-          userId ? fetch('/api/academy/progress', { headers: { 'x-user-id': userId } }).then((r) => r.ok ? r.json() : []) : Promise.resolve([]),
+          fetch(`/api/academy/lessons?moduleSlug=${encodeURIComponent(moduleSlug)}`, authInit),
+          userId ? fetch('/api/academy/progress', authInit).then((r) => (r.ok ? r.json() : [])) : Promise.resolve([]),
         ]);
         if (lessRes.ok) {
           const data = await lessRes.json();
