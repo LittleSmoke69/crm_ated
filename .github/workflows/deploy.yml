@@ -39,8 +39,33 @@ jobs:
             echo "🐳 Build usando cache da imagem anterior..."
             docker compose build
 
-            echo "🚀 Subindo containers sem derrubar os outros..."
-            docker compose up -d --no-deps --remove-orphans
+            echo "🐰 Subindo RabbitMQ primeiro (workers dependem do broker healthy)..."
+            docker compose up -d rabbitmq
+
+            echo "⏳ Aguardando RabbitMQ healthy (até 5 min)..."
+            RABBIT_OK=0
+            for i in $(seq 1 60); do
+              STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' rabbitmq 2>/dev/null || echo missing)"
+              if [ "$STATUS" = "healthy" ]; then
+                echo "✅ RabbitMQ healthy (${i}×5s)"
+                RABBIT_OK=1
+                break
+              fi
+              if [ "$STATUS" = "unhealthy" ] && [ "$i" -ge 12 ]; then
+                echo "⚠️ RabbitMQ unhealthy — tentando reiniciar uma vez..."
+                docker compose restart rabbitmq || true
+              fi
+              sleep 5
+            done
+            if [ "$RABBIT_OK" != "1" ]; then
+              echo "❌ RabbitMQ não ficou healthy. Últimos logs:"
+              docker logs rabbitmq --tail 120 2>&1 || true
+              docker compose ps rabbitmq 2>&1 || true
+              exit 1
+            fi
+
+            echo "🚀 Subindo apps, cron e workers..."
+            docker compose up -d --remove-orphans
 
             echo "🧹 Limpando apenas imagens sem uso (dangling)..."
             docker image prune -f
