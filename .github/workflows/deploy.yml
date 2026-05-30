@@ -13,7 +13,7 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -36,7 +36,7 @@ jobs:
             cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
-            # Usa token no URL apenas para o fetch, depois remove por segurança
+            # Usa GITHUB_TOKEN no URL apenas para o fetch, depois remove por segurança
             git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/Zaploto/ZaplotoV3.git"
             git fetch origin main
             git reset --hard origin/main
