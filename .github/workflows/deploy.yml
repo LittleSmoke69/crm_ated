@@ -33,6 +33,8 @@ jobs:
             cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
+            # Garante HTTPS — clones antigos na VPS podem ter origin em git@github.com (sem chave SSH)
+            git remote set-url origin https://github.com/Zaploto/ZaplotoV3.git
             git fetch origin main
             git reset --hard origin/main
 
