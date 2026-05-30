@@ -42,6 +42,47 @@ jobs:
             git reset --hard origin/main
             git remote set-url origin https://github.com/Zaploto/ZaplotoV3.git
 
+            echo "🔐 Validando chaves Supabase no .env (build exige anon, não service_role)..."
+            if [ ! -f .env ]; then
+              echo "❌ Arquivo .env não encontrado em $DEPLOY_DIR"
+              exit 1
+            fi
+            python3 <<'PY'
+            import json, base64, sys
+            from pathlib import Path
+
+            env = {}
+            for line in Path(".env").read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                env[key.strip()] = val.strip().strip('"').strip("'")
+
+            url = env.get("NEXT_PUBLIC_SUPABASE_URL", "")
+            anon = env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+            if not url:
+                print("❌ NEXT_PUBLIC_SUPABASE_URL ausente no .env")
+                sys.exit(1)
+            if not anon:
+                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY ausente no .env")
+                sys.exit(1)
+
+            parts = anon.split(".")
+            if len(parts) < 2:
+                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY não parece um JWT válido")
+                sys.exit(1)
+
+            payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+            payload_b64 = payload_b64.replace("-", "+").replace("_", "/")
+            role = json.loads(base64.b64decode(payload_b64).decode()).get("role")
+            if role == "service_role":
+                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY contém service_role.")
+                print("   Use a chave anon/public do Supabase (Settings → API).")
+                sys.exit(1)
+            print(f"✅ Supabase OK (role={role})")
+            PY
+
             echo "🐳 Build usando cache da imagem anterior..."
             docker compose build
 
