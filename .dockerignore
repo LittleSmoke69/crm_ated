@@ -13,7 +13,8 @@ node_modules
 npm-debug.log*
 .npm
 
-# Ambiente local
+# Ambiente local — nunca copiar para o build (NEXT_PUBLIC_* vêm via build args do docker-compose)
+.env
 .env.local
 .env.*.local
 

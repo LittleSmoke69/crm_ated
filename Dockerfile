@@ -2,6 +2,14 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# NEXT_PUBLIC_* precisam estar disponíveis em build time para o Next.js embuti-los no bundle.
+# São passados como build args pelo docker-compose (lidos do .env da VPS) — o .env
+# em si é excluído do contexto de build via .dockerignore.
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+
 # Install dependencies
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
