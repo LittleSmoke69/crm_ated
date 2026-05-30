@@ -42,24 +42,40 @@ jobs:
             echo "🐰 Subindo RabbitMQ primeiro (workers dependem do broker healthy)..."
             docker compose up -d rabbitmq
 
-            echo "⏳ Aguardando RabbitMQ healthy (até 5 min)..."
+            echo "⏳ Aguardando RabbitMQ healthy (até 15 min, sem loop de restart)..."
             RABBIT_OK=0
-            for i in $(seq 1 60); do
+            RABBIT_RESTARTED=0
+            WAIT_SECS=10
+            MAX_LOOPS=90
+            for i in $(seq 1 "$MAX_LOOPS"); do
               STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' rabbitmq 2>/dev/null || echo missing)"
+              RUNNING="$(docker inspect --format='{{.State.Status}}' rabbitmq 2>/dev/null || echo missing)"
+
               if [ "$STATUS" = "healthy" ]; then
-                echo "✅ RabbitMQ healthy (${i}×5s)"
+                echo "✅ RabbitMQ healthy (~$((i * WAIT_SECS))s de espera)"
                 RABBIT_OK=1
                 break
               fi
-              if [ "$STATUS" = "unhealthy" ] && [ "$i" -ge 12 ]; then
-                echo "⚠️ RabbitMQ unhealthy — tentando reiniciar uma vez..."
+
+              echo "… RabbitMQ status=$STATUS running=$RUNNING (tentativa $i/$MAX_LOOPS)"
+
+              # Nunca reiniciar em loop: no máximo 1 restart após ~3 min unhealthy
+              if [ "$STATUS" = "unhealthy" ] && [ "$RABBIT_RESTARTED" = "0" ] && [ "$i" -ge 18 ]; then
+                echo "⚠️ RabbitMQ unhealthy — reinício único (aguarde ~2 min após isso)..."
                 docker compose restart rabbitmq || true
+                RABBIT_RESTARTED=1
+                sleep 30
+                continue
               fi
-              sleep 5
+
+              sleep "$WAIT_SECS"
             done
             if [ "$RABBIT_OK" != "1" ]; then
-              echo "❌ RabbitMQ não ficou healthy. Últimos logs:"
-              docker logs rabbitmq --tail 120 2>&1 || true
+              echo "❌ RabbitMQ não ficou healthy após $((MAX_LOOPS * WAIT_SECS))s."
+              echo "--- docker inspect health ---"
+              docker inspect rabbitmq --format='{{json .State.Health}}' 2>&1 || true
+              echo "--- últimos logs rabbitmq ---"
+              docker logs rabbitmq --tail 150 2>&1 || true
               docker compose ps rabbitmq 2>&1 || true
               exit 1
             fi

@@ -39,7 +39,7 @@ import {
 } from '@/lib/services/exchange-rate-service';
 import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 
-const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
+export const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
 
 /** Logs do retorno bruto da Meta (admin / sync); nunca incluir token. */
@@ -864,7 +864,7 @@ async function resolveMetaApiContextByIntegrationId(integrationId: string): Prom
   };
 }
 
-async function getLegacyDecryptedToken(bancaId: string, requireActive = true): Promise<string | null> {
+export async function getLegacyDecryptedToken(bancaId: string, requireActive = true): Promise<string | null> {
   let q = supabaseServiceRole
     .from('meta_integrations')
     .select('access_token_encrypted')
@@ -2619,6 +2619,33 @@ async function processAdminMetaLiveJob(
   });
   const visibleIds = new Set(visible.map((c) => String(c.id)));
 
+  /** DEBUG: rastreia filtros aplicados às campanhas listadas — útil pra diagnosticar campanha "sumida". */
+  const filteredOutByActiveOnly = campaigns
+    .filter((c) => !visibleIds.has(String(c.id)))
+    .map((c) => ({
+      campaign_id: String(c.id),
+      name: c.name,
+      status: c.status,
+      effective_status: c.effective_status,
+    }));
+  if (filteredOutByActiveOnly.length > 0) {
+    console.log('[processAdminMetaLiveJob] filtered out by activeOnly', {
+      integration_id: integrationId,
+      rep_banca_id: rep,
+      filtered_count: filteredOutByActiveOnly.length,
+      sample: filteredOutByActiveOnly.slice(0, 10),
+    });
+  }
+  console.log('[processAdminMetaLiveJob] listCampaigns snapshot', {
+    integration_id: integrationId,
+    rep_banca_id: rep,
+    linked_bancas: job.linkedBancaIds,
+    ad_accounts: normalizedAdAccountIds,
+    total_listed: campaigns.length,
+    visible_after_active_filter: visible.length,
+    active_only: activeOnly,
+  });
+
   const fetchedCampaignIds = Array.from(visibleIds);
   const ownerByCampaign = new Map<string, string>();
   const kindByBancaCampaign = new Map<string, 'normal' | 'bolao'>();
@@ -2681,6 +2708,8 @@ async function processAdminMetaLiveJob(
   const normalizedAdAccount = normalizedAdAccountIds.join(', ');
 
   let replicatedCampaignsForMultiBanca = 0;
+  /** DEBUG: campanhas ACTIVE listadas mas sem métricas → eliminadas pelo filtro hasMetrics. */
+  const droppedByNoMetrics: Array<{ campaign_id: string; name: string | null }> = [];
 
   for (const c of visible) {
     const cid = String(c.id);
@@ -2699,7 +2728,10 @@ async function processAdminMetaLiveJob(
       m.leads > 0 ||
       m.results > 0 ||
       m.spend > 0;
-    if (!hasMetrics) continue;
+    if (!hasMetrics) {
+      droppedByNoMetrics.push({ campaign_id: cid, name: c.name ?? null });
+      continue;
+    }
 
     /**
      * Resolução do destino da campanha:
@@ -2811,6 +2843,28 @@ async function processAdminMetaLiveJob(
         'Campanhas sem owner pré-definido em meta_campaigns são replicadas em cada banca vinculada para evitar perdas no painel "Todas as bancas". Totais e cards são deduplicados por campaign_id.',
     });
   }
+
+  if (droppedByNoMetrics.length > 0) {
+    console.log('[processAdminMetaLiveJob] dropped by hasMetrics=false', {
+      integration_id: integrationId,
+      rep_banca_id: rep,
+      linked_bancas: job.linkedBancaIds,
+      dropped_count: droppedByNoMetrics.length,
+      sample: droppedByNoMetrics.slice(0, 10),
+      observacao:
+        'Campanhas ACTIVE listadas em listCampaigns mas sem retorno em fetchCampaignInsightsWithFallbacks. ' +
+        'Comum quando o fallback chain (date_preset → time_range) escolhe um período diferente do filtro do usuário.',
+    });
+  }
+  console.log('[processAdminMetaLiveJob] resumo', {
+    integration_id: integrationId,
+    rep_banca_id: rep,
+    listed: campaigns.length,
+    visible_active: visible.length,
+    dropped_no_metrics: droppedByNoMetrics.length,
+    final_rows_emitted: campaignRows.length,
+    insights_source: sourceLabel,
+  });
 
   traces.push({
     integration_id: integrationId,
@@ -3103,7 +3157,6 @@ export async function assignCampaignToBanca(
       .eq('banca_id', targetBancaId)
       .eq('campaign_id', campaignId);
 
-    // Se já houver linhas de insights no destino para o mesmo campaign/date, mantém só a origem (mais recente do fluxo manual).
     await supabaseServiceRole
       .from('meta_insights_daily')
       .delete()
@@ -3117,6 +3170,27 @@ export async function assignCampaignToBanca(
       .eq('campaign_id', campaignId)
       .select('campaign_id');
     if (campaignErr) return { success: false, error: campaignErr.message };
+
+    /**
+     * Se a campanha ainda não foi sincronizada na origem (UPDATE afetou 0 linhas),
+     * cria linha mínima no destino — sem isso o ranking não respeita o vínculo manual.
+     */
+    let createdCampaignRow = false;
+    if ((movedCampaigns?.length ?? 0) === 0) {
+      const { error: insertErr } = await supabaseServiceRole
+        .from('meta_campaigns')
+        .insert({
+          banca_id: targetBancaId,
+          campaign_id: campaignId,
+          name: null,
+          campaign_kind: 'normal',
+          updated_at: now,
+        });
+      if (insertErr && !/duplicate key|unique/i.test(insertErr.message || '')) {
+        return { success: false, error: insertErr.message };
+      }
+      if (!insertErr) createdCampaignRow = true;
+    }
 
     const { data: movedAdsets, error: adsetErr } = await supabaseServiceRole
       .from('meta_adsets')
@@ -3137,7 +3211,7 @@ export async function assignCampaignToBanca(
     return {
       success: true,
       moved: {
-        campaigns: movedCampaigns?.length ?? 0,
+        campaigns: (movedCampaigns?.length ?? 0) + (createdCampaignRow ? 1 : 0),
         adsets: movedAdsets?.length ?? 0,
         insights: movedInsights?.length ?? 0,
       },

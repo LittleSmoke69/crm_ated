@@ -2,7 +2,8 @@
  * POST /api/admin/crm/transfer-logs/resolve-batch
  *
  * Resolve em lote transferências expiradas.
- * Body: { banca_id?: string, log_ids?: string[] }
+ * Body: { banca_id?: string, log_ids?: string[], max_entries_per_log?: number }
+ * - max_entries_per_log: processa no máximo N leads pendentes por log nesta chamada (UI em tempo real).
  * - Se log_ids for informado: resolve apenas esses logs (devem estar expirados e na banca permitida).
  * - Se apenas banca_id: resolve todas as expiradas dessa banca com entries pendentes.
  * - Se nenhum: resolve todas as expiradas das bancas permitidas ao usuário.
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
   try {
     const { userId, profile } = await requireAdmin(req);
 
-    let body: { banca_id?: string; log_ids?: string[] } = {};
+    let body: { banca_id?: string; log_ids?: string[]; max_entries_per_log?: number } = {};
     try {
       body = req.headers.get('content-type')?.toLowerCase().includes('application/json')
         ? await req.json()
@@ -37,6 +38,10 @@ export async function POST(req: NextRequest) {
 
     const bancaId = body.banca_id?.trim() || null;
     const logIdsParam = body.log_ids;
+    const maxEntriesPerLog =
+      typeof body.max_entries_per_log === 'number' && body.max_entries_per_log >= 1
+        ? Math.min(50, Math.floor(body.max_entries_per_log))
+        : undefined;
 
     let bancaIds: string[];
     const contextByBancaId = new Map<string, { bancaId: string; crmBaseUrl: string | null }>();
@@ -108,6 +113,7 @@ export async function POST(req: NextRequest) {
       vinculado: number;
       disponivel_retransferencia: number;
       message: string;
+      has_more_pending?: boolean;
     }> = [];
     let total_resolved = 0;
     let total_vinculado = 0;
@@ -116,7 +122,11 @@ export async function POST(req: NextRequest) {
     for (const log of logsToResolve) {
       const ctx = contextByBancaId.get(log.banca_id);
       if (!ctx) continue;
-      const result = await resolveOneTransferLog(ctx, log.id);
+      const result = await resolveOneTransferLog(
+        ctx,
+        log.id,
+        maxEntriesPerLog != null ? { maxEntries: maxEntriesPerLog } : undefined
+      );
       results.push({
         log_id: log.id,
         banca_id: log.banca_id,
@@ -125,6 +135,7 @@ export async function POST(req: NextRequest) {
         vinculado: result.vinculado,
         disponivel_retransferencia: result.disponivel_retransferencia,
         message: result.message,
+        has_more_pending: result.hasMorePendingInLog === true,
       });
       total_resolved += result.resolved;
       total_vinculado += result.vinculado;

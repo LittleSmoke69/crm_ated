@@ -30,9 +30,11 @@ let inFlight = 0;
 let shuttingDown = false;
 
 async function loadDeps() {
-  const { processStep, updateJobProgress, sendGroupMessage } = await import('../lib/services/maturation/processor');
+  const { processStep, updateJobProgress, sendGroupMessage, loadMaturationStepForProcessing } = await import(
+    '../lib/services/maturation/processor',
+  );
   const { supabaseServiceRole } = await import('../lib/services/supabase-service');
-  return { processStep, updateJobProgress, sendGroupMessage, supabase: supabaseServiceRole };
+  return { processStep, updateJobProgress, sendGroupMessage, loadMaturationStepForProcessing, supabase: supabaseServiceRole };
 }
 
 async function setupChannel(deps: Awaited<ReturnType<typeof loadDeps>>): Promise<{ conn: ChannelModel; ch: Channel }> {
@@ -77,15 +79,8 @@ async function setupChannel(deps: Awaited<ReturnType<typeof loadDeps>>): Promise
 
     try {
       if (env.type === 'step') {
-        // Refresh do step do banco. Status 'processing' é o claim feito pelo
-        // claim_maturation_steps no scheduler. Se mudou, alguém já tratou.
-        const { data: step, error } = await deps.supabase
-          .from('maturation_steps')
-          .select('id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts, status')
-          .eq('id', env.step_id)
-          .maybeSingle();
-
-        if (error) throw new Error(`fetch step ${env.step_id}: ${error.message}`);
+        // Refresh do step: credenciais vêm de evolution_* (não são colunas de maturation_steps).
+        const step = await deps.loadMaturationStepForProcessing(deps.supabase, env.step_id);
         if (!step || step.status !== 'processing') {
           // Step ausente ou já tratado por outro caminho
           ch.ack(msg);

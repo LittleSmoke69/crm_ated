@@ -17,6 +17,9 @@ const LOG_PREFIX = '[admin][lead-trace]';
  *   - consultant_email (opcional): filtra logs onde é source ou target
  *   - lead_ids (opcional): IDs separados por vírgula (ex: "6205,6221,6227")
  *   - log_id (opcional): rastreia um log específico e seus relacionados
+ *   - outflow_page (opcional, default=1): página do leads_outflow (1-based)
+ *   - outflow_page_size (opcional, default=50, max=200): itens por página
+ *   - outflow_filter (opcional): all|left|stayed — filtra leads_outflow no servidor
  */
 export async function GET(req: NextRequest) {
   try {
@@ -24,9 +27,24 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id')?.trim() || null;
-    const consultantEmail = searchParams.get('consultant_email')?.trim() || null;
+    const consultantEmailRaw = searchParams.get('consultant_email')?.trim() || null;
+    /** Bloqueia caracteres que poderiam quebrar o filtro `.or()` do PostgREST. */
+    const consultantEmail =
+      consultantEmailRaw && /^[^,()\s]+@[^,()\s]+$/.test(consultantEmailRaw) ? consultantEmailRaw : null;
+    if (consultantEmailRaw && !consultantEmail) {
+      return errorResponse('consultant_email inválido.', 400);
+    }
     const leadIdsParam = searchParams.get('lead_ids')?.trim() || null;
     const logId = searchParams.get('log_id')?.trim() || null;
+
+    const outflowPage = Math.max(1, Number(searchParams.get('outflow_page') ?? '1') || 1);
+    const outflowPageSize = Math.min(
+      200,
+      Math.max(1, Number(searchParams.get('outflow_page_size') ?? '50') || 50)
+    );
+    const outflowFilterRaw = (searchParams.get('outflow_filter') ?? 'all').toLowerCase();
+    const outflowFilter: 'all' | 'left' | 'stayed' =
+      outflowFilterRaw === 'left' || outflowFilterRaw === 'stayed' ? outflowFilterRaw : 'all';
 
     if (!bancaId) return errorResponse('banca_id é obrigatório.');
 
@@ -275,16 +293,220 @@ export async function GET(req: NextRequest) {
       })).sort((a, b) => b.count - a.count);
     }
 
+    /**
+     * ─── 6. leads_outflow — só quando filtra por consultant_email sem lead_ids ───
+     * Para cada lead que algum dia foi target do titular, deduzir:
+     *   - source_log_id: log mais antigo onde target == titular (entrada do lead no titular)
+     *   - root_source_email: source desse primeiro log (ou original_source_consultant_email se preenchido)
+     *   - current_holder_email: target do log mais recente onde o lead aparece
+     *   - left_titular: current_holder_email !== titular
+     */
+    type OutflowItem = {
+      lead_id: string;
+      lead_email: string | null;
+      root_source_email: string | null;
+      source_log_id: string | null;
+      source_log_created_at: string | null;
+      current_holder_email: string | null;
+      current_log_id: string | null;
+      current_log_created_at: string | null;
+      last_resolution_status: string | null;
+      last_resolved_at: string | null;
+      left_titular: boolean;
+    };
+
+    let leadsOutflow: {
+      page: number;
+      page_size: number;
+      total: number;
+      filter: 'all' | 'left' | 'stayed';
+      items: OutflowItem[];
+    } | null = null;
+
+    if (consultantEmail && leadIds.length === 0) {
+      const titularLower = consultantEmail.toLowerCase();
+
+      type OutflowEntryRow = {
+        lead_id: string | number | null;
+        transfer_log_id: string | null;
+        lead_email: string | null;
+        original_source_consultant_email: string | null;
+      };
+
+      const { data: targetEntries, error: targetEntriesError } = await supabaseServiceRole
+        .from('admin_lead_transfer_entries')
+        .select('lead_id, transfer_log_id, lead_email, original_source_consultant_email')
+        .eq('banca_id', resolvedBancaId)
+        .eq('target_consultant_email', consultantEmail);
+
+      if (!targetEntriesError && Array.isArray(targetEntries) && targetEntries.length > 0) {
+        const rows = targetEntries as OutflowEntryRow[];
+
+        const allowedLogIds = gerenteLeadTransferOwnActionsOnly(profile)
+          ? await (async () => {
+              const uids = [...new Set(rows.map((r) => r.transfer_log_id).filter(Boolean) as string[])];
+              if (uids.length === 0) return new Set<string>();
+              const { data: meta } = await supabaseServiceRole
+                .from('admin_lead_transfer_logs')
+                .select('id')
+                .in('id', uids)
+                .eq('performed_by_user_id', userId);
+              return new Set((meta ?? []).map((m: { id: string }) => m.id));
+            })()
+          : null;
+
+        const filteredRows = allowedLogIds
+          ? rows.filter((r) => r.transfer_log_id && allowedLogIds.has(r.transfer_log_id))
+          : rows;
+
+        const uniqueLeadIds = [...new Set(filteredRows.map((r) => String(r.lead_id ?? '').trim()).filter(Boolean))];
+
+        if (uniqueLeadIds.length > 0) {
+          /** Histórico completo dos leads do titular (em chunks para evitar query gigante). */
+          type HistRow = {
+            lead_id: string | number | null;
+            transfer_log_id: string | null;
+            source_consultant_email: string | null;
+            target_consultant_email: string | null;
+            resolution_status: string | null;
+            resolved_at: string | null;
+            lead_email: string | null;
+            original_source_consultant_email: string | null;
+          };
+          const CHUNK = 500;
+          const allHist: HistRow[] = [];
+          for (let i = 0; i < uniqueLeadIds.length; i += CHUNK) {
+            const slice = uniqueLeadIds.slice(i, i + CHUNK);
+            const { data: histChunk } = await supabaseServiceRole
+              .from('admin_lead_transfer_entries')
+              .select(
+                'lead_id, transfer_log_id, source_consultant_email, target_consultant_email, resolution_status, resolved_at, lead_email, original_source_consultant_email'
+              )
+              .eq('banca_id', resolvedBancaId)
+              .in('lead_id', slice);
+            if (Array.isArray(histChunk)) allHist.push(...(histChunk as HistRow[]));
+          }
+
+          /** Mapa de log_id → created_at (usa allLogs do passo 1 + busca extras se houver). */
+          const logCreatedAt = new Map<string, string | null>();
+          for (const l of allLogs) logCreatedAt.set(l.id, l.created_at);
+          const extraLogIds = [
+            ...new Set(allHist.map((h) => h.transfer_log_id).filter((id): id is string => !!id && !logCreatedAt.has(id))),
+          ];
+          if (extraLogIds.length > 0) {
+            for (let i = 0; i < extraLogIds.length; i += 200) {
+              const slice = extraLogIds.slice(i, i + 200);
+              const { data: extraLogsData } = await supabaseServiceRole
+                .from('admin_lead_transfer_logs')
+                .select('id, created_at')
+                .eq('banca_id', resolvedBancaId)
+                .in('id', slice);
+              if (Array.isArray(extraLogsData)) {
+                for (const l of extraLogsData as Array<{ id: string; created_at: string | null }>) {
+                  logCreatedAt.set(l.id, l.created_at);
+                }
+              }
+            }
+          }
+
+          /** Agrupa histórico por lead_id, ordena por log_created_at ASC para deduzir raiz / DESC para current. */
+          const histByLead = new Map<string, HistRow[]>();
+          for (const h of allHist) {
+            const lid = String(h.lead_id ?? '').trim();
+            if (!lid) continue;
+            const arr = histByLead.get(lid) ?? [];
+            arr.push(h);
+            histByLead.set(lid, arr);
+          }
+
+          const ts = (logId: string | null): number => {
+            if (!logId) return 0;
+            const c = logCreatedAt.get(logId);
+            return c ? new Date(c).getTime() : 0;
+          };
+
+          const allItems: OutflowItem[] = uniqueLeadIds.map((lid) => {
+            const rowsForLead = (histByLead.get(lid) ?? []).slice().sort((a, b) => ts(a.transfer_log_id) - ts(b.transfer_log_id));
+            const oldest = rowsForLead[0] ?? null;
+            const newest = rowsForLead[rowsForLead.length - 1] ?? null;
+            const titularEntry = rowsForLead.find(
+              (r) => (r.target_consultant_email ?? '').toLowerCase() === titularLower
+            ) ?? null;
+            /** Origem raiz: priorizar original_source_consultant_email; senão source do log mais antigo. */
+            const originalSource = rowsForLead
+              .map((r) => (r.original_source_consultant_email ?? '').trim())
+              .find((x) => x.includes('@')) ?? null;
+            const rootSource = originalSource || oldest?.source_consultant_email || null;
+            const currentHolder = newest?.target_consultant_email ?? null;
+            const leadEmail = rowsForLead.find((r) => (r.lead_email ?? '').includes('@'))?.lead_email ?? null;
+            return {
+              lead_id: lid,
+              lead_email: leadEmail,
+              root_source_email: rootSource,
+              source_log_id: titularEntry?.transfer_log_id ?? oldest?.transfer_log_id ?? null,
+              source_log_created_at: titularEntry?.transfer_log_id
+                ? logCreatedAt.get(titularEntry.transfer_log_id) ?? null
+                : oldest?.transfer_log_id
+                  ? logCreatedAt.get(oldest.transfer_log_id) ?? null
+                  : null,
+              current_holder_email: currentHolder,
+              current_log_id: newest?.transfer_log_id ?? null,
+              current_log_created_at: newest?.transfer_log_id ? logCreatedAt.get(newest.transfer_log_id) ?? null : null,
+              last_resolution_status: newest?.resolution_status ?? null,
+              last_resolved_at: newest?.resolved_at ?? null,
+              left_titular: (currentHolder ?? '').toLowerCase() !== titularLower,
+            };
+          });
+
+          const filteredItems =
+            outflowFilter === 'left'
+              ? allItems.filter((i) => i.left_titular)
+              : outflowFilter === 'stayed'
+                ? allItems.filter((i) => !i.left_titular)
+                : allItems;
+
+          /** Ordena: leads que saíram (mais recentes primeiro), depois os que ficaram. */
+          filteredItems.sort((a, b) => {
+            if (a.left_titular !== b.left_titular) return a.left_titular ? -1 : 1;
+            const ta = a.current_log_created_at ? new Date(a.current_log_created_at).getTime() : 0;
+            const tb = b.current_log_created_at ? new Date(b.current_log_created_at).getTime() : 0;
+            return tb - ta;
+          });
+
+          const total = filteredItems.length;
+          const start = (outflowPage - 1) * outflowPageSize;
+          const pageItems = filteredItems.slice(start, start + outflowPageSize);
+          leadsOutflow = {
+            page: outflowPage,
+            page_size: outflowPageSize,
+            total,
+            filter: outflowFilter,
+            items: pageItems,
+          };
+        } else {
+          leadsOutflow = { page: outflowPage, page_size: outflowPageSize, total: 0, filter: outflowFilter, items: [] };
+        }
+      } else if (!targetEntriesError) {
+        leadsOutflow = { page: outflowPage, page_size: outflowPageSize, total: 0, filter: outflowFilter, items: [] };
+      } else {
+        console.warn(`${LOG_PREFIX} GET leads_outflow target entries error (não fatal):`, targetEntriesError);
+      }
+    }
+
     return successResponse({
       timeline,
       lead_history: leadHistory,
       current_holders: currentHolders,
+      leads_outflow: leadsOutflow,
       meta: {
         banca_id: resolvedBancaId,
         consultant_email: consultantEmail,
         lead_ids_queried: leadIds,
         logs_found: allLogs.length,
         entries_found: entries.length,
+        outflow_page: outflowPage,
+        outflow_page_size: outflowPageSize,
+        outflow_filter: outflowFilter,
       },
     });
   } catch (err: unknown) {

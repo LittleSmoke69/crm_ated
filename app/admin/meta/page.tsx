@@ -652,6 +652,14 @@ export default function AdminMetaPage() {
   const [metaIntegrationUiBusy, setMetaIntegrationUiBusy] = useState(false);
   /** Linha da visão geral em processo de desvínculo banca ↔ integração (`banca_id:integration_id`). */
   const [overviewUnlinkKey, setOverviewUnlinkKey] = useState<string | null>(null);
+  /** Token que força o BancaXAdsRanking a re-fetch após mudanças que afetam atribuição (ex.: «Vincular banca»). */
+  const [rankingRefreshKey, setRankingRefreshKey] = useState(0);
+  /** Linha da visão geral cujo modal «Vincular banca» está aberto. */
+  const [linkBancaModalRow, setLinkBancaModalRow] = useState<MetaOverviewRow | null>(null);
+  const [linkBancaSelectedIds, setLinkBancaSelectedIds] = useState<string[]>([]);
+  const [linkBancaSearch, setLinkBancaSearch] = useState('');
+  const [linkBancaSaving, setLinkBancaSaving] = useState(false);
+  const [linkBancaError, setLinkBancaError] = useState<string | null>(null);
   /** Valor atual da seleção no dropdown (para loadConfig assíncrono não voltar sempre à «primary» da API). */
   const adminMetaSelectedIntegrationIdRef = useRef('');
 
@@ -1532,6 +1540,7 @@ export default function AdminMetaPage() {
       }
       void loadLiveAggregate();
       void loadAllCampaigns();
+      setRankingRefreshKey((k) => k + 1);
 
       setTestResult({
         success: true,
@@ -1545,6 +1554,72 @@ export default function AdminMetaPage() {
       setTestResult({ success: false, error: msg || 'Erro ao desvincular.' });
     } finally {
       setOverviewUnlinkKey(null);
+    }
+  };
+
+  /** Visão geral: abre modal para vincular bancas adicionais a uma integração já existente. */
+  const handleOpenLinkBancaModal = (row: MetaOverviewRow) => {
+    if (!row.configured || !row.integration_id) return;
+    setLinkBancaModalRow(row);
+    setLinkBancaSelectedIds([]);
+    setLinkBancaSearch('');
+    setLinkBancaError(null);
+  };
+
+  const handleCloseLinkBancaModal = () => {
+    if (linkBancaSaving) return;
+    setLinkBancaModalRow(null);
+    setLinkBancaSelectedIds([]);
+    setLinkBancaSearch('');
+    setLinkBancaError(null);
+  };
+
+  /** Vincula bancas marcadas à integração da linha; usa `move_bancas_from_other_integrations` para tolerar bancas atualmente em outra integração. */
+  const handleSubmitLinkBancas = async () => {
+    if (!userId || !linkBancaModalRow || !linkBancaModalRow.integration_id) return;
+    if (linkBancaSelectedIds.length === 0) {
+      setLinkBancaError('Selecione ao menos uma banca para vincular.');
+      return;
+    }
+    setLinkBancaSaving(true);
+    setLinkBancaError(null);
+    try {
+      const integrationId = linkBancaModalRow.integration_id;
+      const currentBancaIds = Array.from(
+        new Set(
+          overviewRows
+            .filter((r) => r.integration_id === integrationId && r.configured)
+            .map((r) => String(r.banca_id))
+        )
+      );
+      const nextBancaIds = Array.from(new Set([...currentBancaIds, ...linkBancaSelectedIds]));
+      const res = await fetch('/api/admin/meta/integration', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify({
+          integration_id: integrationId,
+          banca_ids: nextBancaIds,
+          move_bancas_from_other_integrations: true,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setLinkBancaError(data.error || 'Erro ao vincular bancas.');
+        return;
+      }
+      setLinkBancaModalRow(null);
+      setLinkBancaSelectedIds([]);
+      setLinkBancaSearch('');
+      await loadOverview();
+      void loadLiveAggregate();
+      void loadAllCampaigns();
+      // Bancas adicionadas à integração mudam o set de atribuição possível no ranking.
+      setRankingRefreshKey((k) => k + 1);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setLinkBancaError(msg || 'Erro ao vincular bancas.');
+    } finally {
+      setLinkBancaSaving(false);
     }
   };
 
@@ -1843,6 +1918,16 @@ export default function AdminMetaPage() {
       const data = await res.json();
       if (data.success && data.data?.rows) {
         setAllCampaignsRows(data.data.rows);
+        /** Debug: lista (banca → campanha) pra conferir atribuição no DevTools. */
+        // eslint-disable-next-line no-console
+        console.table(
+          (data.data.rows as any[]).map((r) => ({
+            banca: r.banca_name,
+            campaign_id: r.campaign_id,
+            campanha: r.name,
+            effective_status: r.effective_status,
+          }))
+        );
         const nextDraft: Record<string, string[]> = {};
         const nextRedirectDraft: Record<string, string> = {};
         const nextAdsAttrDraft: Record<string, string[]> = {};
@@ -2062,6 +2147,8 @@ export default function AdminMetaPage() {
       if (selectedBancaIds.includes(String(row.banca_id)) || selectedBancaIds.includes(targetBancaId)) {
         await loadSyncedData();
       }
+      // Sinaliza ao ranking pra re-puxar (atribuição de campanha mudou).
+      setRankingRefreshKey((k) => k + 1);
     } catch (err: any) {
       setAllCampaignsError(err?.message || 'Erro ao vincular campanha à banca.');
     } finally {
@@ -2357,6 +2444,28 @@ export default function AdminMetaPage() {
       out.push(row);
     }
     return out;
+  }, [overviewRows]);
+
+  /**
+   * Detecta se alguma integração da visão atual tem >1 banca consumindo a mesma Ad Account.
+   * Usado para badge informativo no card «Cobrado no Cartão» (Meta cobra a conta inteira,
+   * sem split por campanha/banca — caso compartilhado o número é da conta toda).
+   */
+  const sharedAdAccountInfo = useMemo(() => {
+    const bancasByIntegration = new Map<string, Set<string>>();
+    for (const r of overviewRows) {
+      if (!r.configured || !r.integration_id) continue;
+      const key = String(r.integration_id);
+      if (!bancasByIntegration.has(key)) bancasByIntegration.set(key, new Set());
+      bancasByIntegration.get(key)!.add(String(r.banca_id));
+    }
+    let sharedCount = 0;
+    let maxBancasPerIntegration = 0;
+    for (const set of bancasByIntegration.values()) {
+      if (set.size > 1) sharedCount += 1;
+      if (set.size > maxBancasPerIntegration) maxBancasPerIntegration = set.size;
+    }
+    return { sharedCount, maxBancasPerIntegration };
   }, [overviewRows]);
 
   const overviewTotals = filteredOverviewRowsUniqueBanca.reduce(
@@ -3252,7 +3361,11 @@ export default function AdminMetaPage() {
           </div>
         ) : null}
 
-        <BancaXAdsRanking />
+        <BancaXAdsRanking
+          dateFrom={adminMetaInsightsDateRange.dateFrom}
+          dateTo={adminMetaInsightsDateRange.dateTo}
+          refreshKey={rankingRefreshKey}
+        />
 
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
@@ -3386,6 +3499,19 @@ export default function AdminMetaPage() {
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">
               Débitos reais no cartão pela Meta no período. O total em destaque inclui o imposto selecionado ao lado.
             </p>
+            {sharedAdAccountInfo.sharedCount > 0 ? (
+              <p
+                className="mt-1.5 inline-flex items-start gap-1.5 text-[10px] text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-md px-2 py-1 leading-snug"
+                title="A Meta cobra a Ad Account inteira; não há quebra por campanha. Use o gasto (spend) por campanha para atribuição."
+              >
+                <AlertCircle className="w-3 h-3 mt-px shrink-0" />
+                <span>
+                  {sharedAdAccountInfo.sharedCount === 1
+                    ? '1 conta compartilhada entre bancas — cobrança agregada pela Meta, sem split por campanha.'
+                    : `${sharedAdAccountInfo.sharedCount} contas compartilhadas entre bancas — cobrança agregada pela Meta, sem split por campanha.`}
+                </span>
+              </p>
+            ) : null}
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
                 <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
@@ -4714,20 +4840,31 @@ export default function AdminMetaPage() {
                             Ver dados
                           </button>
                           {row.configured && row.integration_id ? (
-                            <button
-                              type="button"
-                              disabled={overviewUnlinkKey !== null}
-                              onClick={() => void handleOverviewUnlinkBancaRow(row)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 bg-amber-50/90 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-xs font-medium disabled:opacity-50"
-                              title="Remove só o vínculo desta banca com esta integração; atualiza a lista."
-                            >
-                              {overviewUnlinkKey === `${row.banca_id}:${row.integration_id}` ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                              ) : (
-                                <Unplug className="w-3.5 h-3.5 shrink-0" />
-                              )}
-                              Desvincular banca
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenLinkBancaModal(row)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200 bg-indigo-50/90 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 text-xs font-medium"
+                                title="Vincular outras bancas a esta integração Meta."
+                              >
+                                <Link2 className="w-3.5 h-3.5 shrink-0" />
+                                Vincular banca
+                              </button>
+                              <button
+                                type="button"
+                                disabled={overviewUnlinkKey !== null}
+                                onClick={() => void handleOverviewUnlinkBancaRow(row)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 bg-amber-50/90 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-xs font-medium disabled:opacity-50"
+                                title="Remove só o vínculo desta banca com esta integração; atualiza a lista."
+                              >
+                                {overviewUnlinkKey === `${row.banca_id}:${row.integration_id}` ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                                ) : (
+                                  <Unplug className="w-3.5 h-3.5 shrink-0" />
+                                )}
+                                Desvincular banca
+                              </button>
+                            </>
                           ) : null}
                         </div>
                       </td>
@@ -5757,6 +5894,154 @@ export default function AdminMetaPage() {
           </div>
         </div>
       )}
+
+      {/* Modal: Vincular bancas adicionais a uma integração já existente */}
+      {linkBancaModalRow && (() => {
+        const integrationId = linkBancaModalRow.integration_id ?? '';
+        const linkedToThisIntegration = new Set(
+          overviewRows
+            .filter((r) => r.integration_id === integrationId && r.configured)
+            .map((r) => String(r.banca_id))
+        );
+        const otherIntegrationByBanca = new Map<string, MetaOverviewRow>();
+        for (const r of overviewRows) {
+          if (
+            r.configured &&
+            r.integration_id &&
+            r.integration_id !== integrationId &&
+            !otherIntegrationByBanca.has(String(r.banca_id))
+          ) {
+            otherIntegrationByBanca.set(String(r.banca_id), r);
+          }
+        }
+        const search = linkBancaSearch.trim().toLowerCase();
+        const availableBancas = bancas
+          .filter((b) => !linkedToThisIntegration.has(String(b.id)))
+          .filter((b) => {
+            if (!search) return true;
+            return (
+              (b.name || '').toLowerCase().includes(search) ||
+              (b.url || '').toLowerCase().includes(search)
+            );
+          });
+        const integrationLabel =
+          linkBancaModalRow.banca_name ||
+          linkBancaModalRow.banca_url ||
+          linkBancaModalRow.banca_id;
+        return (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+            <div className="bg-white dark:bg-[#252525] rounded-2xl shadow-xl border border-gray-200 dark:border-[#404040] w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="px-5 py-4 border-b border-gray-100 dark:border-[#383838] flex items-center justify-between">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-bold text-gray-900 dark:text-gray-50">Vincular bancas à integração</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                    Integração atual de «{integrationLabel}» · Ad Account {linkBancaModalRow.ad_account_id || '-'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseLinkBancaModal}
+                  disabled={linkBancaSaving}
+                  className="px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#404040] text-sm text-gray-700 dark:text-gray-200 disabled:opacity-50"
+                >
+                  Fechar
+                </button>
+              </div>
+              <div className="p-5 space-y-3 overflow-y-auto">
+                {linkBancaError ? (
+                  <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+                    {linkBancaError}
+                  </div>
+                ) : null}
+                <input
+                  type="search"
+                  value={linkBancaSearch}
+                  onChange={(e) => setLinkBancaSearch(e.target.value)}
+                  placeholder="Buscar banca…"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  autoComplete="off"
+                />
+                <div className="border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] divide-y divide-gray-100 dark:divide-[#383838] max-h-[50vh] overflow-y-auto">
+                  {availableBancas.length === 0 ? (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 p-4 text-center">
+                      {bancas.length === 0
+                        ? 'Nenhuma banca disponível.'
+                        : search
+                          ? 'Nenhum resultado para a busca.'
+                          : 'Todas as bancas já estão nesta integração.'}
+                    </p>
+                  ) : (
+                    availableBancas.map((b) => {
+                      const id = String(b.id);
+                      const checked = linkBancaSelectedIds.includes(id);
+                      const other = otherIntegrationByBanca.get(id);
+                      return (
+                        <label
+                          key={id}
+                          className="flex items-start gap-3 text-sm text-gray-800 dark:text-gray-100 cursor-pointer px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-[#333]"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setLinkBancaSelectedIds((prev) =>
+                                e.target.checked ? [...prev, id] : prev.filter((x) => x !== id)
+                              );
+                            }}
+                            className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-medium">{b.name || b.url}</span>
+                              {other ? (
+                                <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200">
+                                  Em outra integração · será movida
+                                </span>
+                              ) : null}
+                            </span>
+                            {b.url ? <span className="block text-xs text-gray-500 break-all mt-0.5">{b.url}</span> : null}
+                            {other ? (
+                              <span className="block text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                Atual: Ad Account {other.ad_account_id || '-'}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  As bancas marcadas passam a usar o token, Ad Account e Pixel desta integração. Bancas que já estão em outra integração são movidas (a antiga é excluída se ficar sem bancas).
+                </p>
+              </div>
+              <div className="px-5 py-3 border-t border-gray-100 dark:border-[#383838] flex items-center justify-end gap-2 bg-gray-50/40 dark:bg-[#1e1e1e]">
+                <button
+                  type="button"
+                  onClick={handleCloseLinkBancaModal}
+                  disabled={linkBancaSaving}
+                  className="px-4 py-2 rounded-xl border border-gray-200 dark:border-[#404040] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSubmitLinkBancas()}
+                  disabled={linkBancaSaving || linkBancaSelectedIds.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium disabled:opacity-50"
+                >
+                  {linkBancaSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                  {linkBancaSaving
+                    ? 'Vinculando…'
+                    : linkBancaSelectedIds.length > 1
+                      ? `Vincular ${linkBancaSelectedIds.length} bancas`
+                      : 'Vincular banca'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </Layout>
   );
 }

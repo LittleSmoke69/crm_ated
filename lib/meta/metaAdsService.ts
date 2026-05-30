@@ -43,6 +43,12 @@ export type GetActiveCampaignsSpendOptions = {
    * Default `America/Sao_Paulo` (calendário civil BR).
    */
   calendarTimeZone?: string;
+  /**
+   * Quando `true`, NÃO aplica o filtro `campaign.delivery_info=active`. Retorna spend
+   * de TODAS as campanhas do Ad Account no período (inclusive pausadas que gastaram).
+   * Default `false` (mantém comportamento legado dos chamadores existentes).
+   */
+  includeInactiveCampaigns?: boolean;
 };
 
 type InsightCampaignRow = {
@@ -137,7 +143,9 @@ function buildFirstInsightsUrl(
   u.searchParams.set('access_token', accessToken);
   u.searchParams.set('level', 'campaign');
   u.searchParams.set('fields', fields);
-  u.searchParams.set('filtering', FILTER_ACTIVE_DELIVERY);
+  if (!opts.includeInactiveCampaigns) {
+    u.searchParams.set('filtering', FILTER_ACTIVE_DELIVERY);
+  }
   u.searchParams.set('limit', '500');
   const resolved = resolveInsightsDateQuery(opts);
   if (resolved.timeRange) {
@@ -174,4 +182,112 @@ export async function getActiveCampaignsSpend(
   const campaigns = aggregateRows(raw);
   const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0);
   return { campaigns, totalSpend };
+}
+
+/**
+ * Spend de UMA campanha via endpoint do nó (`/{campaign_id}/insights`). Funciona
+ * mesmo quando a campanha não está na Ad Account configurada da integração — desde
+ * que o token tenha acesso à campanha em alguma Ad Account.
+ *
+ * Útil pra casos em que `meta_campaigns` tem IDs sincronizados de Ad Account antiga
+ * que mudou; o nó direto resolve sem depender da config atual.
+ *
+ * Endpoint: GET /{campaign_id}/insights?fields=spend,campaign_name
+ *   &time_range={"since":"...","until":"..."}
+ */
+export async function getCampaignSpendByNode(
+  baseUrl: string,
+  accessToken: string,
+  campaignId: string,
+  options?: GetActiveCampaignsSpendOptions
+): Promise<{ campaign_id: string; campaign_name: string | null; spend: number } | null> {
+  const id = String(campaignId ?? '').trim();
+  if (!id) return null;
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const u = new URL(`${cleanBase}/${id}/insights`);
+  u.searchParams.set('access_token', accessToken);
+  u.searchParams.set('fields', 'spend,campaign_name');
+  const resolved = resolveInsightsDateQuery(options);
+  if (resolved.timeRange) {
+    u.searchParams.set('time_range', JSON.stringify(resolved.timeRange));
+  } else if (resolved.datePreset) {
+    u.searchParams.set('date_preset', resolved.datePreset);
+  }
+  if (resolved.timeIncrement != null && resolved.timeIncrement > 0) {
+    u.searchParams.set('time_increment', String(resolved.timeIncrement));
+  }
+
+  try {
+    let total = 0;
+    let name: string | null = null;
+    let pageUrl: string | undefined = u.toString();
+    while (pageUrl) {
+      const page = await metaGraphGetJson<{
+        data?: Array<{ spend?: string; campaign_name?: string }>;
+        paging?: MetaPaging;
+      }>(pageUrl);
+      for (const row of page.data ?? []) {
+        total += parseFloat(row.spend ?? '0') || 0;
+        if (!name && row.campaign_name) name = row.campaign_name;
+      }
+      pageUrl = page.paging?.next;
+    }
+    return { campaign_id: id, campaign_name: name, spend: total };
+  } catch {
+    // Campanha não acessível pelo token ou inexistente → spend 0.
+    return null;
+  }
+}
+
+/**
+ * Spend de UMA campanha específica via filtro `campaign.id IN [...]` no `/insights`.
+ * Útil quando a Ad Account é compartilhada por várias bancas (cada campanha = banca diferente)
+ * e queremos só o custo da campanha desta banca — direto do Graph, sem agregar a conta inteira.
+ *
+ * Endpoint: GET /{act_id}/insights?level=campaign
+ *   &filtering=[{"field":"campaign.id","operator":"IN","value":["<campaignId>"]}]
+ *   &fields=spend,impressions,clicks
+ *   &time_range={"since":"...","until":"..."}
+ *
+ * Não aplica `campaign.delivery_info=active` — uma campanha pausada ainda gerou spend no período pedido.
+ */
+export async function getCampaignSpendById(
+  baseUrl: string,
+  accessToken: string,
+  adAccountId: string,
+  campaignId: string,
+  options?: GetActiveCampaignsSpendOptions
+): Promise<ActiveCampaignSpendRow | null> {
+  const id = String(campaignId ?? '').trim();
+  if (!id) return null;
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const act = normalizeActId(adAccountId);
+  const u = new URL(`${cleanBase}/${act}/insights`);
+  u.searchParams.set('access_token', accessToken);
+  u.searchParams.set('level', 'campaign');
+  u.searchParams.set('fields', 'campaign_id,campaign_name,spend,impressions,clicks');
+  u.searchParams.set(
+    'filtering',
+    JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: [id] }])
+  );
+  u.searchParams.set('limit', '500');
+  const resolved = resolveInsightsDateQuery(options);
+  if (resolved.timeRange) {
+    u.searchParams.set('time_range', JSON.stringify(resolved.timeRange));
+  } else if (resolved.datePreset) {
+    u.searchParams.set('date_preset', resolved.datePreset);
+  }
+  if (resolved.timeIncrement != null && resolved.timeIncrement > 0) {
+    u.searchParams.set('time_increment', String(resolved.timeIncrement));
+  }
+
+  const raw: InsightCampaignRow[] = [];
+  let pageUrl: string | undefined = u.toString();
+  while (pageUrl) {
+    const page = await metaGraphGetJson<InsightsPage>(pageUrl);
+    raw.push(...(page.data ?? []));
+    pageUrl = page.paging?.next;
+  }
+  const aggregated = aggregateRows(raw);
+  return aggregated.find((c) => c.id === id) ?? null;
 }

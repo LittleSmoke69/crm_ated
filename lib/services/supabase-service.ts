@@ -28,6 +28,29 @@ if (!supabaseUrl || !supabaseKey) {
 const resolvedSupabaseUrl: string = supabaseUrl;
 const resolvedSupabaseAnonKey: string = supabaseKey;
 
+// Hard guard: NEXT_PUBLIC_SUPABASE_ANON_KEY é embarcada no bundle do browser.
+// Se vier um JWT service_role aqui, o banco inteiro fica exposto (bypassa RLS).
+{
+  const payloadSegment = resolvedSupabaseAnonKey.split('.')[1];
+  if (payloadSegment) {
+    try {
+      const base64 = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+      const json = typeof atob === 'function'
+        ? atob(base64)
+        : Buffer.from(base64, 'base64').toString('utf-8');
+      const parsed = JSON.parse(json) as { role?: string };
+      if (parsed?.role === 'service_role') {
+        throw new Error(
+          'NEXT_PUBLIC_SUPABASE_ANON_KEY contém JWT com role=service_role. ' +
+          'Rotacione a service_role no painel do Supabase e configure aqui a chave anon real.'
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('service_role')) throw err;
+    }
+  }
+}
+
 export const supabase = createClient(resolvedSupabaseUrl, resolvedSupabaseAnonKey);
 
 // Service Role: lazy + leitura no primeiro uso (Netlify/Next injetam env no runtime do handler;

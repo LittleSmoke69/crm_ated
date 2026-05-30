@@ -1,20 +1,23 @@
 /**
- * Ranking diário "Banca x ADS" — Conciliação.
+ * Ranking "Banca x ADS" — Conciliação.
  *
- * Cruza, por dia e por banca:
- *   - Gasto LIVE do Meta Ads (Marketing API via `consolidateActiveCampaignsSpendAllIntegrations`,
- *     filtra campanhas com `delivery_info=active` — só entra banca com ads ativos).
- *   - Métricas operacionais da banca (CRM `/api/crm/dashboard-metrics` — mesma fonte do "Resumo Geral").
+ * APENAS campanhas LIVE do Meta entram no ranking — mesma fonte que alimenta
+ * o card «Métricas de Campanhas». Banca só aparece se tem ao menos 1 campanha
+ * LIVE atribuída a ela. Nada de campanhas antigas / só em meta_campaigns.
  *
- * Retorna apenas bancas com ads ativos no dia, ordenadas por gasto desc, com métricas
- * derivadas (ROI, ROAS, margem, status) prontas para a tabela do front.
+ *   1. Lista campanhas LIVE de cada Ad Account (Meta Marketing API).
+ *   2. Pra cada campanha, resolve banca via `meta_campaigns` (vínculo do dropdown
+ *      «Vincular banca»). Sem vínculo + integração de 1 banca → atribui a ela;
+ *      sem vínculo + integração compartilhada → descarta.
+ *   3. Agrupa por banca, soma spend e contagem. Ordena por spend desc.
+ *
+ *   - Spend SEMPRE do Meta Marketing API (zero histórico de banco).
+ *   - Métricas operacionais: CRM `/api/crm/dashboard-metrics`.
  */
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { fetchDashboardMetrics } from '@/lib/services/dashboard/dono-banca';
-import {
-  consolidateActiveCampaignsSpendAllIntegrations,
-} from '@/lib/services/meta-sync-service';
+import { consolidateActiveCampaignsSpendAllIntegrations } from '@/lib/services/meta-sync-service';
 import { formatMetaCalendarDayYmd } from '@/lib/meta/metaAdsService';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
@@ -90,14 +93,19 @@ export type BancaXAdsRankingTotals = {
 };
 
 export type BancaXAdsRankingResult = {
-  period: { date: string; tz: string };
+  /** Quando dateFrom === dateTo (ou só um dos dois informado), `date` ecoa esse dia para retrocompatibilidade. */
+  period: { date: string; date_from: string; date_to: string; tz: string };
   rows: BancaXAdsRankingRow[];
   totals: BancaXAdsRankingTotals;
 };
 
 export type BancaXAdsRankingOptions = {
-  /** YYYY-MM-DD. Default = hoje em `tz`. */
+  /** YYYY-MM-DD. Atalho para single-day. Default = hoje em `tz` quando `dateFrom`/`dateTo` ausentes. */
   date?: string | null;
+  /** Início do range YYYY-MM-DD. Sobrepõe `date`. */
+  dateFrom?: string | null;
+  /** Fim do range YYYY-MM-DD. Sobrepõe `date`. */
+  dateTo?: string | null;
   /** IANA timezone. Default America/Sao_Paulo. */
   tz?: string | null;
   /** Limite opcional para reduzir o nº de chamadas ao CRM externo durante teste. */
@@ -106,22 +114,74 @@ export type BancaXAdsRankingOptions = {
 
 type CrmBancaRow = { id: string; name: string | null; url: string | null };
 
-/** Mapa `campaign_id` → `banca_id` do snapshot Supabase para resolver atribuição quando integração é compartilhada. */
-async function fetchCampaignToBancaMap(): Promise<Map<string, string>> {
-  const { data, error } = await supabaseServiceRole
-    .from('meta_campaigns')
-    .select('campaign_id, banca_id');
-  if (error) {
-    console.warn('[banca-x-ads-ranking] meta_campaigns lookup error:', error.message);
-    return new Map();
+type MetaCampaignRecord = {
+  campaign_id: string;
+  banca_id: string;
+  banca_name: string;
+  campaign_name: string | null;
+};
+
+/**
+ * Snapshot completo de `meta_campaigns` com o nome da banca resolvido. Sem filtro
+ * de status (vínculos manuais do dropdown criam rows com effective_status NULL).
+ * Pagina porque o Supabase limita a 1000 rows por default; ordena por updated_at DESC
+ * pra que duplicatas raras com mesmo campaign_id resolvam pela linha mais recente.
+ */
+async function fetchAllMetaCampaignsWithBanca(): Promise<MetaCampaignRecord[]> {
+  const rawRows: Array<{ campaign_id: string; banca_id: string; name: string | null }> = [];
+  const pageSize = 1000;
+  let offset = 0;
+  for (;;) {
+    const { data, error } = await supabaseServiceRole
+      .from('meta_campaigns')
+      .select('campaign_id, banca_id, name, updated_at')
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error) {
+      console.warn('[banca-x-ads-ranking] meta_campaigns lookup error:', error.message);
+      return [];
+    }
+    const rows = data ?? [];
+    rawRows.push(
+      ...(rows as Array<{ campaign_id: string; banca_id: string; name: string | null }>)
+    );
+    if (rows.length < pageSize) break;
+    offset += pageSize;
   }
-  const map = new Map<string, string>();
-  for (const row of data ?? []) {
-    const cid = String((row as { campaign_id?: string | null }).campaign_id ?? '');
-    const bid = String((row as { banca_id?: string | null }).banca_id ?? '');
-    if (cid && bid) map.set(cid, bid);
+
+  const seen = new Set<string>();
+  const unique: typeof rawRows = [];
+  for (const r of rawRows) {
+    const cid = String(r.campaign_id ?? '').trim();
+    if (!cid || seen.has(cid)) continue;
+    seen.add(cid);
+    unique.push(r);
   }
-  return map;
+
+  const bancaIds = Array.from(new Set(unique.map((r) => String(r.banca_id ?? '').trim()).filter(Boolean)));
+  const bancaNameById = new Map<string, string>();
+  if (bancaIds.length > 0) {
+    const { data: bancasData, error: bancasErr } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('id, name, url')
+      .in('id', bancaIds);
+    if (bancasErr) {
+      console.warn('[banca-x-ads-ranking] crm_bancas lookup error:', bancasErr.message);
+    }
+    for (const b of bancasData ?? []) {
+      const id = String((b as { id: string }).id);
+      const name = (b as { name?: string | null }).name;
+      const url = (b as { url?: string | null }).url;
+      bancaNameById.set(id, name || url || id);
+    }
+  }
+
+  return unique.map((r) => ({
+    campaign_id: String(r.campaign_id).trim(),
+    banca_id: String(r.banca_id).trim(),
+    banca_name: bancaNameById.get(String(r.banca_id).trim()) || String(r.banca_id).trim(),
+    campaign_name: r.name ?? null,
+  }));
 }
 
 type LiveAdsAggregate = {
@@ -131,44 +191,133 @@ type LiveAdsAggregate = {
 };
 
 /**
- * Roda o agregador LIVE do Meta Graph para o dia pedido e atribui o spend
- * de cada campanha ao seu `banca_id` real via lookup em `meta_campaigns`.
- * Para integração com 1 só banca cai no fallback direto.
+ * Fluxo do ranking — APENAS campanhas LIVE entram, igual ao «Métricas de Campanhas».
+ * meta_campaigns serve só pra resolver banca via vínculo do dropdown.
+ *
+ *   1. Meta LIVE retorna todas as campanhas atuais nas Ad Accounts das integrações.
+ *   2. Pra cada campanha: lookup em `meta_campaigns` (sem filtro de status).
+ *      - Vinculada → atribui à banca do vínculo.
+ *      - Sem vínculo + integração 1-banca → atribui (fallback).
+ *      - Sem vínculo + integração compartilhada → descarta (não chuta).
  */
-async function fetchLiveAdsForDay(date: string, tz: string): Promise<LiveAdsAggregate> {
-  const campaignToBanca = await fetchCampaignToBancaMap();
+async function fetchLiveAdsForRange(
+  dateFrom: string,
+  dateTo: string,
+  tz: string
+): Promise<LiveAdsAggregate> {
+  // 1) Lookup de atribuição: campaign_id → banca via meta_campaigns.
+  const dbCampaigns = await fetchAllMetaCampaignsWithBanca();
+  const campaignToBanca = new Map<string, { banca_id: string; banca_name: string; campaign_name: string | null }>();
+  for (const c of dbCampaigns) {
+    if (!campaignToBanca.has(c.campaign_id)) {
+      campaignToBanca.set(c.campaign_id, {
+        banca_id: c.banca_id,
+        banca_name: c.banca_name,
+        campaign_name: c.campaign_name,
+      });
+    }
+  }
+  const bancaNameById = new Map<string, string>();
+  for (const c of dbCampaigns) bancaNameById.set(c.banca_id, c.banca_name);
 
+  // 2) Spend LIVE — sem filtro de delivery_info (pausadas com spend entram).
   const report = await consolidateActiveCampaignsSpendAllIntegrations({
-    timeRange: { since: date, until: date },
+    timeRange: { since: dateFrom, until: dateTo },
     timeIncrement: 1,
     calendarTimeZone: tz,
+    includeInactiveCampaigns: true,
   });
 
+  console.log(
+    '[banca-x-ads-ranking] DEBUG integrations',
+    report.by_integration.map((s) => ({
+      integration_id: s.integration_id,
+      banca_ids_linked: s.banca_ids,
+      campaigns_count: s.campaigns.length,
+      total_spend: s.total_spend,
+      error: s.error ?? null,
+    }))
+  );
+
+  // 3) Itera SÓ campanhas LIVE. Cada uma vira 1 linha do ranking.
   const spendByBanca = new Map<string, number>();
   const campaignsByBanca = new Map<string, number>();
   const bancasWithActiveAds = new Set<string>();
 
-  for (const campaign of report.campaigns) {
-    const resolved = campaignToBanca.get(String(campaign.id));
-    const fallback = campaign.banca_ids[0];
-    const targetBanca = resolved || fallback;
-    if (!targetBanca) continue;
+  const trace = new Map<
+    string,
+    {
+      banca_name: string;
+      campaigns: Array<{
+        campaign_id: string;
+        campaign_name: string | null;
+        spend: number;
+        source: 'db_vinculated' | 'live_single_banca';
+      }>;
+    }
+  >();
 
-    bancasWithActiveAds.add(targetBanca);
-    const spend = Number(campaign.spend) || 0;
-    spendByBanca.set(targetBanca, (spendByBanca.get(targetBanca) ?? 0) + spend);
-    campaignsByBanca.set(targetBanca, (campaignsByBanca.get(targetBanca) ?? 0) + 1);
+  let skippedSharedNoLink = 0;
+  for (const c of report.campaigns) {
+    const cid = String(c.id).trim();
+    const spend = Number(c.spend) || 0;
+    const dbMatch = campaignToBanca.get(cid);
+
+    let bancaId: string | undefined;
+    let bancaName = '';
+    let source: 'db_vinculated' | 'live_single_banca' = 'db_vinculated';
+    if (dbMatch) {
+      bancaId = dbMatch.banca_id;
+      bancaName = dbMatch.banca_name;
+    } else if (c.banca_ids.length === 1) {
+      bancaId = c.banca_ids[0];
+      bancaName = bancaNameById.get(bancaId) ?? '';
+      source = 'live_single_banca';
+    } else {
+      skippedSharedNoLink++;
+      continue;
+    }
+
+    bancasWithActiveAds.add(bancaId);
+    spendByBanca.set(bancaId, (spendByBanca.get(bancaId) ?? 0) + spend);
+    campaignsByBanca.set(bancaId, (campaignsByBanca.get(bancaId) ?? 0) + 1);
+
+    if (!trace.has(bancaId)) trace.set(bancaId, { banca_name: bancaName, campaigns: [] });
+    trace.get(bancaId)!.campaigns.push({
+      campaign_id: cid,
+      campaign_name: (c as { name?: string }).name ?? dbMatch?.campaign_name ?? null,
+      spend,
+      source,
+    });
   }
 
-  console.log('[banca-x-ads-ranking] LIVE ads aggregate', {
-    date,
+  const liveMatchedInDb = report.campaigns.filter((c) => campaignToBanca.has(String(c.id).trim())).length;
+
+  console.log('[banca-x-ads-ranking] aggregate (LIVE-only)', {
+    date_from: dateFrom,
+    date_to: dateTo,
     tz,
+    live_campaigns_total: report.campaigns.length,
+    live_matched_in_db: liveMatchedInDb,
+    live_via_single_banca_fallback: report.campaigns.length - liveMatchedInDb - skippedSharedNoLink,
+    skipped_shared_no_link: skippedSharedNoLink,
+    bancas_in_ranking: bancasWithActiveAds.size,
+    db_vinculation_pool_total: dbCampaigns.length,
     integrations_ok: report.summary.integrations_ok,
     integrations_failed: report.summary.integrations_failed,
-    campaigns_total: report.summary.campaigns_total,
-    total_spend: report.summary.total_spend,
-    bancas_with_active_ads: bancasWithActiveAds.size,
   });
+
+  // Log explícito por-banca: nome, total de campanhas vinculadas, soma do spend Meta.
+  const groupedForLog = Array.from(trace.entries())
+    .map(([banca_id, info]) => ({
+      banca_id,
+      banca_name: info.banca_name,
+      campaigns_count: info.campaigns.length,
+      total_spend: info.campaigns.reduce((s, c) => s + c.spend, 0),
+      campaigns: info.campaigns,
+    }))
+    .sort((a, b) => b.total_spend - a.total_spend);
+  console.log('[banca-x-ads-ranking] grouping by banca', JSON.stringify(groupedForLog, null, 2));
 
   return { spendByBanca, campaignsByBanca, bancasWithActiveAds };
 }
@@ -199,30 +348,94 @@ function computeConciliacao(
   return { roi_absoluto, roas, cpa_deposito, cobertura_gasto_pct, margem_pct, status };
 }
 
-/** Monta o ranking diário só com bancas que têm ads ativos no dia (campanhas com delivery_info=active). */
+/** Monta o ranking só com bancas que têm ads ativos no período (campanhas com delivery_info=active). */
 export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): Promise<BancaXAdsRankingResult> {
   const tz = (opts.tz && opts.tz.trim()) || DEFAULT_TZ;
-  const date = (opts.date && opts.date.trim()) || formatMetaCalendarDayYmd(tz);
-
-  const [bancasRes, liveAds] = await Promise.all([
-    supabaseServiceRole
-      .from('crm_bancas')
-      .select('id, name, url')
-      .order('name', { ascending: true }),
-    fetchLiveAdsForDay(date, tz),
-  ]);
-
-  if (bancasRes.error) {
-    throw new Error(`Erro ao buscar bancas: ${bancasRes.error.message}`);
+  const explicitFrom = (opts.dateFrom && opts.dateFrom.trim()) || null;
+  const explicitTo = (opts.dateTo && opts.dateTo.trim()) || null;
+  const singleShortcut = (opts.date && opts.date.trim()) || null;
+  /**
+   * Resolução: range explícito > single `date` legado > hoje no fuso.
+   * Se só um dos limites veio, ele é usado para os dois (range degenerado de 1 dia).
+   */
+  let dateFrom: string;
+  let dateTo: string;
+  if (explicitFrom || explicitTo) {
+    dateFrom = explicitFrom || explicitTo || formatMetaCalendarDayYmd(tz);
+    dateTo = explicitTo || explicitFrom || dateFrom;
+  } else if (singleShortcut) {
+    dateFrom = singleShortcut;
+    dateTo = singleShortcut;
+  } else {
+    const today = formatMetaCalendarDayYmd(tz);
+    dateFrom = today;
+    dateTo = today;
+  }
+  if (dateFrom > dateTo) {
+    [dateFrom, dateTo] = [dateTo, dateFrom];
   }
 
-  let bancas = (bancasRes.data ?? []) as CrmBancaRow[];
-  // Filtra placeholders e mantém só bancas com ads ativos no dia.
-  bancas = bancas.filter((b) => {
+  /**
+   * Pagina crm_bancas porque o default do Supabase é 1000 rows. Sem isto, sistemas
+   * com >1000 bancas perderiam algumas e elas «sumiriam» do ranking mesmo tendo
+   * spend — fica registrado no log abaixo se algum banca_id de spend não veio.
+   */
+  const allBancasRaw: CrmBancaRow[] = [];
+  {
+    const pageSize = 1000;
+    let offset = 0;
+    for (;;) {
+      const { data, error } = await supabaseServiceRole
+        .from('crm_bancas')
+        .select('id, name, url')
+        .order('name', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw new Error(`Erro ao buscar bancas: ${error.message}`);
+      const rows = (data ?? []) as CrmBancaRow[];
+      allBancasRaw.push(...rows);
+      if (rows.length < pageSize) break;
+      offset += pageSize;
+    }
+  }
+
+  const liveAds = await fetchLiveAdsForRange(dateFrom, dateTo, tz);
+
+  const totalCrmBancas = allBancasRaw.length;
+  const crmBancaIds = new Set(allBancasRaw.map((b) => String(b.id)));
+
+  // Bancas com spend que não existem em crm_bancas (orphans — indicam dados inconsistentes).
+  const orphanBancaIds: string[] = [];
+  for (const bid of liveAds.bancasWithActiveAds) {
+    if (!crmBancaIds.has(String(bid))) orphanBancaIds.push(String(bid));
+  }
+
+  // Bancas filtradas por "sua banca" (placeholder do produto).
+  const placeholderFiltered: Array<{ id: string; name: string | null }> = [];
+  let bancas = allBancasRaw.filter((b) => {
     const name = String(b.name || '').trim().toLowerCase();
-    if (name === 'sua banca') return false;
+    if (name === 'sua banca') {
+      if (liveAds.bancasWithActiveAds.has(String(b.id))) {
+        placeholderFiltered.push({ id: String(b.id), name: b.name });
+      }
+      return false;
+    }
     return liveAds.bancasWithActiveAds.has(String(b.id));
   });
+
+  console.log('[banca-x-ads-ranking] filter pipeline', {
+    date_from: dateFrom,
+    date_to: dateTo,
+    crm_bancas_total: totalCrmBancas,
+    bancas_in_ranking_total: liveAds.bancasWithActiveAds.size,
+    bancas_in_ranking_ids: Array.from(liveAds.bancasWithActiveAds),
+    orphan_count: orphanBancaIds.length,
+    orphan_banca_ids_no_crm_row: orphanBancaIds,
+    placeholder_filtered_count: placeholderFiltered.length,
+    placeholder_filtered: placeholderFiltered,
+    after_filter_count: bancas.length,
+    after_filter_bancas: bancas.map((b) => ({ id: String(b.id), name: b.name })),
+  });
+
   if (Number.isFinite(opts.limit as number) && (opts.limit as number) > 0) {
     bancas = bancas.slice(0, opts.limit as number);
   }
@@ -232,9 +445,33 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
     bancas.map((b) => {
       const cleanUrl = normalizeBancaUrlAbsolute(b.url);
       if (!cleanUrl) return Promise.resolve(null);
-      return fetchDashboardMetrics(cleanUrl, date, date);
+      return fetchDashboardMetrics(cleanUrl, dateFrom, dateTo);
     })
   );
+
+  const crmFailures: Array<{ banca_id: string; banca_name: string | null; error: string }> = [];
+  metricsResults.forEach((r, idx) => {
+    const b = bancas[idx];
+    if (r.status === 'rejected') {
+      crmFailures.push({
+        banca_id: String(b.id),
+        banca_name: b.name,
+        error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+      });
+    } else if (r.value == null) {
+      crmFailures.push({
+        banca_id: String(b.id),
+        banca_name: b.name,
+        error: 'fetchDashboardMetrics returned null (URL inválida ou CRM offline)',
+      });
+    }
+  });
+  if (crmFailures.length > 0) {
+    console.log('[banca-x-ads-ranking] crm dashboard-metrics failures', {
+      total: crmFailures.length,
+      failures: crmFailures,
+    });
+  }
 
   const rows: BancaXAdsRankingRow[] = bancas.map((b, idx) => {
     const bancaId = String(b.id);
@@ -324,5 +561,25 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
   );
   totals.roas_medio = totals.spend_total > 0 ? totals.deposited_total / totals.spend_total : null;
 
-  return { period: { date, tz }, rows, totals };
+  /** Output final do ranking — confere com o que aparece no front. */
+  console.log('[banca-x-ads-ranking] FINAL output', {
+    date_from: dateFrom,
+    date_to: dateTo,
+    rows_count: rows.length,
+    rows: rows.map((r) => ({
+      rank: r.rank,
+      banca_id: r.banca_id,
+      banca_name: r.banca_name,
+      spend: r.ads.spend,
+      active_campaigns: r.ads.active_campaigns,
+      crm_available: r.banca.available,
+    })),
+    totals,
+  });
+
+  return {
+    period: { date: dateFrom === dateTo ? dateFrom : dateTo, date_from: dateFrom, date_to: dateTo, tz },
+    rows,
+    totals,
+  };
 }

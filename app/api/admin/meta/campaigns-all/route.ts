@@ -411,6 +411,19 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    /** Log de debug: lista enxuta (banca_name, campaign_id, name) pra verificar atribuição. */
+    console.log('[campaigns-all] rows returned', {
+      total: rows.length,
+      filter: { banca_id: bancaId || null, active_only: activeOnly, campaign_kind: campaignKind || null },
+      rows: rows.map((r) => ({
+        banca_name: r.banca_name,
+        banca_id: r.banca_id,
+        campaign_id: r.campaign_id,
+        campaign_name: r.name,
+        effective_status: r.effective_status,
+      })),
+    });
+
     return successResponse({
       rows,
       pagination: {

@@ -62,7 +62,7 @@ export type BancaXAdsRankingApiRow = {
 export type BancaXAdsRankingApiResponse = {
   success: boolean;
   data?: {
-    period: { date: string; tz: string };
+    period: { date: string; date_from?: string; date_to?: string; tz: string };
     rows: BancaXAdsRankingApiRow[];
     totals: {
       spend_total: number;
@@ -180,21 +180,61 @@ function SortHeader({
   );
 }
 
-export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string }) {
-  const [date, setDate] = useState<string>(defaultDate ?? todayInTz());
+export default function BancaXAdsRanking({
+  defaultDate,
+  dateFrom,
+  dateTo,
+  refreshKey,
+}: {
+  defaultDate?: string;
+  /** Início do range vindo do filtro global da página. Sobrepõe o picker interno. */
+  dateFrom?: string | null;
+  /** Fim do range. Se ausente e `dateFrom` vier, usa o próprio dateFrom (single day). */
+  dateTo?: string | null;
+  /**
+   * Token que, quando muda, força o ranking a re-fetch. Use para sinalizar que
+   * a atribuição de campanhas mudou (ex.: dropdown «Vincular banca» em métricas).
+   */
+  refreshKey?: number;
+}) {
+  /**
+   * Resolve o range efetivo. Prioridade: filtro global (dateFrom/dateTo) > defaultDate > hoje.
+   * Quando há range vindo da prop, o picker interno é só leitura.
+   */
+  const effectiveRange = useMemo<{ from: string; to: string; source: 'prop' | 'internal' }>(() => {
+    const from = (dateFrom ?? '').trim() || null;
+    const to = (dateTo ?? '').trim() || null;
+    if (from || to) {
+      const a = from || to || todayInTz();
+      const b = to || from || a;
+      return { from: a <= b ? a : b, to: a <= b ? b : a, source: 'prop' };
+    }
+    const single = defaultDate ?? todayInTz();
+    return { from: single, to: single, source: 'internal' };
+  }, [dateFrom, dateTo, defaultDate]);
+
+  const [internalDate, setInternalDate] = useState<string>(defaultDate ?? todayInTz());
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<BancaXAdsRankingApiResponse['data'] | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('spend');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const load = useCallback(async (target: string) => {
+  const isControlledByProp = effectiveRange.source === 'prop';
+  const queryFrom = isControlledByProp ? effectiveRange.from : internalDate;
+  const queryTo = isControlledByProp ? effectiveRange.to : internalDate;
+  const isRange = queryFrom !== queryTo;
+
+  const load = useCallback(async (from: string, to: string) => {
     setLoading(true);
     setError(null);
     try {
+      const params = new URLSearchParams();
+      params.set('date_from', from);
+      params.set('date_to', to);
       const res = await fetch(
-        `/api/admin/meta/banca-x-ads-ranking?date=${encodeURIComponent(target)}`,
-        { method: 'GET' }
+        `/api/admin/meta/banca-x-ads-ranking?${params.toString()}`,
+        { method: 'GET', cache: 'no-store' }
       );
       const json = (await res.json()) as BancaXAdsRankingApiResponse;
       if (!res.ok || !json.success || !json.data) {
@@ -210,8 +250,8 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
   }, []);
 
   useEffect(() => {
-    load(date);
-  }, [date, load]);
+    load(queryFrom, queryTo);
+  }, [queryFrom, queryTo, load, refreshKey]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -280,24 +320,36 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
               Ranking Diário — Banca x ADS (Conciliação)
             </h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Apenas bancas com ads ativos no dia. Gasto LIVE do Meta Graph cruzado com métricas do CRM.
+              Campanhas vinculadas a bancas em «Métricas de Campanhas», ordenadas por gasto. Gasto LIVE do Meta Graph cruzado com métricas do CRM.
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-gray-600 dark:text-gray-400 font-medium">Data:</span>
-            <input
-              type="date"
-              value={date}
-              max={todayInTz()}
-              onChange={(e) => setDate(e.target.value)}
-              className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
-            />
-          </label>
+          {isControlledByProp ? (
+            <span
+              className="inline-flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2"
+              title="Período herdado do filtro de data no topo da página"
+            >
+              <span className="font-medium">Período:</span>
+              <span className="tabular-nums text-gray-800 dark:text-gray-200">
+                {isRange ? `${queryFrom} → ${queryTo}` : queryFrom}
+              </span>
+            </span>
+          ) : (
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600 dark:text-gray-400 font-medium">Data:</span>
+              <input
+                type="date"
+                value={internalDate}
+                max={todayInTz()}
+                onChange={(e) => setInternalDate(e.target.value)}
+                className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
+              />
+            </label>
+          )}
           <button
             type="button"
-            onClick={() => load(date)}
+            onClick={() => load(queryFrom, queryTo)}
             disabled={loading}
             className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] hover:bg-[#7AC444] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
           >
@@ -323,9 +375,9 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
           tone="neutral"
           info={{
             title: 'Como calculamos o Gasto Total',
-            formula: 'Σ spend de todas as campanhas com delivery_info=active',
+            formula: 'Σ spend das campanhas vinculadas em Métricas de Campanhas',
             description:
-              'Soma o gasto LIVE de todas as campanhas com entrega ativa no dia, vindo direto do Meta Graph API (Marketing API). Cada campanha é atribuída à sua banca via meta_campaigns.',
+              'Soma o gasto LIVE de todas as campanhas (ativas ou pausadas que gastaram) que têm vínculo em meta_campaigns, vindo direto do Meta Graph API. A banca é sempre o meta_campaigns.banca_id mostrado em Métricas de Campanhas.',
           }}
         />
         <ConciliacaoCard
@@ -418,7 +470,7 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
             {!loading && sortedRows.length === 0 && !error && (
               <tr>
                 <td colSpan={11} className="px-3 py-10 text-center text-gray-500 dark:text-gray-400">
-                  Nenhuma banca com ads ativos para a data selecionada.
+                  Nenhuma campanha vinculada em Métricas de Campanhas com gasto no período.
                 </td>
               </tr>
             )}
@@ -433,7 +485,7 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
                   <td className="px-3 py-2.5">
                     <div className="font-medium text-gray-900 dark:text-gray-100">{r.banca_name}</div>
                     <div className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                      {r.ads.active_campaigns} campanha{r.ads.active_campaigns === 1 ? '' : 's'} ativa{r.ads.active_campaigns === 1 ? '' : 's'}
+                      {r.ads.active_campaigns} campanha{r.ads.active_campaigns === 1 ? '' : 's'} vinculada{r.ads.active_campaigns === 1 ? '' : 's'}
                     </div>
                     {!r.banca.available && (
                       <div className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
@@ -518,8 +570,15 @@ export default function BancaXAdsRanking({ defaultDate }: { defaultDate?: string
 
       {data?.period && (
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          Período: <strong>{data.period.date}</strong> ({data.period.tz}). Gasto Ads vindo do{' '}
-          <strong>Meta Graph API</strong> (LIVE, campanhas com <code className="text-[11px]">delivery_info=active</code>).
+          Período:{' '}
+          <strong>
+            {data.period.date_from && data.period.date_to && data.period.date_from !== data.period.date_to
+              ? `${data.period.date_from} → ${data.period.date_to}`
+              : data.period.date}
+          </strong>{' '}
+          ({data.period.tz}). Gasto Ads vindo do{' '}
+          <strong>Meta Graph API</strong> (LIVE, todas as campanhas com spend no período, atribuídas via{' '}
+          <code className="text-[11px]">meta_campaigns.banca_id</code>).
           Métricas da banca vindas de <code className="text-[11px]">/api/crm/dashboard-metrics</code>.
         </p>
       )}

@@ -788,6 +788,102 @@ function calculateBackoff(attempt: number): number {
   return backoffs[Math.min(attempt - 1, backoffs.length - 1)];
 }
 
+/** Step enriquecido com credenciais Evolution (mesmo contrato do RPC claim_maturation_steps). */
+export type MaturationStepForProcessing = {
+  id: string;
+  job_id: string;
+  step_index: number;
+  type: string;
+  instance_name: string;
+  target_chat_id: string | null;
+  base_url: string;
+  api_key: string;
+  payload_json: Record<string, unknown>;
+  attempts: number;
+  status: string;
+};
+
+/**
+ * Carrega step em processamento com credenciais resolvidas via JOIN.
+ * instance_name/base_url/api_key não existem em maturation_steps — vêm de evolution_*.
+ * Respeita sender_master_instance_id (mesh) com fallback ao master do job.
+ */
+export async function loadMaturationStepForProcessing(
+  supabase: SupabaseClient,
+  stepId: string,
+): Promise<MaturationStepForProcessing | null> {
+  const { data: row, error } = await supabase
+    .from('maturation_steps')
+    .select(`
+      id,
+      job_id,
+      step_index,
+      type,
+      payload_json,
+      attempts,
+      status,
+      target_chat_id,
+      sender_master_instance_id,
+      maturation_jobs!inner (
+        master_instance_id,
+        target_chat_id
+      )
+    `)
+    .eq('id', stepId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!row) return null;
+
+  const job = (row as { maturation_jobs?: { master_instance_id?: string; target_chat_id?: string | null } })
+    .maturation_jobs;
+  const masterId = row.sender_master_instance_id ?? job?.master_instance_id;
+  if (!masterId) return null;
+
+  const { data: creds, error: credErr } = await supabase
+    .from('master_instances')
+    .select(`
+      evolution_instances!inner (
+        instance_name,
+        evolution_apis!inner (
+          base_url,
+          api_key_global
+        )
+      )
+    `)
+    .eq('id', masterId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (credErr) throw new Error(credErr.message);
+  if (!creds) return null;
+
+  const ev = (creds as { evolution_instances?: { instance_name?: string; evolution_apis?: { base_url?: string; api_key_global?: string } | { base_url?: string; api_key_global?: string }[] } }).evolution_instances;
+  const api = Array.isArray(ev?.evolution_apis) ? ev.evolution_apis[0] : ev?.evolution_apis;
+  const instance_name = ev?.instance_name ?? '';
+  const base_url = api?.base_url ?? '';
+  const api_key = api?.api_key_global ?? '';
+  if (!instance_name || !base_url || !api_key) return null;
+
+  const stepTarget = row.target_chat_id && String(row.target_chat_id).trim();
+  const jobTarget = job?.target_chat_id && String(job.target_chat_id).trim();
+  const target_chat_id = stepTarget || jobTarget || null;
+
+  return {
+    id: row.id,
+    job_id: row.job_id,
+    step_index: row.step_index,
+    type: row.type,
+    instance_name,
+    target_chat_id,
+    base_url,
+    api_key,
+    payload_json: (row.payload_json as Record<string, unknown>) || {},
+    attempts: row.attempts ?? 0,
+    status: row.status,
+  };
+}
+
 export async function processStep(supabase: SupabaseClient, step: any, opts?: ProcessStepOpts): Promise<void> {
   const { id, job_id, step_index, type, instance_name, target_chat_id, base_url, api_key, payload_json, attempts } = step;
 

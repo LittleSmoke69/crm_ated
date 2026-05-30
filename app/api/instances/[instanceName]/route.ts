@@ -22,7 +22,8 @@ export async function GET(
       return errorResponse('Acesso negado. Você não tem permissão para acessar esta instância.', 403);
     }
 
-    // Busca a instância
+    // Busca a instância — NÃO selecionamos api_key_global (chave global da Evolution API)
+    // para evitar que ela vaze no response e seja roubada por qualquer user com acesso à instância.
     const { data, error } = await supabaseServiceRole
       .from('evolution_instances')
       .select(`
@@ -31,7 +32,6 @@ export async function GET(
           id,
           name,
           base_url,
-          api_key_global,
           is_active
         )
       `)
@@ -52,7 +52,6 @@ export async function GET(
       number: data.phone_number,
       created_at: data.created_at,
       updated_at: data.updated_at,
-      hash: Array.isArray(data.evolution_apis) ? data.evolution_apis[0]?.api_key_global : data.evolution_apis?.api_key_global || null,
       qr_code: null,
       user_id: userId,
       blocked_from_maturation: data.blocked_from_maturation === true,

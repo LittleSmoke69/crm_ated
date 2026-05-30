@@ -776,8 +776,15 @@ export default function ChatPage() {
     const sorted = sortConversationsForInbox(list) as Conversation[];
     conversationsCacheRef.current[channelId] = sorted;
     writeSessionConversations(channelId, sorted);
+    const el = conversationListScrollRef.current;
+    const savedScroll = el?.scrollTop ?? 0;
     setConversations(sorted);
     setConversationsLoading(false);
+    if (savedScroll > 0) {
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = savedScroll;
+      });
+    }
   }, []);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
@@ -1288,6 +1295,7 @@ export default function ChatPage() {
     if (!selectedChannel) return;
 
     setConversationFilter('all');
+    if (conversationListScrollRef.current) conversationListScrollRef.current.scrollTop = 0;
 
     const instant =
       readSessionConversations(selectedChannel.id) ||
@@ -1616,14 +1624,18 @@ export default function ChatPage() {
             const isNew = payload.eventType === 'INSERT';
 
             setConversations((prev) => {
-              const updated =
-                prev.findIndex((c) => c.id === newConv.id) >= 0
-                  ? prev.map((c) => (c.id === newConv.id ? newConv : c))
-                  : [newConv, ...prev];
-              const sorted = sortConversationsForInbox(updated) as Conversation[];
-              conversationsCacheRef.current[filterVal] = sorted;
-              writeSessionConversations(filterVal, sorted);
-              return sorted;
+              const existingIdx = prev.findIndex((c) => c.id === newConv.id);
+              let result: Conversation[];
+              if (existingIdx >= 0) {
+                // Atualiza dado in-place sem reordenar para não pular a posição do scroll
+                result = prev.map((c) => (c.id === newConv.id ? newConv : c));
+              } else {
+                // Nova conversa: insere no topo e ordena
+                result = sortConversationsForInbox([newConv, ...prev]) as Conversation[];
+              }
+              conversationsCacheRef.current[filterVal] = result;
+              writeSessionConversations(filterVal, result);
+              return result;
             });
 
             if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
