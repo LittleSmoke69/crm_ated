@@ -12,12 +12,15 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           command_timeout: 60m
+          envs: GH_TOKEN
           script: |
             set -e
 
@@ -26,17 +29,18 @@ jobs:
             # Se o diretório não existir, faz clone
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               echo "📥 Clonando repositório..."
-              git clone https://github.com/Zaploto/ZaplotoV3.git "$DEPLOY_DIR"
+              git clone "https://x-access-token:${GH_TOKEN}@github.com/Zaploto/ZaplotoV3.git" "$DEPLOY_DIR"
             fi
 
             echo "📦 Acessando diretório..."
             cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
-            # Garante HTTPS — clones antigos na VPS podem ter origin em git@github.com (sem chave SSH)
-            git remote set-url origin https://github.com/Zaploto/ZaplotoV3.git
+            # Usa token no URL apenas para o fetch, depois remove por segurança
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/Zaploto/ZaplotoV3.git"
             git fetch origin main
             git reset --hard origin/main
+            git remote set-url origin https://github.com/Zaploto/ZaplotoV3.git
 
             echo "🐳 Build usando cache da imagem anterior..."
             docker compose build
