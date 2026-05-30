@@ -2215,6 +2215,24 @@ export default function ChatPage() {
           setMessageText('');
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
+          const saved = (result as { data?: { message?: (Message & { conversation_id?: string }) | null } }).data?.message;
+          if (saved && saved.id) {
+            const msg: Message = {
+              ...saved,
+              timestamp:
+                typeof saved.timestamp === 'string'
+                  ? parseInt(saved.timestamp, 10)
+                  : saved.timestamp,
+            };
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === msg.id)) return prev;
+              const mid = msg.message_id;
+              if (mid && prev.some((m) => m.message_id === mid)) return prev;
+              return [...prev, msg];
+            });
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+          }
+          void loadConversationsFromApi(true);
         } else if (result.code === EVOLUTION_INSTANCE_UNREACHABLE_CODE) {
           resetChannelAfterEvolutionFailure(
             result.error ||
@@ -2258,6 +2276,24 @@ export default function ChatPage() {
           setMessageText('');
           setAttachedMedia(null);
           if (textareaRef.current) textareaRef.current.style.height = 'auto';
+          const saved = (result as { data?: { message?: (Message & { conversation_id?: string }) | null } }).data?.message;
+          if (saved && saved.id) {
+            const msg: Message = {
+              ...saved,
+              timestamp:
+                typeof saved.timestamp === 'string'
+                  ? parseInt(saved.timestamp, 10)
+                  : saved.timestamp,
+            };
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === msg.id)) return prev;
+              const mid = msg.message_id;
+              if (mid && prev.some((m) => m.message_id === mid)) return prev;
+              return [...prev, msg];
+            });
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+          }
+          void loadConversationsFromApi(true);
         } else {
           const errMsg = result.error || result.message || '';
           setSendError(getSendErrorMessage(response.status, errMsg));
