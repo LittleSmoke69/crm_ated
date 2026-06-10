@@ -42,6 +42,73 @@ import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
 export const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
 
+/**
+ * Concorrência de jobs Meta nas agregações admin (live-aggregate, stream e consolidado).
+ * Default 6: equilíbrio entre velocidade (~6× vs. série) e risco de rate limit da Graph API
+ * (códigos 4/17/32/613/80000+ disparam backoff no metaClient). Ajustável via env.
+ */
+const META_AGG_CONCURRENCY = (() => {
+  const raw = parseInt(String(process.env.META_AGG_CONCURRENCY ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 32) return raw;
+  return 6;
+})();
+
+/**
+ * Executa `worker` sobre `items` com no máximo `concurrency` tarefas em voo.
+ * Preserva a ordem do array de saída (índice i ↔ items[i]); nunca rejeita — o tipo
+ * de retorno do worker deve carregar erros (ex.: Promise.allSettled / trace de erro).
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function run(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i], i);
+    }
+  }
+  const runners: Promise<void>[] = [];
+  for (let k = 0; k < limit; k++) runners.push(run());
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Itera `items` com pool de `concurrency` e entrega cada resultado assim que fica pronto
+ * (ordem de conclusão, não de entrada). Usado pelo stream para emitir batches conforme
+ * cada job Meta termina, sem esperar a fila inteira. `worker` não deve rejeitar.
+ */
+async function* streamWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): AsyncGenerator<R> {
+  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  let cursor = 0;
+  const inFlight = new Map<number, Promise<{ key: number; value: R }>>();
+  const launch = () => {
+    const i = cursor++;
+    const key = i;
+    inFlight.set(
+      key,
+      worker(items[i], i).then((value) => ({ key, value }))
+    );
+  };
+  for (let k = 0; k < limit && cursor < items.length; k++) launch();
+  while (inFlight.size > 0) {
+    const { key, value } = await Promise.race(inFlight.values());
+    inFlight.delete(key);
+    if (cursor < items.length) launch();
+    yield value;
+  }
+}
+
 /** Logs do retorno bruto da Meta (admin / sync); nunca incluir token. */
 const META_API_LOG = '[Meta Ads API]';
 
@@ -2000,6 +2067,13 @@ export interface AdminMetaLiveAggregateResult {
   exchange_rates: ExchangeRateSnapshot[];
   campaigns: AdminMetaLiveCampaignRow[];
   integrations: AdminMetaLiveIntegrationTrace[];
+  /**
+   * Série diária de gasto em BRL (uma entrada por dia com gasto), agregada das mesmas
+   * insights LIVE da Meta (`time_increment=1`) usadas nas campanhas — deduplicada por
+   * (integração, campanha) e convertida para BRL com a mesma cotação dos totais.
+   * Ordenada por data ascendente. Alimenta o card "Gasto de Ads × Depósito".
+   */
+  daily_spend: Array<{ date: string; spend_brl: number }>;
 }
 
 export async function listAdminMetaLiveJobs(includeInactiveIntegrations = false): Promise<AdminMetaLiveJob[]> {
@@ -2120,7 +2194,12 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
   const campaignsFlat: ConsolidatedActiveCampaignSpendEntry[] = [];
   const billingSnapshots: MetaBillingSnapshot[] = [];
 
-  for (const job of jobs) {
+  /**
+   * Cada job (token/conta distintos) é independente → roda em pool limitado
+   * (META_AGG_CONCURRENCY). `mapWithConcurrency` preserva a ordem, então `by_integration`
+   * e `campaignsFlat` mantêm a mesma sequência da versão serial.
+   */
+  const perJob = await mapWithConcurrency(jobs, META_AGG_CONCURRENCY, async (job) => {
     const banca_ids = job.linkedBancaIds;
     let integration_id = '';
     const source: 'shared' | 'legacy' = job.kind === 'shared' ? 'shared' : 'legacy';
@@ -2151,7 +2230,7 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
     }
 
     if (!token || !adAccountId) {
-      by_integration.push({
+      const slice: ConsolidatedActiveCampaignsSpendIntegrationSlice = {
         integration_id,
         source,
         ad_account_id: adAccountId,
@@ -2160,8 +2239,8 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         billing: null,
         campaigns: [],
         error: !token ? 'Token indisponível.' : 'ad_account_id não configurado.',
-      });
-      continue;
+      };
+      return { slice, billing: null as MetaBillingSnapshot | null, campaigns: [] as ConsolidatedActiveCampaignSpendEntry[] };
     }
 
     const cardChargesPeriod = spendOpts?.timeRange?.since && spendOpts?.timeRange?.until
@@ -2174,11 +2253,10 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
       cardChargesPeriod,
       integrationCurrencyHint,
     });
-    billingSnapshots.push(billing);
 
     try {
       const { campaigns, totalSpend } = await getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts);
-      by_integration.push({
+      const slice: ConsolidatedActiveCampaignsSpendIntegrationSlice = {
         integration_id,
         source,
         ad_account_id: adAccountId,
@@ -2186,19 +2264,18 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         total_spend: totalSpend,
         billing,
         campaigns,
-      });
-      for (const c of campaigns) {
-        campaignsFlat.push({
-          ...c,
-          integration_id,
-          source,
-          ad_account_id: adAccountId,
-          banca_ids: [...banca_ids],
-        });
-      }
+      };
+      const flat: ConsolidatedActiveCampaignSpendEntry[] = campaigns.map((c) => ({
+        ...c,
+        integration_id,
+        source,
+        ad_account_id: adAccountId,
+        banca_ids: [...banca_ids],
+      }));
+      return { slice, billing, campaigns: flat };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      by_integration.push({
+      const slice: ConsolidatedActiveCampaignsSpendIntegrationSlice = {
         integration_id,
         source,
         ad_account_id: adAccountId,
@@ -2207,8 +2284,15 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
         billing,
         campaigns: [],
         error: msg,
-      });
+      };
+      return { slice, billing, campaigns: [] as ConsolidatedActiveCampaignSpendEntry[] };
     }
+  });
+
+  for (const { slice, billing, campaigns } of perJob) {
+    by_integration.push(slice);
+    if (billing) billingSnapshots.push(billing);
+    campaignsFlat.push(...campaigns);
   }
 
   const integrations_ok = by_integration.filter((s) => !s.error).length;
@@ -2464,16 +2548,26 @@ async function enrichAdminMetaCampaignRowsWithBancaNames(rows: AdminMetaLiveCamp
   }
 }
 
+type AdminMetaLiveJobResult = {
+  traces: AdminMetaLiveIntegrationTrace[];
+  rows: AdminMetaLiveCampaignRow[];
+  billingSnapshots: MetaBillingSnapshot[];
+  /** Gasto BRL por dia (YYYY-MM-DD) desta integração. */
+  spendBrlByDay: Map<string, number>;
+};
+
 /**
  * Uma integração Meta (job) → linhas de campanha + trace. Usado em paralelo (aggregate) ou em série (stream).
  */
 async function processAdminMetaLiveJob(
   job: AdminMetaLiveJob,
   ctx: AdminMetaLiveJobProcessContext
-): Promise<{ traces: AdminMetaLiveIntegrationTrace[]; rows: AdminMetaLiveCampaignRow[]; billingSnapshots: MetaBillingSnapshot[] }> {
+): Promise<AdminMetaLiveJobResult> {
   const traces: AdminMetaLiveIntegrationTrace[] = [];
   const campaignRows: AdminMetaLiveCampaignRow[] = [];
   const billingSnapshots: MetaBillingSnapshot[] = [];
+  /** Gasto BRL por dia (YYYY-MM-DD) desta job; deduplicado por campanha dentro da integração. */
+  const spendBrlByDay = new Map<string, number>();
   const {
     datePreset,
     timeRangeUtc,
@@ -2497,7 +2591,7 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: 'Token não configurado.',
     });
-    return { traces, rows: campaignRows, billingSnapshots };
+    return { traces, rows: campaignRows, billingSnapshots, spendBrlByDay };
   }
 
   const { baseUrl, adAccountId: configuredAdAccountIdRaw } =
@@ -2526,23 +2620,26 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: 'Nenhuma conta de anúncio disponível.',
     });
-    return { traces, rows: campaignRows, billingSnapshots };
+    return { traces, rows: campaignRows, billingSnapshots, spendBrlByDay };
   }
 
   const allCampaigns: Awaited<ReturnType<typeof listCampaigns>> = [];
   const workingAccountIds: string[] = [];
   const attemptErrors: string[] = [];
 
-  for (const candidateId of candidateAccountIds) {
-    try {
-      const c = await listCampaigns(baseUrl, token, candidateId);
-      allCampaigns.push(...c);
+  const campaignsPerAccount = await Promise.allSettled(
+    candidateAccountIds.map((candidateId) => listCampaigns(baseUrl, token, candidateId))
+  );
+  campaignsPerAccount.forEach((res, idx) => {
+    const candidateId = candidateAccountIds[idx];
+    if (res.status === 'fulfilled') {
+      allCampaigns.push(...res.value);
       workingAccountIds.push(candidateId);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+    } else {
+      const msg = res.reason instanceof Error ? res.reason.message : String(res.reason);
       attemptErrors.push(`${candidateId}: ${msg}`);
     }
-  }
+  });
 
   if (workingAccountIds.length === 0) {
     traces.push({
@@ -2552,7 +2649,7 @@ async function processAdminMetaLiveJob(
       insights_source: null,
       error: `Falha ao listar campanhas: ${attemptErrors.join(' | ')}`,
     });
-    return { traces, rows: campaignRows, billingSnapshots };
+    return { traces, rows: campaignRows, billingSnapshots, spendBrlByDay };
   }
 
   const liveCardChargesPeriod = dateFrom && dateTo
@@ -2705,6 +2802,27 @@ async function processAdminMetaLiveJob(
     metricsByCampaign.set(cid, cur);
   }
 
+  /**
+   * Gasto diário (moeda da conta) por campanha, das mesmas insights LIVE (`time_increment=1`).
+   * Convertido para BRL e somado em `spendBrlByDay` no loop de campanhas visíveis abaixo,
+   * uma vez por campanha (dedup por integração) para casar com os totais do painel.
+   */
+  const dailySpendByCampaign = new Map<string, Map<string, number>>();
+  for (const ins of insights) {
+    const cid = ins.campaign_id ? String(ins.campaign_id) : '';
+    if (!cid || !visibleIds.has(cid)) continue;
+    const day = String(ins.date_start ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    const spend = parseFloat(ins.spend || '0') || 0;
+    if (spend === 0) continue;
+    let dm = dailySpendByCampaign.get(cid);
+    if (!dm) {
+      dm = new Map<string, number>();
+      dailySpendByCampaign.set(cid, dm);
+    }
+    dm.set(day, (dm.get(day) ?? 0) + spend);
+  }
+
   const normalizedAdAccount = normalizedAdAccountIds.join(', ');
 
   let replicatedCampaignsForMultiBanca = 0;
@@ -2781,6 +2899,24 @@ async function processAdminMetaLiveJob(
       : null;
     const nativeAccountCurrency =
       (primaryAdAccountId ? currencyByAccountId.get(primaryAdAccountId) : null) ?? null;
+
+    /**
+     * Série diária: soma o gasto diário desta campanha (BRL) UMA vez por integração,
+     * usando a moeda efetiva da primeira banca de destino (mesma base do row deduplicado
+     * em computeAdminMetaTotalsFromCampaignRows). Evita inflar quando a campanha é
+     * replicada em múltiplas bancas no modo "Todas as bancas".
+     */
+    const dailyForCampaign = dailySpendByCampaign.get(cid);
+    if (dailyForCampaign) {
+      const firstBanca = targetBancaIds[0];
+      const dailyOverride = currencyOverrideByBancaCampaign.get(`${firstBanca}:${cid}`) ?? null;
+      const dailyCurrency = dailyOverride ?? nativeAccountCurrency;
+      for (const [day, daySpend] of dailyForCampaign) {
+        const brl =
+          convertMetaSpendToBrl(daySpend, dailyCurrency, ctx.exchangeRatesToBrl ?? {}) ?? daySpend;
+        spendBrlByDay.set(day, (spendBrlByDay.get(day) ?? 0) + brl);
+      }
+    }
 
     for (const resolvedBancaId of targetBancaIds) {
       const kindKey = `${resolvedBancaId}:${cid}`;
@@ -2874,7 +3010,7 @@ async function processAdminMetaLiveJob(
     billing_accounts: billingSnapshots,
   });
 
-  return { traces, rows: campaignRows, billingSnapshots };
+  return { traces, rows: campaignRows, billingSnapshots, spendBrlByDay };
 }
 
 export type AdminMetaLiveStreamBatchEvent = {
@@ -2897,6 +3033,8 @@ export type AdminMetaLiveStreamCompleteEvent = {
   exchange_rates: ExchangeRateSnapshot[];
   campaigns: AdminMetaLiveCampaignRow[];
   integrations: AdminMetaLiveIntegrationTrace[];
+  /** Série diária de gasto em BRL — alimenta o card "Gasto de Ads × Depósito" sem rodar a Meta de novo. */
+  daily_spend: AdminMetaLiveAggregateResult['daily_spend'];
 };
 
 export type AdminMetaLiveStreamErrorEvent = {
@@ -2953,6 +3091,7 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
       exchange_rates: exchangeRateSnapshots,
       campaigns: [],
       integrations: [],
+      daily_spend: [],
     };
     return;
   }
@@ -2960,40 +3099,70 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
   const accumulated: AdminMetaLiveCampaignRow[] = [];
   const integrationTraces: AdminMetaLiveIntegrationTrace[] = [];
   const billingSnapshots: MetaBillingSnapshot[] = [];
+  const spendBrlByDay = new Map<string, number>();
 
-  for (let i = 0; i < allJobs.length; i++) {
-    const job = allJobs[i];
-    try {
-      const { traces, rows, billingSnapshots: jobBillingSnapshots } = await processAdminMetaLiveJob(job, ctx);
-      integrationTraces.push(...traces);
-      accumulated.push(...rows);
-      billingSnapshots.push(...jobBillingSnapshots);
-      await enrichAdminMetaCampaignRowsWithBancaNames(rows);
-      const totals = computeAdminMetaTotalsFromCampaignRows(accumulated);
-      const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
-      yield {
-        type: 'batch',
-        batchIndex: i,
-        totalBatches: allJobs.length,
-        integrations_delta: traces,
-        campaigns_delta: rows,
-        totals,
-        billing,
-        exchange_rates: exchangeRateSnapshots,
-      };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logMetaReturn('iterateAdminMetaLiveAggregateStream job error', { batchIndex: i, error: msg });
-      yield {
-        type: 'error',
-        error: msg,
-      };
+  /**
+   * Jobs processados em pool de concorrência (META_AGG_CONCURRENCY): cada um emite seu
+   * `batch` assim que termina (ordem de conclusão, não de entrada). A acumulação e o
+   * cálculo dos totais/billing acontecem aqui, no consumidor serial do gerador, então os
+   * `totals` permanecem cumulativos e consistentes mesmo com conclusão fora de ordem.
+   * O worker captura erros e os devolve como resultado (nunca rejeita).
+   */
+  type JobOutcome =
+    | { ok: true; traces: AdminMetaLiveIntegrationTrace[]; rows: AdminMetaLiveCampaignRow[]; billingSnapshots: MetaBillingSnapshot[]; spendBrlByDay: Map<string, number> }
+    | { ok: false; error: string };
+
+  let completed = 0;
+  const stream = streamWithConcurrency<AdminMetaLiveJob, JobOutcome>(
+    allJobs,
+    META_AGG_CONCURRENCY,
+    async (job): Promise<JobOutcome> => {
+      try {
+        const r = await processAdminMetaLiveJob(job, ctx);
+        return { ok: true, ...r };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logMetaReturn('iterateAdminMetaLiveAggregateStream job error', { error: msg });
+        return { ok: false, error: msg };
+      }
     }
+  );
+
+  for await (const outcome of stream) {
+    if (!outcome.ok) {
+      completed++;
+      yield { type: 'error', error: outcome.error };
+      continue;
+    }
+    const { traces, rows, billingSnapshots: jobBillingSnapshots } = outcome;
+    integrationTraces.push(...traces);
+    accumulated.push(...rows);
+    billingSnapshots.push(...jobBillingSnapshots);
+    for (const [day, brl] of outcome.spendBrlByDay) {
+      spendBrlByDay.set(day, (spendBrlByDay.get(day) ?? 0) + brl);
+    }
+    await enrichAdminMetaCampaignRowsWithBancaNames(rows);
+    const totals = computeAdminMetaTotalsFromCampaignRows(accumulated);
+    const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
+    yield {
+      type: 'batch',
+      batchIndex: completed,
+      totalBatches: allJobs.length,
+      integrations_delta: traces,
+      campaigns_delta: rows,
+      totals,
+      billing,
+      exchange_rates: exchangeRateSnapshots,
+    };
+    completed++;
   }
 
   accumulated.sort((a, b) => b.spend_brl - a.spend_brl);
   const totals = computeAdminMetaTotalsFromCampaignRows(accumulated);
   const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
+  const daily_spend = Array.from(spendBrlByDay.entries())
+    .map(([date, spend_brl]) => ({ date, spend_brl: Math.round(spend_brl * 100) / 100 }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   yield {
     type: 'complete',
     date_from: dateFrom,
@@ -3003,6 +3172,7 @@ export async function* iterateAdminMetaLiveAggregateStream(opts: {
     exchange_rates: exchangeRateSnapshots,
     campaigns: accumulated,
     integrations: integrationTraces,
+    daily_spend,
   };
 }
 
@@ -3054,12 +3224,14 @@ export async function fetchAdminMetaLiveAggregate(opts: {
       exchange_rates: exchangeRateSnapshots,
       campaigns: [],
       integrations: [],
+      daily_spend: [],
     };
   }
 
   const integrationTraces: AdminMetaLiveIntegrationTrace[] = [];
   const campaignRows: AdminMetaLiveCampaignRow[] = [];
   const billingSnapshots: MetaBillingSnapshot[] = [];
+  const spendBrlByDay = new Map<string, number>();
 
   const jobCtx: AdminMetaLiveJobProcessContext = {
     datePreset,
@@ -3073,15 +3245,24 @@ export async function fetchAdminMetaLiveAggregate(opts: {
     exchangeRatesToBrl,
   };
 
-  const settled = await Promise.allSettled(
-    allJobs.map((job) => processAdminMetaLiveJob(job, jobCtx))
-  );
+  /** Pool limitado (META_AGG_CONCURRENCY) em vez de disparar todos os jobs de uma vez,
+   *  evitando estourar o rate limit da Graph API e o backoff em cascata no metaClient. */
+  const settled = await mapWithConcurrency(allJobs, META_AGG_CONCURRENCY, async (job) => {
+    try {
+      return { status: 'fulfilled' as const, value: await processAdminMetaLiveJob(job, jobCtx) };
+    } catch (reason: unknown) {
+      return { status: 'rejected' as const, reason };
+    }
+  });
 
   for (const r of settled) {
     if (r.status === 'fulfilled') {
       integrationTraces.push(...r.value.traces);
       campaignRows.push(...r.value.rows);
       billingSnapshots.push(...r.value.billingSnapshots);
+      for (const [day, brl] of r.value.spendBrlByDay) {
+        spendBrlByDay.set(day, (spendBrlByDay.get(day) ?? 0) + brl);
+      }
     } else {
       logMetaReturn('fetchAdminMetaLiveAggregate job rejected', {
         error: r.reason instanceof Error ? r.reason.message : String(r.reason),
@@ -3095,6 +3276,9 @@ export async function fetchAdminMetaLiveAggregate(opts: {
 
   const totals = computeAdminMetaTotalsFromCampaignRows(campaignRows);
   const billing = summarizeMetaBillingSnapshots(billingSnapshots, { exchangeRatesToBrl });
+  const daily_spend = Array.from(spendBrlByDay.entries())
+    .map(([date, spend_brl]) => ({ date, spend_brl: Math.round(spend_brl * 100) / 100 }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
   return {
     success: true,
@@ -3105,6 +3289,7 @@ export async function fetchAdminMetaLiveAggregate(opts: {
     exchange_rates: exchangeRateSnapshots,
     campaigns: campaignRows,
     integrations: integrationTraces,
+    daily_spend,
   };
 }
 

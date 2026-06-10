@@ -9,9 +9,13 @@ export interface DonoBancaDashboardParams {
   metaActiveOnly?: boolean;
   /** Quando true, não busca Meta Ads. Use quando Meta será carregado em chamada separada. */
   skipMeta?: boolean;
+  /** Quando true, não chama dashboard-metrics (frontend já buscou via only_external_metrics). */
+  skipExternalMetrics?: boolean;
   /** Paginação de gerentes (Netlify). Omitir ambos = processar todos de uma vez (compatível com outras rotas). */
   gerentesOffset?: number;
   gerentesLimit?: number;
+  /** Cancela chamadas ao CRM quando o cliente aborta a requisição. */
+  signal?: AbortSignal;
 }
 
 export interface DashboardByBancaParams {
@@ -21,8 +25,12 @@ export interface DashboardByBancaParams {
   metaActiveOnly?: boolean;
   /** Quando true, não busca Meta Ads. Use quando Meta será carregado em chamada separada. */
   skipMeta?: boolean;
+  /** Quando true, não chama dashboard-metrics (frontend já buscou via only_external_metrics). */
+  skipExternalMetrics?: boolean;
   gerentesOffset?: number;
   gerentesLimit?: number;
+  /** Cancela chamadas ao CRM quando o cliente aborta a requisição. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -49,6 +57,29 @@ function normalizeBancaUrl(bancaUrl: string): string {
   }
   
   return normalized;
+}
+
+function throwIfAborted(signal?: AbortSignal | null): void {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted', 'AbortError');
+  }
+}
+
+function getCrmFetchSignal(requestSignal?: AbortSignal | null, timeoutMs = 60000): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!requestSignal) return timeout;
+  return AbortSignal.any([requestSignal, timeout]);
+}
+
+/** 404 esperado quando consultor não existe ou não tem indicados no período. */
+function isExpectedEmptyIndicatedsResponse(status: number, body: string): boolean {
+  if (status !== 404) return false;
+  const lower = body.toLowerCase();
+  return (
+    lower.includes('consultant not found') ||
+    lower.includes('no indicateds found') ||
+    lower.includes('nenhum indicado')
+  );
 }
 
 /** Lead retornado por get-indicateds-by-consultant (campos usados na agregação) */
@@ -101,7 +132,8 @@ const EMPTY_CONSULTANT_METRICS: ConsultantAggregatedMetrics = {
 export async function fetchIndicatedsByPeriod(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
-  dateTo: string | null | undefined
+  dateTo: string | null | undefined,
+  signal?: AbortSignal
 ): Promise<IndicatedLead[]> {
   const apiKey = process.env.CRM_API_KEY;
   const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
@@ -112,6 +144,7 @@ export async function fetchIndicatedsByPeriod(
   let hasMore = true;
 
   while (hasMore && page <= maxPages) {
+    throwIfAborted(signal);
     const params = new URLSearchParams();
     params.set('per_page', String(perPage));
     params.set('page', String(page));
@@ -121,7 +154,7 @@ export async function fetchIndicatedsByPeriod(
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-      signal: AbortSignal.timeout(60000),
+      signal: getCrmFetchSignal(signal),
     });
     if (!res.ok) break;
     const result = await res.json();
@@ -144,7 +177,8 @@ export async function fetchIndicatedsByConsultants(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
   dateTo: string | null | undefined,
-  consultantEmails: string[]
+  consultantEmails: string[],
+  signal?: AbortSignal
 ): Promise<IndicatedLead[]> {
   if (!consultantEmails.length) return [];
   const apiKey = process.env.CRM_API_KEY;
@@ -155,11 +189,13 @@ export async function fetchIndicatedsByConsultants(
   const seenIds = new Set<string>();
 
   for (const email of consultantEmails) {
+    throwIfAborted(signal);
     const trimmed = email?.trim?.();
     if (!trimmed) continue;
     let page = 1;
     let hasMore = true;
     while (hasMore && page <= maxPagesPerConsultant) {
+      throwIfAborted(signal);
       const params = new URLSearchParams();
       params.set('consultant', trimmed);
       params.set('per_page', String(perPage));
@@ -173,9 +209,22 @@ export async function fetchIndicatedsByConsultants(
         const res = await fetch(url, {
           method: 'GET',
           headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-          signal: AbortSignal.timeout(60000),
+          signal: getCrmFetchSignal(signal),
         });
-        if (!res.ok) break;
+        if (!res.ok) {
+          if (page === 1) {
+            const body = await res.text().catch(() => '');
+            if (!isExpectedEmptyIndicatedsResponse(res.status, body)) {
+              await logCrmFetchFailure('get-indicateds-by-consultant', new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers }), {
+                url,
+                hasApiKey: Boolean(apiKey),
+                durationMs: 0,
+                extra: { consultant: `${trimmed.slice(0, 5)}***`, page },
+              });
+            }
+          }
+          break;
+        }
         const result = await res.json();
         const data = result?.data;
         if (!Array.isArray(data) || data.length === 0) break;
@@ -190,8 +239,10 @@ export async function fetchIndicatedsByConsultants(
         }
         if (data.length < perPage) hasMore = false;
         else page++;
-      } catch (err: any) {
-        console.warn(`[fetchIndicatedsByConsultants] Erro consultant=${trimmed.slice(0, 5)}*** page=${page}:`, err?.message);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[fetchIndicatedsByConsultants] Erro consultant=${trimmed.slice(0, 5)}*** page=${page}:`, message);
         break;
       }
     }
@@ -597,25 +648,93 @@ export async function getDashboardDataFromIndicatedsOnly(
   };
 }
 
+/** Lê corpo de erro do CRM para log (truncado, sem expor segredos). */
+async function readCrmErrorBody(res: Response): Promise<string> {
+  try {
+    const text = (await res.text()).trim();
+    if (!text) return '(body vazio)';
+    try {
+      const parsed = JSON.parse(text);
+      const serialized = JSON.stringify(parsed);
+      return serialized.length > 800 ? `${serialized.slice(0, 800)}…` : serialized;
+    } catch {
+      return text.length > 800 ? `${text.slice(0, 800)}…` : text;
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return `(falha ao ler body: ${message})`;
+  }
+}
+
+async function logCrmFetchFailure(
+  label: string,
+  res: Response,
+  context: { url: string; hasApiKey: boolean; durationMs: number; extra?: Record<string, unknown> }
+): Promise<void> {
+  const body = await readCrmErrorBody(res);
+  const hint =
+    res.status === 401
+      ? 'Verifique CRM_API_KEY no .env e se a chave está válida no CRM da banca.'
+      : res.status === 403
+        ? 'Chave presente, mas sem permissão para este endpoint.'
+        : undefined;
+  console.warn(`[DonoBanca Service] ${label} falhou`, {
+    status: res.status,
+    statusText: res.statusText,
+    durationMs: context.durationMs,
+    url: context.url,
+    hasApiKey: context.hasApiKey,
+    apiKeyLength: context.hasApiKey ? process.env.CRM_API_KEY?.length ?? 0 : 0,
+    contentType: res.headers.get('content-type'),
+    ...(hint ? { hint } : {}),
+    ...(context.extra ?? {}),
+    body,
+  });
+}
+
 export async function fetchDashboardMetrics(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
-  dateTo: string | null | undefined
+  dateTo: string | null | undefined,
+  signal?: AbortSignal
 ): Promise<ExternalMetricsShape | null> {
   try {
+    throwIfAborted(signal);
     const externalApiUrl = new URL(`${cleanBancaUrl}/api/crm/dashboard-metrics`);
     if (dateFrom) externalApiUrl.searchParams.append('date_from', dateFrom);
     if (dateTo) externalApiUrl.searchParams.append('date_to', dateTo);
     const apiKey = process.env.CRM_API_KEY;
+    const requestUrl = externalApiUrl.toString();
     const startTime = Date.now();
-    const res = await fetch(externalApiUrl.toString(), {
+    const res = await fetch(requestUrl, {
       method: 'GET',
       headers: { 'Accept': 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+      signal: getCrmFetchSignal(signal),
     });
-    console.log('[DonoBanca Service] dashboard-metrics status:', res.status, `(${Date.now() - startTime}ms)`);
-    if (!res.ok) return null;
+    const durationMs = Date.now() - startTime;
+    const logContext = {
+      url: requestUrl,
+      hasApiKey: Boolean(apiKey),
+      durationMs,
+      dateFrom: dateFrom ?? null,
+      dateTo: dateTo ?? null,
+    };
+    console.log('[DonoBanca Service] dashboard-metrics status:', res.status, `(${durationMs}ms)`, {
+      url: requestUrl,
+      hasApiKey: Boolean(apiKey),
+    });
+    if (!res.ok) {
+      await logCrmFetchFailure('dashboard-metrics', res, logContext);
+      return null;
+    }
     const contentType = res.headers.get('content-type');
-    if (!contentType?.includes('application/json')) return null;
+    if (!contentType?.includes('application/json')) {
+      await logCrmFetchFailure('dashboard-metrics (content-type inválido)', res, {
+        ...logContext,
+        extra: { expectedContentType: 'application/json', receivedContentType: contentType },
+      });
+      return null;
+    }
     const externalData = await res.json();
     const externalRootKeys = externalData && typeof externalData === 'object'
       ? Object.keys(externalData as Record<string, unknown>)
@@ -633,7 +752,14 @@ export async function fetchDashboardMetrics(
       hasSuccessFlag: Boolean(externalData?.success),
       hasMetricsObject: Boolean(externalData?.metrics),
     });
-    if (!metrics) return null;
+    if (!metrics) {
+      console.warn('[DonoBanca Service] dashboard-metrics resposta OK, mas sem métricas reconhecíveis', {
+        ...logContext,
+        rootKeys: externalRootKeys,
+        metricsKeys,
+      });
+      return null;
+    }
     const normalizedMetrics = {
       total_leads: Number(metrics.total_leads) || 0,
       total_deposited: Number(metrics.total_deposited) || 0,
@@ -649,8 +775,18 @@ export async function fetchDashboardMetrics(
     };
     console.log('[DonoBanca Service] dashboard-metrics normalized snapshot:', normalizedMetrics);
     return normalizedMetrics;
-  } catch (err: any) {
-    console.warn('[DonoBanca Service] Erro ao buscar dashboard-metrics:', err?.message);
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.warn('[DonoBanca Service] Erro ao buscar dashboard-metrics:', {
+      message,
+      bancaUrl: cleanBancaUrl,
+      dateFrom: dateFrom ?? null,
+      dateTo: dateTo ?? null,
+      hasApiKey: Boolean(process.env.CRM_API_KEY),
+      ...(stack ? { stack } : {}),
+    });
     return null;
   }
 }
@@ -661,9 +797,12 @@ export async function getDonoBancaDashboardData({
   dateTo,
   metaActiveOnly = true,
   skipMeta = false,
+  skipExternalMetrics = false,
   gerentesOffset: rawGerentesOffset,
   gerentesLimit: rawGerentesLimit,
+  signal,
 }: DonoBancaDashboardParams) {
+  throwIfAborted(signal);
   // Busca informações do dono de banca (incluindo banca_url)
   const { data: donoProfile } = await supabaseServiceRole
     .from('profiles')
@@ -682,12 +821,12 @@ export async function getDonoBancaDashboardData({
   const goffset = Math.max(0, rawGerentesOffset ?? 0);
   const glimit = paginateGerentes ? Math.min(Math.max(Number(rawGerentesLimit), 1), 1000) : Number.POSITIVE_INFINITY;
 
-  const loadHeaderMetrics = !paginateGerentes || goffset === 0;
+  const loadHeaderMetrics = (!paginateGerentes || goffset === 0) && !skipExternalMetrics;
 
   // Bancas + métricas (só primeira página se paginado) + gerentes em paralelo (sem indicados ainda)
   const [bancasDono, externalMetricsRaw, gerentesResult] = await Promise.all([
     supabaseServiceRole.from('crm_bancas').select('id, url'),
-    loadHeaderMetrics && cleanBancaUrl ? fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo) : Promise.resolve(null),
+    loadHeaderMetrics && cleanBancaUrl ? fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo, signal) : Promise.resolve(null),
     supabaseServiceRole
       .from('profiles')
       .select('id, email, full_name')
@@ -719,7 +858,8 @@ export async function getDonoBancaDashboardData({
       }
     }
     if (consultantEmails.length > 0) {
-      indicatedsRaw = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, consultantEmails).catch((err: any) => {
+      indicatedsRaw = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, consultantEmails, signal).catch((err: any) => {
+        if (err?.name === 'AbortError') throw err;
         console.warn('[DonoBanca Service] Erro ao buscar indicados por consultor:', err?.message);
         return [] as IndicatedLead[];
       });
@@ -956,9 +1096,12 @@ export async function getDashboardDataByBancaId({
   dateTo,
   metaActiveOnly = true,
   skipMeta = false,
+  skipExternalMetrics = false,
   gerentesOffset: rawGerentesOffset,
   gerentesLimit: rawGerentesLimit,
+  signal,
 }: DashboardByBancaParams) {
+  throwIfAborted(signal);
   const { data: banca } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, url, name')
@@ -986,8 +1129,10 @@ export async function getDashboardDataByBancaId({
       dateTo: dateTo ?? null,
       metaActiveOnly,
       skipMeta,
+      skipExternalMetrics,
       gerentesOffset: rawGerentesOffset,
       gerentesLimit: rawGerentesLimit,
+      signal,
     });
     return { ...data, bancaId: data.bancaId ?? bancaId };
   }
@@ -1110,7 +1255,7 @@ export async function getDashboardDataByBancaId({
 
   try {
     if (!paginateGerentes) {
-      indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
+      indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo, signal);
       externalMetrics = computeExternalMetricsFromLeads(indicateds);
       metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
       console.log(
@@ -1121,8 +1266,8 @@ export async function getDashboardDataByBancaId({
       );
     } else {
       let uniqueEmails: string[] = [];
-      if (goffset === 0) {
-        externalMetrics = await fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo);
+      if (goffset === 0 && !skipExternalMetrics) {
+        externalMetrics = await fetchDashboardMetrics(cleanBancaUrl, dateFrom, dateTo, signal);
       }
       const emails: string[] = [];
       for (const { consultants: cons } of gerentesPageTuples) {
@@ -1132,7 +1277,8 @@ export async function getDashboardDataByBancaId({
       }
       uniqueEmails = [...new Set(emails)];
       if (uniqueEmails.length > 0) {
-        indicateds = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, uniqueEmails).catch((err: any) => {
+        indicateds = await fetchIndicatedsByConsultants(cleanBancaUrl, dateFrom, dateTo, uniqueEmails, signal).catch((err: any) => {
+          if (err?.name === 'AbortError') throw err;
           console.warn('[DonoBanca Service] getDashboardDataByBancaId (página) indicados:', err?.message);
           return [] as IndicatedLead[];
         });
@@ -1144,6 +1290,7 @@ export async function getDashboardDataByBancaId({
       console.log('[DonoBanca Service] getDashboardDataByBancaId (paginado) consultants=', uniqueEmails.length, 'leads=', indicateds.length);
     }
   } catch (err: any) {
+    if (err?.name === 'AbortError') throw err;
     console.warn('[DonoBanca Service] getDashboardDataByBancaId - Erro ao buscar indicados:', err?.message);
   }
 

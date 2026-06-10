@@ -86,9 +86,6 @@ type SortKey =
   | 'spend'
   | 'total_leads'
   | 'total_deposited'
-  | 'total_bets'
-  | 'total_prizes'
-  | 'conversion_rate'
   | 'roi_absoluto'
   | 'roas';
 type SortDir = 'asc' | 'desc';
@@ -280,12 +277,6 @@ export default function BancaXAdsRanking({
           return r.banca.total_leads;
         case 'total_deposited':
           return r.banca.total_deposited;
-        case 'total_bets':
-          return r.banca.total_bets;
-        case 'total_prizes':
-          return r.banca.total_prizes;
-        case 'conversion_rate':
-          return r.banca.conversion_rate;
         case 'roi_absoluto':
           return r.conciliacao.roi_absoluto;
         case 'roas':
@@ -450,9 +441,6 @@ export default function BancaXAdsRanking({
               <SortHeader label="Gasto Ads" active={sortKey === 'spend'} dir={sortDir} onClick={() => handleSort('spend')} align="right" />
               <SortHeader label="Total de Leads" active={sortKey === 'total_leads'} dir={sortDir} onClick={() => handleSort('total_leads')} align="right" />
               <SortHeader label="Depositado" active={sortKey === 'total_deposited'} dir={sortDir} onClick={() => handleSort('total_deposited')} align="right" />
-              <SortHeader label="Apostado" active={sortKey === 'total_bets'} dir={sortDir} onClick={() => handleSort('total_bets')} align="right" />
-              <SortHeader label="Premiado" active={sortKey === 'total_prizes'} dir={sortDir} onClick={() => handleSort('total_prizes')} align="right" />
-              <SortHeader label="Conv.%" active={sortKey === 'conversion_rate'} dir={sortDir} onClick={() => handleSort('conversion_rate')} align="right" />
               <SortHeader label="ROI" active={sortKey === 'roi_absoluto'} dir={sortDir} onClick={() => handleSort('roi_absoluto')} align="right" />
               <SortHeader label="ROAS" active={sortKey === 'roas'} dir={sortDir} onClick={() => handleSort('roas')} align="right" />
               <th className="px-3 py-2.5 font-bold text-[11px] uppercase tracking-wide text-gray-600 dark:text-gray-400 text-center">Status</th>
@@ -461,7 +449,7 @@ export default function BancaXAdsRanking({
           <tbody>
             {loading && !data && (
               <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-gray-500 dark:text-gray-400">
+                <td colSpan={8} className="px-3 py-10 text-center text-gray-500 dark:text-gray-400">
                   <Loader2 className="w-5 h-5 inline animate-spin mr-2" />
                   Carregando ranking…
                 </td>
@@ -469,7 +457,7 @@ export default function BancaXAdsRanking({
             )}
             {!loading && sortedRows.length === 0 && !error && (
               <tr>
-                <td colSpan={11} className="px-3 py-10 text-center text-gray-500 dark:text-gray-400">
+                <td colSpan={8} className="px-3 py-10 text-center text-gray-500 dark:text-gray-400">
                   Nenhuma campanha vinculada em Métricas de Campanhas com gasto no período.
                 </td>
               </tr>
@@ -501,15 +489,6 @@ export default function BancaXAdsRanking({
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-800 dark:text-gray-200">
                     {r.banca.available ? formatBRL(r.banca.total_deposited) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-gray-800 dark:text-gray-200">
-                    {r.banca.available ? formatBRL(r.banca.total_bets) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-gray-800 dark:text-gray-200">
-                    {r.banca.available ? formatBRL(r.banca.total_prizes) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-gray-800 dark:text-gray-200">
-                    {r.banca.available ? `${r.banca.conversion_rate.toFixed(2)}%` : '—'}
                   </td>
                   <td
                     className={`px-3 py-2.5 text-right font-semibold ${
@@ -543,9 +522,6 @@ export default function BancaXAdsRanking({
                 <td className="px-3 py-2.5 text-right text-gray-900 dark:text-gray-100">{formatBRL(totals.spend_total, 2)}</td>
                 <td className="px-3 py-2.5 text-right text-gray-900 dark:text-gray-100">{formatNumber(totals.leads_total)}</td>
                 <td className="px-3 py-2.5 text-right text-gray-900 dark:text-gray-100">{formatBRL(totals.deposited_total)}</td>
-                <td className="px-3 py-2.5 text-right text-gray-900 dark:text-gray-100">{formatBRL(totals.bets_total)}</td>
-                <td className="px-3 py-2.5 text-right text-gray-900 dark:text-gray-100">{formatBRL(totals.prizes_total)}</td>
-                <td className="px-3 py-2.5 text-right text-gray-400">—</td>
                 <td
                   className={`px-3 py-2.5 text-right ${
                     totals.roi_total >= 0

@@ -26,7 +26,7 @@ const ALLOWED_DOCUMENT = [
 
 const MAX_IMAGE = 5 * 1024 * 1024;   // 5MB
 const MAX_AUDIO = 16 * 1024 * 1024;  // 16MB
-const MAX_VIDEO = 16 * 1024 * 1024;  // 16MB
+const MAX_VIDEO = 500 * 1024 * 1024; // 500MB
 const MAX_DOCUMENT = 100 * 1024 * 1024; // 100MB
 
 function inferMediaType(mime: string, fileName: string): 'image' | 'audio' | 'video' | 'document' {

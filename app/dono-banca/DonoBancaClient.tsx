@@ -36,6 +36,17 @@ import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarCha
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
 import ExportCsvModal from '@/components/dono-banca/ExportCsvModal';
 
+/** Evita que respostas antigas sobrescrevam estado após novo filtro/requisição. */
+function useDashboardFetchGeneration() {
+  const ref = useRef(0);
+  const next = () => {
+    ref.current += 1;
+    return ref.current;
+  };
+  const isCurrent = (id: number) => id === ref.current;
+  return { next, isCurrent };
+}
+
 interface ConsultorOutraBanca {
   id: string;
   email: string;
@@ -174,6 +185,10 @@ export default function DonoBancaHierarquia({
 
   const [isFirstRender, setIsFirstRender] = useState(true);
 
+  const dashboardFetchGen = useDashboardFetchGeneration();
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const lastLoadedBancaRef = useRef<string | null>(null);
+
   // ── Export CSV (modal com filtros do CRM) ───────────────────────────────────
   const [exportCsvModalOpen, setExportCsvModalOpen] = useState(false);
 
@@ -232,6 +247,12 @@ export default function DonoBancaHierarquia({
       }
     }
   }, [userId, dateFilter, appliedStartDate, appliedEndDate, selectedBancaId, showBancaSelector]);
+
+  useEffect(() => {
+    return () => {
+      fetchAbortRef.current?.abort();
+    };
+  }, []);
 
   // Período considerado "longo" para aviso de consulta em segundo plano
   const isLongPeriod = (): boolean => {
@@ -304,107 +325,193 @@ export default function DonoBancaHierarquia({
   /** Mesmo padrão da gestão de consultores: lotes pequenos para não estourar timeout/edge na Netlify. */
   const BATCH_SIZE = 5;
 
+  const parseDashboardResponse = async (response: Response) => {
+    const rawText = await response.text();
+    let result: {
+      success?: boolean;
+      data?: Record<string, unknown>;
+      error?: string;
+      message?: string;
+    };
+    try {
+      result = rawText.trim() ? (JSON.parse(rawText) as typeof result) : {};
+    } catch {
+      return { ok: false as const, result: null, parseError: rawText.slice(0, 160) };
+    }
+    return { ok: response.ok && Boolean(result.success), result };
+  };
+
   const checkAuthorization = async () => {
     if (!userId) return;
 
-    try {
-      setLoadingMetrics(true);
-      setExternalMetricsError(null);
+    fetchAbortRef.current?.abort();
+    const abortController = new AbortController();
+    fetchAbortRef.current = abortController;
+    const signal = abortController.signal;
 
-      const { dateFrom, dateTo } = getDateRange();
-      const rankByEmail = new Map<string, { name: string; value: number }>();
+    const requestId = dashboardFetchGen.next();
+    const bancaKey = showBancaSelector ? selectedBancaId : 'own';
+    const bancaChanged = lastLoadedBancaRef.current !== null && lastLoadedBancaRef.current !== bancaKey;
 
-      const buildUrl = (offset: number, limit: number) => {
-        const params = new URLSearchParams();
-        if (dateFrom) params.append('date_from', dateFrom);
-        if (dateTo) params.append('date_to', dateTo);
-        if (showBancaSelector && selectedBancaId) params.append('banca_id', selectedBancaId);
-        params.set('limit', String(limit));
-        params.set('offset', String(offset));
-        return `/api/dono-banca/dashboard?${params.toString()}`;
-      };
+    const { dateFrom, dateTo } = getDateRange();
+    /** Congela filtros no início — evita misturar banca/período se o estado mudar durante o loop. */
+    const bancaIdAtRequest = showBancaSelector ? selectedBancaId : null;
+    const headers = { 'X-User-Id': userId as string };
 
+    const buildRequestUrl = (
+      opts: { offset?: number; limit?: number; onlyExternalMetrics?: boolean; skipExternalMetrics?: boolean } = {}
+    ) => {
+      const params = new URLSearchParams();
+      if (dateFrom) params.append('date_from', dateFrom);
+      if (dateTo) params.append('date_to', dateTo);
+      if (bancaIdAtRequest) params.append('banca_id', bancaIdAtRequest);
+      if (opts.onlyExternalMetrics) {
+        params.set('only_external_metrics', '1');
+      } else {
+        params.set('limit', String(opts.limit ?? BATCH_SIZE));
+        params.set('offset', String(opts.offset ?? 0));
+        if (opts.skipExternalMetrics) params.set('skip_external_metrics', '1');
+      }
+      return `/api/dono-banca/dashboard?${params.toString()}`;
+    };
+
+    setLoadingMetrics(true);
+    setExternalMetricsError(null);
+    setGerentes([]);
+    setTop5Consultants([]);
+    if (bancaChanged || lastLoadedBancaRef.current === null) {
+      setExternalMetrics(null);
+      setBancaName(null);
+      setBancaId(null);
+    }
+
+    const rankByEmail = new Map<string, { name: string; value: number }>();
+
+    const loadExternalMetrics = async () => {
+      try {
+        const response = await fetch(buildRequestUrl({ onlyExternalMetrics: true }), {
+          headers,
+          signal,
+        });
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
+        if (response.status === 499) return;
+        const parsed = await parseDashboardResponse(response);
+        if (!parsed.ok || !parsed.result?.data) return;
+
+        const data = parsed.result.data;
+        if (data.bancaId) setBancaId(data.bancaId as string);
+        if ((data.bancaInfo as { name?: string } | undefined)?.name) {
+          setBancaName((data.bancaInfo as { name: string }).name);
+        }
+        const em = data.externalMetrics;
+        if (em != null && typeof em === 'object') {
+          setExternalMetrics(em as ExternalMetrics);
+          setExternalMetricsError(null);
+          setIsAuthorized(true);
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.warn('[DonoBanca] Erro ao buscar métricas externas:', err);
+      }
+    };
+
+    const loadGerentesBatches = async () => {
       let offset = 0;
       let hasMore = true;
       let isFirstBatch = true;
 
       while (hasMore) {
-        const url = buildUrl(offset, BATCH_SIZE);
-        const response = await fetch(url, {
-          headers: { 'X-User-Id': userId as string }
-        });
-        const rawText = await response.text();
-        let result: {
-          success?: boolean;
-          data?: Record<string, unknown>;
-          error?: string;
-          message?: string;
-        };
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
+
         try {
-          result = rawText.trim() ? (JSON.parse(rawText) as typeof result) : {};
-        } catch {
-          console.error('[Frontend] Resposta não-JSON do dashboard (timeout/edge):', rawText.slice(0, 160));
-          if (isFirstBatch) {
-            setIsAuthorized(false);
-            setExternalMetricsError(
-              'O servidor devolveu uma resposta inválida (muito provável timeout). Os dados foram divididos em lotes; tente atualizar ou reduzir o período.'
-            );
-          }
-          break;
-        }
+          const url = buildRequestUrl({
+            offset,
+            limit: BATCH_SIZE,
+            skipExternalMetrics: true,
+          });
+          const response = await fetch(url, { headers, signal });
+          if (!dashboardFetchGen.isCurrent(requestId)) return;
+          if (response.status === 499) return;
 
-        if (!response.ok || !result.success) {
-          if (isFirstBatch) {
-            console.error('[Frontend] Erro na autorização:', result.error || result.message);
-            setIsAuthorized(false);
+          const parsed = await parseDashboardResponse(response);
+          if (parsed.parseError) {
+            console.error('[Frontend] Resposta não-JSON do dashboard (timeout/edge):', parsed.parseError);
+            if (isFirstBatch) {
+              setIsAuthorized(false);
+              setExternalMetricsError(
+                'O servidor devolveu uma resposta inválida (muito provável timeout). Os dados foram divididos em lotes; tente atualizar ou reduzir o período.'
+              );
+            }
+            break;
           }
-          break;
-        }
 
-        const data = result.data;
-        if (isFirstBatch) {
-          setIsAuthorized(true);
-          setGerentes((data?.gerentes as Gerente[]) || []);
-          if (data?.externalMetrics) {
-            setExternalMetrics(data.externalMetrics as ExternalMetrics);
-            setExternalMetricsError(null);
+          const { ok, result } = parsed;
+          if (!ok || !result?.data) {
+            if (isFirstBatch) {
+              console.error('[Frontend] Erro na autorização:', result?.error || result?.message);
+              setIsAuthorized(false);
+            }
+            break;
+          }
+
+          const data = result.data;
+          if (isFirstBatch) {
+            setIsAuthorized(true);
+            setGerentes((data.gerentes as Gerente[]) || []);
+            if (data.bancaId) setBancaId(data.bancaId as string);
+            if ((data.bancaInfo as { name?: string } | undefined)?.name) {
+              setBancaName((data.bancaInfo as { name: string }).name);
+            }
+            isFirstBatch = false;
           } else {
-            setExternalMetrics(null);
-            if (data?.externalMetricsError) setExternalMetricsError(data.externalMetricsError as string);
+            setGerentes((prev) => [...prev, ...(((data.gerentes as Gerente[]) || []) as Gerente[])]);
           }
-          setBancaName((data?.bancaInfo as { name?: string } | undefined)?.name || null);
-          setBancaId((data?.bancaId as string) || null);
-          isFirstBatch = false;
-        } else {
-          setGerentes((prev) => [...prev, ...(((data?.gerentes as Gerente[]) || []) as Gerente[])]);
-        }
 
-        const contributors = (data?.consultantRankContributors ?? []) as Array<{ email: string; name: string; value: number }>;
-        for (const row of contributors) {
-          const em = row.email?.trim();
-          if (!em) continue;
-          const prevVal = rankByEmail.get(em)?.value ?? 0;
-          rankByEmail.set(em, { name: row.name?.trim() || em, value: Math.max(prevVal, Number(row.value) || 0) });
-        }
-        let nextTop5 = Array.from(rankByEmail.values())
-          .filter((c) => c.value > 0)
-          .sort((a, b) => b.value - a.value)
-          .slice(0, 5);
-        if (nextTop5.length === 0 && Array.isArray(data?.top5Consultants)) {
-          const t5 = data.top5Consultants as Array<{ name: string; value: number }>;
-          if (t5.length > 0) nextTop5 = t5;
-        }
-        setTop5Consultants(nextTop5);
+          const contributors = (data.consultantRankContributors ?? []) as Array<{ email: string; name: string; value: number }>;
+          for (const row of contributors) {
+            const em = row.email?.trim();
+            if (!em) continue;
+            const prevVal = rankByEmail.get(em)?.value ?? 0;
+            rankByEmail.set(em, { name: row.name?.trim() || em, value: Math.max(prevVal, Number(row.value) || 0) });
+          }
+          let nextTop5 = Array.from(rankByEmail.values())
+            .filter((c) => c.value > 0)
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 5);
+          if (nextTop5.length === 0 && Array.isArray(data.top5Consultants)) {
+            const t5 = data.top5Consultants as Array<{ name: string; value: number }>;
+            if (t5.length > 0) nextTop5 = t5;
+          }
+          if (dashboardFetchGen.isCurrent(requestId)) {
+            setTop5Consultants(nextTop5);
+          }
 
-        hasMore = data?.hasMore === true;
-        offset += BATCH_SIZE;
+          hasMore = data.hasMore === true;
+          offset += BATCH_SIZE;
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === 'AbortError') return;
+          throw err;
+        }
+      }
+    };
+
+    try {
+      await loadExternalMetrics();
+      if (!dashboardFetchGen.isCurrent(requestId)) return;
+      await loadGerentesBatches();
+      if (dashboardFetchGen.isCurrent(requestId)) {
+        lastLoadedBancaRef.current = bancaKey;
       }
     } catch (error) {
-      console.error('[Frontend] Erro ao verificar autorização:', error);
-      setIsAuthorized(false);
+      if (dashboardFetchGen.isCurrent(requestId)) {
+        console.error('[Frontend] Erro ao verificar autorização:', error);
+        setIsAuthorized(false);
+      }
     } finally {
-      setLoading(false);
-      setLoadingMetrics(false);
+      if (dashboardFetchGen.isCurrent(requestId)) {
+        setLoading(false);
+        setLoadingMetrics(false);
+      }
     }
   };
 

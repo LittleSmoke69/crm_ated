@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
+import SpendVsDepositChart from '@/components/Meta/SpendVsDepositChart';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -489,6 +490,8 @@ export default function AdminMetaPage() {
     campaigns: Array<Record<string, unknown>>;
     integrations: Array<Record<string, unknown>>;
     billing?: LiveAggregateBillingShape | null;
+    /** Série diária de gasto em BRL (do evento `complete` do stream) — alimenta o card de linhas. */
+    daily_spend?: Array<{ date: string; spend_brl: number }>;
     /**
      * Cotações usadas no backend para converter spend não-BRL em BRL nos totais.
      * Cada item segue ExchangeRateSnapshot (pair, rate, source, fetched_at, ttl_seconds).
@@ -1240,6 +1243,8 @@ export default function AdminMetaPage() {
             campaigns: (evt.campaigns as Array<Record<string, unknown>>) ?? [],
             integrations: (evt.integrations as Array<Record<string, unknown>>) ?? [],
             exchange_rates: completeRates,
+            daily_spend:
+              (evt.daily_spend as Array<{ date: string; spend_brl: number }> | undefined) ?? [],
           });
           setLiveAggregateStreamProgress(null);
           setLoadingLiveAggregate(false);
@@ -3762,6 +3767,12 @@ export default function AdminMetaPage() {
           </div>
 
           <div className="space-y-4">
+            {/* Card: Gasto de Ads × Depósito (sempre últimos 7 dias, auto-carregado, respeita o escopo de banca) */}
+            <SpendVsDepositChart
+              userId={userId ?? ''}
+              scopeBancaIds={overviewFilterBancaId ? [overviewFilterBancaId] : []}
+              enabled={Boolean(userId)}
+            />
             {/* Erro silencioso de campaigns-all (ex.: migration pendente) */}
             {allCampaignsError && (
               <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">
