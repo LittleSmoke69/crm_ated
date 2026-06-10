@@ -213,7 +213,7 @@ export default function SpendVsDepositChart({ userId, scopeBancaIds, enabled }: 
               <Tooltip
                 formatter={(value: number, name) => [
                   formatBRL(Number(value), 2),
-                  name === 'spend' ? 'Gasto' : 'Depósito',
+                  name === 'spend' ? 'Gasto (dia)' : 'Depósito (méd/dia)',
                 ]}
                 labelFormatter={(label) => `Dia ${shortDay(String(label))}`}
                 contentStyle={{
@@ -223,7 +223,7 @@ export default function SpendVsDepositChart({ userId, scopeBancaIds, enabled }: 
                 }}
               />
               <Legend
-                formatter={(value) => (value === 'spend' ? 'Gasto de Ads' : 'Depósito')}
+                formatter={(value) => (value === 'spend' ? 'Gasto de Ads (diário)' : 'Depósito (média/dia)')}
                 wrapperStyle={{ fontSize: 12 }}
               />
               <Line
@@ -239,6 +239,7 @@ export default function SpendVsDepositChart({ userId, scopeBancaIds, enabled }: 
                 dataKey="deposit"
                 stroke={DEPOSIT_COLOR}
                 strokeWidth={2}
+                strokeDasharray="5 4"
                 dot={false}
                 activeDot={{ r: 4 }}
               />
@@ -247,9 +248,14 @@ export default function SpendVsDepositChart({ userId, scopeBancaIds, enabled }: 
         )}
       </div>
 
+      {hasData ? (
+        <p className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
+          Gasto: diário (Meta, ao vivo). Depósito: total do período da CRM, exibido como média/dia (linha tracejada) — a CRM não fornece depósito por dia.
+        </p>
+      ) : null}
       {data && data.deposit_failures > 0 ? (
-        <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
-          {data.deposit_failures} consulta(s) de depósito falharam (CRM offline) — a linha de depósito pode estar subestimada.
+        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+          {data.deposit_failures} banca(s) com CRM indisponível/lenta — depósito total pode estar subestimado.
         </p>
       ) : null}
     </div>

@@ -16,11 +16,30 @@
  */
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { fetchDashboardMetrics } from '@/lib/services/dashboard/dono-banca';
+import {
+  fetchDashboardMetrics,
+  peekDashboardMetricsLastKnown,
+  type ExternalMetricsShape,
+} from '@/lib/services/dashboard/dono-banca';
 import { consolidateActiveCampaignsSpendAllIntegrations } from '@/lib/services/meta-sync-service';
 import { formatMetaCalendarDayYmd } from '@/lib/meta/metaAdsService';
+import { metaVerboseLog } from '@/lib/utils/meta-debug-log';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
+
+/**
+ * Timeout por banca para o `dashboard-metrics` da CRM no ranking.
+ * O ranking espera TODAS as bancas (`Promise.allSettled`), então o tempo total ≈ banca mais lenta.
+ * Em prod a função tem limite de execução (ex.: Netlify ~26s) → cap em 15s para caber no orçamento;
+ * CRMs mais lentas caem no fallback de último valor conhecido (cache stale) abaixo.
+ * Em dev não há limite de plataforma → 25s acomoda CRMs lentas-mas-vivas (ex.: LotoX ~22s)
+ * já na primeira carga. Ajustável via env para tuning.
+ */
+const RANKING_CRM_TIMEOUT_MS = (() => {
+  const raw = parseInt(String(process.env.RANKING_CRM_TIMEOUT_MS ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 3000 && raw <= 60000) return raw;
+  return process.env.NODE_ENV === 'production' ? 15000 : 25000;
+})();
 
 /** Normaliza a URL da banca para um endpoint absoluto compatível com fetchDashboardMetrics. */
 function normalizeBancaUrlAbsolute(bancaUrl: string | null | undefined): string | null {
@@ -226,18 +245,19 @@ async function fetchLiveAdsForRange(
     timeIncrement: 1,
     calendarTimeZone: tz,
     includeInactiveCampaigns: true,
+    // Ranking só usa spend por campanha; pular billing corta chamadas Meta lentas (getAccountFinance/activities).
+    skipBilling: true,
   });
 
-  console.log(
-    '[banca-x-ads-ranking] DEBUG integrations',
-    report.by_integration.map((s) => ({
+  metaVerboseLog('[banca-x-ads-ranking] DEBUG integrations', {
+    by_integration: report.by_integration.map((s) => ({
       integration_id: s.integration_id,
       banca_ids_linked: s.banca_ids,
       campaigns_count: s.campaigns.length,
       total_spend: s.total_spend,
       error: s.error ?? null,
-    }))
-  );
+    })),
+  });
 
   // 3) Itera SÓ campanhas LIVE. Cada uma vira 1 linha do ranking.
   const spendByBanca = new Map<string, number>();
@@ -293,7 +313,7 @@ async function fetchLiveAdsForRange(
 
   const liveMatchedInDb = report.campaigns.filter((c) => campaignToBanca.has(String(c.id).trim())).length;
 
-  console.log('[banca-x-ads-ranking] aggregate (LIVE-only)', {
+  metaVerboseLog('[banca-x-ads-ranking] aggregate (LIVE-only)', {
     date_from: dateFrom,
     date_to: dateTo,
     tz,
@@ -317,7 +337,7 @@ async function fetchLiveAdsForRange(
       campaigns: info.campaigns,
     }))
     .sort((a, b) => b.total_spend - a.total_spend);
-  console.log('[banca-x-ads-ranking] grouping by banca', JSON.stringify(groupedForLog, null, 2));
+  metaVerboseLog('[banca-x-ads-ranking] grouping by banca', { grouped: groupedForLog });
 
   return { spendByBanca, campaignsByBanca, bancasWithActiveAds };
 }
@@ -422,7 +442,7 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
     return liveAds.bancasWithActiveAds.has(String(b.id));
   });
 
-  console.log('[banca-x-ads-ranking] filter pipeline', {
+  metaVerboseLog('[banca-x-ads-ranking] filter pipeline', {
     date_from: dateFrom,
     date_to: dateTo,
     crm_bancas_total: totalCrmBancas,
@@ -441,35 +461,54 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
   }
 
   // Chama dashboard-metrics em paralelo por banca (não falha o ranking inteiro).
+  const cleanUrls = bancas.map((b) => normalizeBancaUrlAbsolute(b.url));
   const metricsResults = await Promise.allSettled(
-    bancas.map((b) => {
-      const cleanUrl = normalizeBancaUrlAbsolute(b.url);
+    bancas.map((b, idx) => {
+      const cleanUrl = cleanUrls[idx];
       if (!cleanUrl) return Promise.resolve(null);
-      return fetchDashboardMetrics(cleanUrl, dateFrom, dateTo);
+      // Timeout curto por banca: evita que uma CRM lenta segure o ranking inteiro (allSettled).
+      return fetchDashboardMetrics(cleanUrl, dateFrom, dateTo, AbortSignal.timeout(RANKING_CRM_TIMEOUT_MS));
     })
   );
 
+  /**
+   * Resolução final por banca: fetch OK → valor fresco; falha/timeout → último valor conhecido
+   * do cache (a requisição compartilhada que estourou o timeout termina em background e aquece
+   * o cache — montagens seguintes recuperam o valor aqui em vez de "CRM indisponível").
+   */
   const crmFailures: Array<{ banca_id: string; banca_name: string | null; error: string }> = [];
-  metricsResults.forEach((r, idx) => {
+  const staleRecoveries: Array<{ banca_id: string; banca_name: string | null }> = [];
+  const metricsByIdx: Array<ExternalMetricsShape | null> = metricsResults.map((r, idx) => {
+    if (r.status === 'fulfilled' && r.value) return r.value;
     const b = bancas[idx];
-    if (r.status === 'rejected') {
-      crmFailures.push({
-        banca_id: String(b.id),
-        banca_name: b.name,
-        error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-      });
-    } else if (r.value == null) {
-      crmFailures.push({
-        banca_id: String(b.id),
-        banca_name: b.name,
-        error: 'fetchDashboardMetrics returned null (URL inválida ou CRM offline)',
-      });
+    const cleanUrl = cleanUrls[idx];
+    const lastKnown = cleanUrl ? peekDashboardMetricsLastKnown(cleanUrl, dateFrom, dateTo) : null;
+    if (lastKnown) {
+      staleRecoveries.push({ banca_id: String(b.id), banca_name: b.name });
+      return lastKnown;
     }
+    crmFailures.push({
+      banca_id: String(b.id),
+      banca_name: b.name,
+      error:
+        r.status === 'rejected'
+          ? r.reason instanceof Error
+            ? r.reason.message
+            : String(r.reason)
+          : 'fetchDashboardMetrics returned null (URL inválida ou CRM offline)',
+    });
+    return null;
   });
+  if (staleRecoveries.length > 0) {
+    console.log('[banca-x-ads-ranking] crm dashboard-metrics: usando último valor conhecido (stale)', {
+      total: staleRecoveries.length,
+      bancas: staleRecoveries,
+    });
+  }
   if (crmFailures.length > 0) {
-    console.log('[banca-x-ads-ranking] crm dashboard-metrics failures', {
+    console.warn('[banca-x-ads-ranking] crm dashboard-metrics failures', {
       total: crmFailures.length,
-      failures: crmFailures,
+      failures: crmFailures.map((f) => ({ banca_id: f.banca_id, banca_name: f.banca_name, error: f.error })),
     });
   }
 
@@ -478,11 +517,7 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
     const spend = Number(liveAds.spendByBanca.get(bancaId)) || 0;
     const activeCampaigns = Number(liveAds.campaignsByBanca.get(bancaId)) || 0;
 
-    const metricsR = metricsResults[idx];
-    const metrics =
-      metricsR.status === 'fulfilled' && metricsR.value
-        ? metricsR.value
-        : null;
+    const metrics = metricsByIdx[idx];
 
     const totalDeposited = Number(metrics?.total_deposited) || 0;
     const totalLeads = Number(metrics?.total_leads) || 0;
@@ -562,7 +597,7 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
   totals.roas_medio = totals.spend_total > 0 ? totals.deposited_total / totals.spend_total : null;
 
   /** Output final do ranking — confere com o que aparece no front. */
-  console.log('[banca-x-ads-ranking] FINAL output', {
+  metaVerboseLog('[banca-x-ads-ranking] FINAL output', {
     date_from: dateFrom,
     date_to: dateTo,
     rows_count: rows.length,

@@ -51,12 +51,48 @@ export type GetMetaSpendVsDepositDailyOptions = {
 };
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
-/** Concorrência das chamadas externas de depósito (banca × dia). */
-const DEPOSIT_CONCURRENCY = 8;
-/** Teto de segurança para o fan-out externo (banca × dia). Acima disso, corta bancas. */
-const MAX_DEPOSIT_REQUESTS = 4000;
+/** Bancas processadas em paralelo (1 chamada de range por banca). */
+const DEPOSIT_BANCA_CONCURRENCY = 8;
+/**
+ * Timeout por chamada de depósito. O `dashboard-metrics` não tem quebra diária e custa
+ * praticamente o mesmo para 1 dia ou para o range inteiro — então fazemos UMA chamada de
+ * range por banca (total do período). CRMs lentas-mas-vivas respondem em ~20s (ex.: LotoX);
+ * 30s acomoda e ainda corta mortas bem antes dos 60s default do cliente.
+ */
+const DEPOSIT_CALL_TIMEOUT_MS = 30000;
+/** Teto de segurança para o nº de bancas consultadas. */
+const MAX_DEPOSIT_BANCAS = 600;
+/**
+ * Cache em memória por (banca, range). Janela só com dias passados é imutável → TTL longo;
+ * janela que inclui "hoje" → TTL curto. Evita reconsultar CRMs lentas a cada refresh.
+ */
+const DEPOSIT_CACHE_TTL_TODAY_MS = 60_000;
+const DEPOSIT_CACHE_TTL_PAST_MS = 6 * 60 * 60 * 1000;
+const depositRangeCache = new Map<string, { value: number; expires: number }>();
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Busca (com cache + timeout) o depósito TOTAL de um range para uma banca. Nunca rejeita. */
+async function fetchDepositRange(
+  url: string,
+  dateFrom: string,
+  dateTo: string,
+  todayYmd: string
+): Promise<{ value: number; ok: boolean }> {
+  const key = `${url}|${dateFrom}|${dateTo}`;
+  const cached = depositRangeCache.get(key);
+  if (cached && cached.expires > Date.now()) return { value: cached.value, ok: true };
+  try {
+    const metrics = await fetchDashboardMetrics(url, dateFrom, dateTo, AbortSignal.timeout(DEPOSIT_CALL_TIMEOUT_MS));
+    const value = Number(metrics?.total_deposited) || 0;
+    const ttl = dateTo >= todayYmd ? DEPOSIT_CACHE_TTL_TODAY_MS : DEPOSIT_CACHE_TTL_PAST_MS;
+    depositRangeCache.set(key, { value, expires: Date.now() + ttl });
+    return { value, ok: true };
+  } catch {
+    // Não cacheia falha: próximo load tenta de novo.
+    return { value: 0, ok: false };
+  }
+}
 
 function normalizeBancaUrlAbsolute(bancaUrl: string | null | undefined): string | null {
   if (!bancaUrl) return null;
@@ -150,6 +186,8 @@ export async function getMetaSpendVsDepositDaily(
       scopeBancaIds: explicit.length > 1 ? explicit : [],
       overviewBancaId: explicit.length === 1 ? explicit[0] : null,
       activeOnly: true,
+      // Card só usa daily_spend; pular as `/activities` (cobranças) acelera a fase Meta.
+      skipBilling: true,
     });
     for (const d of live.daily_spend ?? []) {
       const day = String(d.date ?? '').slice(0, 10);
@@ -174,48 +212,43 @@ export async function getMetaSpendVsDepositDaily(
 
   const urlById = await fetchBancaUrls(scopeBancaIds);
 
-  // DEPÓSITO: fan-out (banca × dia) na CRM externa, com teto de segurança e concorrência.
-  const depositByDay = new Map<string, number>();
-  let depositFailures = 0;
+  /**
+   * DEPÓSITO: UMA chamada de range por banca (total do período). A CRM não devolve quebra
+   * diária e custa o mesmo para 1 dia ou o range inteiro — então 1 chamada/banca evita o
+   * fan-out de N dias e a sobrecarga das CRMs lentas. Bancas em paralelo, cada uma 1 chamada.
+   */
   let bancaUrls = Array.from(urlById.values());
-  const totalRequests = bancaUrls.length * days.length;
-  if (totalRequests > MAX_DEPOSIT_REQUESTS && days.length > 0) {
-    const maxBancas = Math.max(1, Math.floor(MAX_DEPOSIT_REQUESTS / days.length));
-    console.warn('[spend-vs-deposit-daily] fan-out acima do teto — cortando bancas', {
-      total_requests: totalRequests,
-      max: MAX_DEPOSIT_REQUESTS,
+  if (bancaUrls.length > MAX_DEPOSIT_BANCAS) {
+    console.warn('[spend-vs-deposit-daily] nº de bancas acima do teto — cortando', {
       bancas_original: bancaUrls.length,
-      bancas_kept: maxBancas,
-      days: days.length,
+      bancas_kept: MAX_DEPOSIT_BANCAS,
     });
-    bancaUrls = bancaUrls.slice(0, maxBancas);
+    bancaUrls = bancaUrls.slice(0, MAX_DEPOSIT_BANCAS);
   }
 
-  const tasks: Array<{ url: string; day: string }> = [];
-  for (const url of bancaUrls) {
-    for (const day of days) tasks.push({ url, day });
-  }
-
-  const results = await mapPool(tasks, DEPOSIT_CONCURRENCY, async ({ url, day }) => {
-    try {
-      const metrics = await fetchDashboardMetrics(url, day, day);
-      return { day, value: Number(metrics?.total_deposited) || 0, ok: true };
-    } catch {
-      return { day, value: 0, ok: false };
-    }
-  });
-  for (const r of results) {
+  const todayYmd = formatMetaCalendarDayYmd(tz);
+  let depositTotal = 0;
+  let depositFailures = 0;
+  const perBanca = await mapPool(bancaUrls, DEPOSIT_BANCA_CONCURRENCY, (url) =>
+    fetchDepositRange(url, dateFrom, dateTo, todayYmd)
+  );
+  for (const r of perBanca) {
     if (!r.ok) {
       depositFailures += 1;
       continue;
     }
-    depositByDay.set(r.day, (depositByDay.get(r.day) ?? 0) + r.value);
+    depositTotal += r.value;
   }
 
+  /**
+   * Distribui o total de depósito uniformemente pelos dias (linha de referência = média/dia).
+   * O `totals.deposit` (soma dos pontos) reconcilia com o total real consultado.
+   */
+  const depositPerDay = days.length > 0 ? depositTotal / days.length : 0;
   const points: SpendVsDepositDailyPoint[] = days.map((date) => ({
     date,
     spend: Math.round((spendByDay.get(date) ?? 0) * 100) / 100,
-    deposit: Math.round((depositByDay.get(date) ?? 0) * 100) / 100,
+    deposit: Math.round(depositPerDay * 100) / 100,
   }));
 
   const totals = points.reduce(

@@ -37,7 +37,7 @@ import {
   resolveExchangeRatesForCurrencies,
   type ExchangeRateSnapshot,
 } from '@/lib/services/exchange-rate-service';
-import { isMetaVerboseLogEnabled } from '@/lib/utils/meta-debug-log';
+import { isMetaVerboseLogEnabled, metaVerboseLog } from '@/lib/utils/meta-debug-log';
 
 export const DEFAULT_BASE_URL = 'https://graph.facebook.com/v25.0';
 const DEFAULT_DATE_PRESET = 'last_30d';
@@ -310,6 +310,12 @@ export type FetchMetaBillingSnapshotOptions = {
    * `normalizeMetaFinanceAmount` e zera o total de cobranças.
    */
   integrationCurrencyHint?: string | null;
+  /**
+   * Quando true, NÃO consulta `/activities` (cobranças no cartão) — a parte lenta do snapshot.
+   * Ainda busca `getAccountFinance` (moeda/saldo), que é barato e necessário para conversão BRL.
+   * Usado por chamadores que só precisam de finance/moeda (ex.: daily_spend do card).
+   */
+  skipCardCharges?: boolean;
 };
 
 /** Subtrai `days` dias de um Date (UTC), retornando YYYY-MM-DD. */
@@ -492,17 +498,31 @@ export async function fetchMetaBillingSnapshot(
   const period = options?.cardChargesPeriod
     ? { since: options.cardChargesPeriod.since ?? null, until: options.cardChargesPeriod.until ?? null }
     : { since: null, until: null };
-  const cardCharges = await fetchMetaCardChargesSnapshot(
-    baseUrl,
-    token,
-    adAccountId,
-    period,
-    fallbackCurrency,
-    {
-      limit: options?.cardChargesPageLimit,
-      maxPages: options?.cardChargesMaxPages,
-    }
-  );
+  const cardCharges: MetaBillingChargesSnapshot = options?.skipCardCharges
+    ? {
+        source: 'ad_account_activities',
+        period_filter: { since: period.since, until: period.until },
+        period_window: { since: null, until: null },
+        count: 0,
+        total: 0,
+        count_window: 0,
+        total_window: 0,
+        currency: fallbackCurrency,
+        latest_charge: null,
+        fetched_at: new Date().toISOString(),
+        entries: [],
+      }
+    : await fetchMetaCardChargesSnapshot(
+        baseUrl,
+        token,
+        adAccountId,
+        period,
+        fallbackCurrency,
+        {
+          limit: options?.cardChargesPageLimit,
+          maxPages: options?.cardChargesMaxPages,
+        }
+      );
   return buildMetaBillingSnapshot(adAccountId, financeData, financeError, cardCharges);
 }
 
@@ -2140,6 +2160,12 @@ export async function listAdminMetaLiveJobs(includeInactiveIntegrations = false)
 export type ConsolidateAllActiveCampaignsSpendOptions = GetActiveCampaignsSpendOptions & {
   /** Quando true, inclui linhas inativas em `meta_integration_configs`. */
   includeInactiveIntegrations?: boolean;
+  /**
+   * Quando true, PULA o billing (getAccountFinance + getAdAccountBillingCharges) por integração.
+   * Chamadores que só precisam do spend (ex.: ranking Banca×Ads) evitam essas chamadas Meta lentas.
+   * O `billing` retornado fica vazio.
+   */
+  skipBilling?: boolean;
 };
 
 /** Campanha ativa (insights) + origem multi-tenant. */
@@ -2188,7 +2214,7 @@ export type ConsolidatedActiveCampaignsSpendAllResult = {
 export async function consolidateActiveCampaignsSpendAllIntegrations(
   options?: ConsolidateAllActiveCampaignsSpendOptions
 ): Promise<ConsolidatedActiveCampaignsSpendAllResult> {
-  const { includeInactiveIntegrations, ...spendOpts } = options ?? {};
+  const { includeInactiveIntegrations, skipBilling, ...spendOpts } = options ?? {};
   const jobs = await listAdminMetaLiveJobs(includeInactiveIntegrations === true);
   const by_integration: ConsolidatedActiveCampaignsSpendIntegrationSlice[] = [];
   const campaignsFlat: ConsolidatedActiveCampaignSpendEntry[] = [];
@@ -2243,16 +2269,23 @@ export async function consolidateActiveCampaignsSpendAllIntegrations(
       return { slice, billing: null as MetaBillingSnapshot | null, campaigns: [] as ConsolidatedActiveCampaignSpendEntry[] };
     }
 
-    const cardChargesPeriod = spendOpts?.timeRange?.since && spendOpts?.timeRange?.until
-      ? { since: spendOpts.timeRange.since, until: spendOpts.timeRange.until }
-      : null;
-    const integrationCurrencyHint = await getMetaCurrencyForBanca(banca_ids[0] ?? job.representativeBancaId).catch(
-      () => null as string | null
-    );
-    const billing = await fetchMetaBillingSnapshot(baseUrl, token, adAccountId, {
-      cardChargesPeriod,
-      integrationCurrencyHint,
-    });
+    /**
+     * Billing (getAccountFinance + getAdAccountBillingCharges) é caro e nem todo chamador usa.
+     * Com `skipBilling` (ex.: ranking), pulamos essas chamadas Meta e mantemos só o spend.
+     */
+    let billing: MetaBillingSnapshot | null = null;
+    if (!skipBilling) {
+      const cardChargesPeriod = spendOpts?.timeRange?.since && spendOpts?.timeRange?.until
+        ? { since: spendOpts.timeRange.since, until: spendOpts.timeRange.until }
+        : null;
+      const integrationCurrencyHint = await getMetaCurrencyForBanca(banca_ids[0] ?? job.representativeBancaId).catch(
+        () => null as string | null
+      );
+      billing = await fetchMetaBillingSnapshot(baseUrl, token, adAccountId, {
+        cardChargesPeriod,
+        integrationCurrencyHint,
+      });
+    }
 
     try {
       const { campaigns, totalSpend } = await getActiveCampaignsSpend(baseUrl, token, adAccountId, spendOpts);
@@ -2460,6 +2493,8 @@ export type AdminMetaLiveJobProcessContext = {
    * Quando vazio/ausente, a função busca a cotação USD-BRL on-demand uma única vez.
    */
   exchangeRatesToBrl?: Record<string, number>;
+  /** Quando true, pula o billing por integração (getAccountFinance + activities). Chamadores que só precisam de spend/insights. */
+  skipBilling?: boolean;
 };
 
 function computeAdminMetaTotalsFromCampaignRows(rows: AdminMetaLiveCampaignRow[]): AdminMetaLiveAggregateResult['totals'] {
@@ -2667,6 +2702,8 @@ async function processAdminMetaLiveJob(
         fetchMetaBillingSnapshot(baseUrl, token, accountId, {
           cardChargesPeriod: liveCardChargesPeriod,
           integrationCurrencyHint,
+          // Com skipBilling (ex.: card daily_spend), pula as `/activities` lentas mas mantém finance/moeda.
+          skipCardCharges: ctx.skipBilling === true,
         })
       )
     ))
@@ -2717,31 +2754,33 @@ async function processAdminMetaLiveJob(
   const visibleIds = new Set(visible.map((c) => String(c.id)));
 
   /** DEBUG: rastreia filtros aplicados às campanhas listadas — útil pra diagnosticar campanha "sumida". */
-  const filteredOutByActiveOnly = campaigns
-    .filter((c) => !visibleIds.has(String(c.id)))
-    .map((c) => ({
-      campaign_id: String(c.id),
-      name: c.name,
-      status: c.status,
-      effective_status: c.effective_status,
-    }));
-  if (filteredOutByActiveOnly.length > 0) {
-    console.log('[processAdminMetaLiveJob] filtered out by activeOnly', {
+  if (isMetaVerboseLogEnabled()) {
+    const filteredOutByActiveOnly = campaigns
+      .filter((c) => !visibleIds.has(String(c.id)))
+      .map((c) => ({
+        campaign_id: String(c.id),
+        name: c.name,
+        status: c.status,
+        effective_status: c.effective_status,
+      }));
+    if (filteredOutByActiveOnly.length > 0) {
+      metaVerboseLog('[processAdminMetaLiveJob] filtered out by activeOnly', {
+        integration_id: integrationId,
+        rep_banca_id: rep,
+        filtered_count: filteredOutByActiveOnly.length,
+        sample: filteredOutByActiveOnly.slice(0, 10),
+      });
+    }
+    metaVerboseLog('[processAdminMetaLiveJob] listCampaigns snapshot', {
       integration_id: integrationId,
       rep_banca_id: rep,
-      filtered_count: filteredOutByActiveOnly.length,
-      sample: filteredOutByActiveOnly.slice(0, 10),
+      linked_bancas: job.linkedBancaIds,
+      ad_accounts: normalizedAdAccountIds,
+      total_listed: campaigns.length,
+      visible_after_active_filter: visible.length,
+      active_only: activeOnly,
     });
   }
-  console.log('[processAdminMetaLiveJob] listCampaigns snapshot', {
-    integration_id: integrationId,
-    rep_banca_id: rep,
-    linked_bancas: job.linkedBancaIds,
-    ad_accounts: normalizedAdAccountIds,
-    total_listed: campaigns.length,
-    visible_after_active_filter: visible.length,
-    active_only: activeOnly,
-  });
 
   const fetchedCampaignIds = Array.from(visibleIds);
   const ownerByCampaign = new Map<string, string>();
@@ -2981,7 +3020,7 @@ async function processAdminMetaLiveJob(
   }
 
   if (droppedByNoMetrics.length > 0) {
-    console.log('[processAdminMetaLiveJob] dropped by hasMetrics=false', {
+    metaVerboseLog('[processAdminMetaLiveJob] dropped by hasMetrics=false', {
       integration_id: integrationId,
       rep_banca_id: rep,
       linked_bancas: job.linkedBancaIds,
@@ -2992,7 +3031,7 @@ async function processAdminMetaLiveJob(
         'Comum quando o fallback chain (date_preset → time_range) escolhe um período diferente do filtro do usuário.',
     });
   }
-  console.log('[processAdminMetaLiveJob] resumo', {
+  metaVerboseLog('[processAdminMetaLiveJob] resumo', {
     integration_id: integrationId,
     rep_banca_id: rep,
     listed: campaigns.length,
@@ -3188,6 +3227,8 @@ export async function fetchAdminMetaLiveAggregate(opts: {
   overviewBancaId: string | null;
   activeOnly: boolean;
   datePreset?: string;
+  /** Pula as `/activities` (cobranças no cartão) — chamadores que só usam spend/daily_spend. */
+  skipBilling?: boolean;
 }): Promise<AdminMetaLiveAggregateResult> {
   const { dateFrom, dateTo, scopeBancaIds, overviewBancaId, activeOnly } = opts;
   const datePreset = (opts.datePreset || DEFAULT_DATE_PRESET).trim() || DEFAULT_DATE_PRESET;
@@ -3243,6 +3284,7 @@ export async function fetchAdminMetaLiveAggregate(opts: {
     scopeBancaIds,
     activeOnly,
     exchangeRatesToBrl,
+    skipBilling: opts.skipBilling === true,
   };
 
   /** Pool limitado (META_AGG_CONCURRENCY) em vez de disparar todos os jobs de uma vez,

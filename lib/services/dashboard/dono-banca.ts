@@ -692,24 +692,157 @@ async function logCrmFetchFailure(
   });
 }
 
+/**
+ * Cache em memória de dashboard-metrics por (banca, range). TTL curto: evita re-bater na CRM
+ * quando ranking + card (ou o double-render do React StrictMode em dev) pedem o mesmo dado
+ * em sequência. Ajustável via env para tuning.
+ */
+const DASHBOARD_METRICS_CACHE_TTL_MS = (() => {
+  const raw = parseInt(String(process.env.DASHBOARD_METRICS_CACHE_TTL_MS ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 10 * 60_000) return raw;
+  return 30_000;
+})();
+
+/** Entradas vencidas ficam disponíveis como "último valor conhecido" por até este prazo. */
+const DASHBOARD_METRICS_STALE_MAX_MS = 6 * 60 * 60 * 1000;
+
+type DashboardMetricsCacheEntry = {
+  value: ExternalMetricsShape;
+  /** Até quando a entrada é considerada fresca (cache HIT direto). */
+  freshUntil: number;
+  /** Quando o valor foi obtido — limita o uso como fallback stale. */
+  fetchedAt: number;
+};
+
+const dashboardMetricsCache = new Map<string, DashboardMetricsCacheEntry>();
+/** Requisições em voo por (banca, range): chamadas concorrentes compartilham o mesmo fetch. */
+const dashboardMetricsInflight = new Map<string, Promise<ExternalMetricsShape | null>>();
+
+function dashboardMetricsCacheKey(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined
+): string {
+  return `${cleanBancaUrl}|${dateFrom ?? ''}|${dateTo ?? ''}`;
+}
+
+function pruneDashboardMetricsCache(): void {
+  if (dashboardMetricsCache.size < 200) return;
+  const now = Date.now();
+  for (const [key, entry] of dashboardMetricsCache) {
+    if (now - entry.fetchedAt > DASHBOARD_METRICS_STALE_MAX_MS) dashboardMetricsCache.delete(key);
+  }
+}
+
+/**
+ * Último valor conhecido de dashboard-metrics para (banca, range), mesmo que o TTL fresco
+ * tenha vencido. Fallback para CRMs lentas (ex.: LotoX ~22s) que estouram o timeout do
+ * ranking: a requisição compartilhada termina depois e aquece o cache; na próxima montagem
+ * o ranking usa este valor em vez de marcar "CRM indisponível". Limitado a 6h de idade.
+ */
+export function peekDashboardMetricsLastKnown(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined
+): ExternalMetricsShape | null {
+  const entry = dashboardMetricsCache.get(dashboardMetricsCacheKey(cleanBancaUrl, dateFrom, dateTo));
+  if (!entry) return null;
+  if (Date.now() - entry.fetchedAt > DASHBOARD_METRICS_STALE_MAX_MS) return null;
+  return entry.value;
+}
+
+/**
+ * Aguarda `promise`, mas rejeita com AbortError se o `signal` do caller abortar antes.
+ * A promise subjacente (fetch compartilhado) NÃO é cancelada — outros callers continuam
+ * aguardando e o resultado ainda aquece o cache.
+ */
+function raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted', 'AbortError'));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException('The operation was aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
+/**
+ * Busca dashboard-metrics com dedup + cache:
+ * - Chamadas concorrentes à mesma (banca, range) compartilham UMA requisição HTTP — evita que
+ *   CRMs lentas (ex.: LotoX ~20s) sejam atingidas em duplicidade e congestionem o processo,
+ *   atrasando bancas rápidas além do timeout do ranking.
+ * - Sucesso entra em cache curto (TTL acima); falha não é cacheada (próxima chamada tenta de novo).
+ * - O `signal` do caller só desiste da ESPERA (AbortError, contrato preservado); a requisição
+ *   compartilhada segue até completar e aquece o cache para a próxima chamada.
+ */
 export async function fetchDashboardMetrics(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
   dateTo: string | null | undefined,
   signal?: AbortSignal
 ): Promise<ExternalMetricsShape | null> {
+  throwIfAborted(signal);
+  const key = dashboardMetricsCacheKey(cleanBancaUrl, dateFrom, dateTo);
+
+  const cached = dashboardMetricsCache.get(key);
+  if (cached && cached.freshUntil > Date.now()) {
+    console.log('[DonoBanca Service] dashboard-metrics cache HIT:', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+    return cached.value;
+  }
+
+  let inflight = dashboardMetricsInflight.get(key);
+  if (inflight) {
+    console.log('[DonoBanca Service] dashboard-metrics dedup (compartilhando requisição em voo):', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+  } else {
+    inflight = fetchDashboardMetricsUncached(cleanBancaUrl, dateFrom, dateTo)
+      .then((value) => {
+        if (value) {
+          pruneDashboardMetricsCache();
+          dashboardMetricsCache.set(key, {
+            value,
+            freshUntil: Date.now() + DASHBOARD_METRICS_CACHE_TTL_MS,
+            fetchedAt: Date.now(),
+          });
+        }
+        return value;
+      })
+      .finally(() => {
+        dashboardMetricsInflight.delete(key);
+      });
+    dashboardMetricsInflight.set(key, inflight);
+  }
+
+  return raceWithSignal(inflight, signal);
+}
+
+async function fetchDashboardMetricsUncached(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined
+): Promise<ExternalMetricsShape | null> {
+  let requestUrl: string | null = null;
   try {
-    throwIfAborted(signal);
     const externalApiUrl = new URL(`${cleanBancaUrl}/api/crm/dashboard-metrics`);
     if (dateFrom) externalApiUrl.searchParams.append('date_from', dateFrom);
     if (dateTo) externalApiUrl.searchParams.append('date_to', dateTo);
     const apiKey = process.env.CRM_API_KEY;
-    const requestUrl = externalApiUrl.toString();
+    requestUrl = externalApiUrl.toString();
     const startTime = Date.now();
     const res = await fetch(requestUrl, {
       method: 'GET',
       headers: { 'Accept': 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-      signal: getCrmFetchSignal(signal),
+      signal: getCrmFetchSignal(null),
     });
     const durationMs = Date.now() - startTime;
     const logContext = {
@@ -776,12 +909,11 @@ export async function fetchDashboardMetrics(
     console.log('[DonoBanca Service] dashboard-metrics normalized snapshot:', normalizedMetrics);
     return normalizedMetrics;
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') throw err;
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     console.warn('[DonoBanca Service] Erro ao buscar dashboard-metrics:', {
       message,
-      bancaUrl: cleanBancaUrl,
+      url: requestUrl ?? `${cleanBancaUrl}/api/crm/dashboard-metrics`,
       dateFrom: dateFrom ?? null,
       dateTo: dateTo ?? null,
       hasApiKey: Boolean(process.env.CRM_API_KEY),
