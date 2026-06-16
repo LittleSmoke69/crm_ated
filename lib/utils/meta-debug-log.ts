@@ -8,6 +8,20 @@ export function isMetaVerboseLogEnabled(): boolean {
   );
 }
 
+/** Logs verbosos de CRM/dashboard (dono-banca, depósitos Meta). Desligado por padrão. */
+export function isCrmServiceVerboseLogEnabled(): boolean {
+  return (
+    isMetaVerboseLogEnabled() ||
+    process.env.LOG_CRM_DEBUG === '1' ||
+    process.env.LOG_DONO_BANCA_DEBUG === '1'
+  );
+}
+
+export function crmServiceVerboseLog(...args: unknown[]): void {
+  if (!isCrmServiceVerboseLogEnabled()) return;
+  console.log(...args);
+}
+
 export function metaVerboseLog(prefix: string, payload?: Record<string, unknown>): void {
   if (!isMetaVerboseLogEnabled()) return;
   if (payload !== undefined) {

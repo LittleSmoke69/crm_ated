@@ -285,6 +285,8 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   const isChat = internalPath === '/chat' || internalPath === '/chat-atendimento';
   const isFlowEditor = /^\/admin\/flows\/[^/]+$/.test(internalPath);
   const isAntiSpamPage = internalPath.startsWith('/anti-spam');
+  const isGestorTrafegoPage = internalPath.startsWith('/gestor-trafego');
+  const isFullBleedPage = isAntiSpamPage || isGestorTrafegoPage;
   const isFullScreen = isChat || isFlowEditor;
 
   return (
@@ -315,20 +317,20 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       <Sidebar onSignOut={onSignOut} />
 
       <main
-        className={`flex-1 transition-all duration-300 min-w-0 flex flex-col ${isFullScreen ? 'overflow-hidden' : 'min-h-screen'}`}
+        className={`flex-1 w-full transition-all duration-300 min-w-0 flex flex-col ${isFullScreen ? 'overflow-hidden' : 'min-h-screen'}`}
         style={{
           paddingLeft: isMobile ? '0px' : `${sidebarWidth}px`
         }}
       >
         {isFullScreen ? (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full">
             {children}
           </div>
         ) : (
           <div
             className={
-              isAntiSpamPage
-                ? 'w-full min-w-0 flex-1 py-4 sm:py-6 lg:py-8 px-0'
+              isFullBleedPage
+                ? 'w-full min-w-0 flex-1'
                 : 'p-4 sm:p-6 lg:p-8'
             }
           >

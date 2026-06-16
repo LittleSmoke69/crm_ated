@@ -105,7 +105,7 @@ export default async function GestorTrafegoPage() {
         initialData={null}
         userId={userId}
         userStatus={userStatusForClient}
-        canSelectDono={customGestaoTrafegoOnly || normalizedStatus === 'gerente'}
+        canSelectDono={customGestaoTrafegoOnly}
       />
     );
   }

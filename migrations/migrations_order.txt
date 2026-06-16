@@ -170,6 +170,7 @@ fix_maturation_messages_type_constraint.sql
 add_shared_meta_integrations.sql
 add_increment_mass_send_job_counts_rpc.sql
 add_meta_campaign_consultors.sql
+add_meta_campaign_consultors_redirect_group.sql
 add_meta_campaign_kind.sql
 add_meta_insights_cost_per_action_type.sql
 add_redirect_group_consultant.sql

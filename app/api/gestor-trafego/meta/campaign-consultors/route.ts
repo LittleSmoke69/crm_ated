@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
 import { errorResponse, serverErrorResponse, successResponse } from '@/lib/utils/response';
-import { listConsultoresForAdsAttributionDropdown, setCampaignConsultors } from '@/lib/services/meta-campaign-consultors';
+import { listConsultoresForAdsAttributionDropdown, setCampaignConsultors, type CampaignConsultorAssignmentInput } from '@/lib/services/meta-campaign-consultors';
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,6 +26,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const bancaId = String(body?.banca_id ?? '').trim();
     const campaignId = String(body?.campaign_id ?? '').trim();
+    const assignments = Array.isArray(body?.assignments)
+      ? (body.assignments as CampaignConsultorAssignmentInput[])
+      : null;
     const consultorIds = Array.isArray(body?.consultor_ids)
       ? body.consultor_ids.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
       : [];
@@ -34,7 +37,7 @@ export async function POST(req: NextRequest) {
       return errorResponse('banca_id e campaign_id são obrigatórios.', 400);
     }
 
-    await setCampaignConsultors(bancaId, campaignId, consultorIds);
+    await setCampaignConsultors(bancaId, campaignId, assignments ?? consultorIds);
     return successResponse({ success: true });
   } catch (err: any) {
     if (err?.message?.includes('Acesso negado')) {

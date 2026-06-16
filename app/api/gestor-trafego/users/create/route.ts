@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateHierarchy, UserStatus, getUserProfile } from '@/lib/middleware/permissions';
 import { requireGestorTrafego } from '@/lib/middleware/gestor-trafego-access';
-import { resolveGestorTrafegoEffectiveDonoId } from '@/lib/middleware/gestor-owner';
+import { resolveGestorTrafegoOwnerIdFromRequest } from '@/lib/middleware/gestor-owner';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { isInHierarchy } from '@/lib/utils/hierarchy';
@@ -23,11 +23,7 @@ export async function POST(req: NextRequest) {
         403
       );
     }
-    const ownerId = await resolveGestorTrafegoEffectiveDonoId(
-      req.headers.get('X-Effective-Dono-Id'),
-      userId,
-      statusNorm
-    );
+    const ownerId = await resolveGestorTrafegoOwnerIdFromRequest(req, userId, statusNorm);
     if (!ownerId) {
       return errorResponse('Gestor vinculado a um Dono de Banca ou informe X-Effective-Dono-Id para cadastrar usuários.', 403);
     }

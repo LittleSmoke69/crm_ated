@@ -13,7 +13,8 @@ export default async function DonoBancaPage() {
 
   const profile = await getUserProfile(userId);
   const userStatus = profile?.status ?? null;
-  const isAdminOrSuperAdmin = userStatus === 'super_admin' || userStatus === 'admin';
+  const normalizedStatus = String(userStatus ?? '').trim().toLowerCase();
+  const isAdminOrSuperAdmin = normalizedStatus === 'super_admin' || normalizedStatus === 'admin';
   const isDonoBanca = userStatus === 'dono_banca';
   const hasSidebarAccess = await hasSidebarPermission(profile ?? null, 'gestao_banca');
   const canAccessDonoBanca = isAdminOrSuperAdmin || isDonoBanca || hasSidebarAccess;

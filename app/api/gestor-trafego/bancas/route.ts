@@ -8,7 +8,7 @@ import { listGestorTrafegoBancas } from '@/lib/services/gestor-trafego-bancas';
 
 /**
  * GET /api/gestor-trafego/bancas
- * Lista bancas do gestor/gerente: user_bancas + donos na hierarquia Zaploto.
+ * Lista bancas do seletor: admin/super (todas); gestor/gerente (user_bancas + hierarquia).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado. Você não tem permissão para acessar o módulo Gestão de Tráfego.', 403);
     }
 
-    const result = await listGestorTrafegoBancas(profile.id, userId);
+    const result = await listGestorTrafegoBancas(profile.id, userId, profile.status);
     return successResponse(result);
   } catch (err: any) {
     if (err.message?.includes('Acesso negado') || err.message?.includes('Não autenticado')) {

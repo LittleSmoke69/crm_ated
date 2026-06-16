@@ -99,8 +99,28 @@ export async function resolveGestorTrafegoBancaIds(
 /** Lista bancas formatadas para o seletor do módulo Gestão de Tráfego. */
 export async function listGestorTrafegoBancas(
   profileId: string,
-  authUserId?: string
+  authUserId?: string,
+  profileStatus?: string | null
 ): Promise<GestorTrafegoBancaOption[]> {
+  const statusNorm = profileStatus?.trim().toLowerCase();
+  const urlToDonoId = await loadUrlToDonoIdMap();
+
+  if (statusNorm === 'admin' || statusNorm === 'super_admin') {
+    const { data: bancas } = await supabaseServiceRole
+      .from('crm_bancas')
+      .select('id, name, url')
+      .order('name', { ascending: true });
+    if (!bancas?.length) return [];
+    return bancas
+      .map((b: { id: string; name: string | null; url: string | null }) => ({
+        banca_id: b.id,
+        banca_name: b.name || b.url || b.id,
+        url: b.url,
+        dono_id: urlToDonoId.get(normalizeGestorTrafegoBancaUrl(b.url)) || null,
+      }))
+      .sort((a, b) => String(a.banca_name).localeCompare(String(b.banca_name)));
+  }
+
   const bancaIds = await resolveGestorTrafegoBancaIds(profileId, authUserId);
   if (bancaIds.length === 0) return [];
 
@@ -110,8 +130,6 @@ export async function listGestorTrafegoBancas(
     .in('id', bancaIds);
 
   if (!bancas?.length) return [];
-
-  const urlToDonoId = await loadUrlToDonoIdMap();
 
   return bancas
     .map((b: { id: string; name: string | null; url: string | null }) => ({

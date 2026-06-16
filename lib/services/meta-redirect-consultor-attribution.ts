@@ -26,6 +26,10 @@ export interface CombinedCampaignConsultorAssignment {
   consultor_id: string;
   source: 'manual' | 'redirect' | 'manual_redirect';
   redirect_groups: RedirectConsultorGroup[];
+  /** Grupo WhatsApp registrado manualmente pelo gestor */
+  manual_whatsapp_group_name?: string | null;
+  manual_whatsapp_group_invite_url?: string | null;
+  manual_daily_spend_estimate?: number | null;
   redirect_from_clicks?: boolean;
   redirect_from_linked_project?: boolean;
 }
@@ -473,16 +477,26 @@ export async function inferMetaCampaignIdsFromRedirectConsultors(
 }
 
 export function mergeCampaignConsultorAssignments(
-  manualAssignments: Array<{ campaign_id: string; consultor_id: string }>,
+  manualAssignments: Array<{
+    campaign_id: string;
+    consultor_id: string;
+    whatsapp_group_name?: string | null;
+    whatsapp_group_invite_url?: string | null;
+    daily_spend_estimate?: number | null;
+  }>,
   redirectAssignments: RedirectCampaignConsultorAssignment[]
 ): CombinedCampaignConsultorAssignment[] {
   const assignmentsByKey = new Map<string, CombinedCampaignConsultorAssignment>();
 
   for (const assignment of manualAssignments) {
     assignmentsByKey.set(`${assignment.campaign_id}:${assignment.consultor_id}`, {
-      ...assignment,
+      campaign_id: assignment.campaign_id,
+      consultor_id: assignment.consultor_id,
       source: 'manual',
       redirect_groups: [],
+      manual_whatsapp_group_name: assignment.whatsapp_group_name ?? null,
+      manual_whatsapp_group_invite_url: assignment.whatsapp_group_invite_url ?? null,
+      manual_daily_spend_estimate: assignment.daily_spend_estimate ?? null,
       redirect_from_clicks: false,
       redirect_from_linked_project: false,
     });

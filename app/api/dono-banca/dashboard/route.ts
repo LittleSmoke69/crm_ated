@@ -6,6 +6,7 @@ import {
   getDashboardDataByBancaId,
   fetchDashboardMetrics,
 } from '@/lib/services/dashboard/dono-banca';
+import { bancaHasConsultoresComCampanha } from '@/lib/services/meta-campaign-consultors';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /** Netlify/Vercel: dashboard agrega CRM por muitos consultores — precisa de limite alto para evitar 504/HTML de erro. */
@@ -61,8 +62,9 @@ export async function GET(req: NextRequest) {
       ? Math.max(parseInt(searchParams.get('offset') ?? '0', 10) || 0, 0)
       : undefined;
 
-    const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
-    const isDonoBanca = profile?.status === 'dono_banca';
+    const normalizedStatus = String(profile?.status ?? '').trim().toLowerCase();
+    const isAdminOrSuperAdmin = normalizedStatus === 'super_admin' || normalizedStatus === 'admin';
+    const isDonoBanca = normalizedStatus === 'dono_banca';
 
     if (onlyExternalMetrics) {
       let resolvedBancaId: string | null = bancaId;
@@ -101,18 +103,22 @@ export async function GET(req: NextRequest) {
         if (match) resolvedBancaId = match.id;
       }
 
-      const crmBaseUrl = toCrmBaseUrl(bancaUrl);
-      const externalMetrics = crmBaseUrl
-        ? await fetchDashboardMetrics(crmBaseUrl, dateFrom ?? undefined, dateTo ?? undefined, signal).catch((err) => {
-            if (isAbortError(err)) throw err;
-            return null;
-          })
-        : null;
+      const crmBaseUrl = bancaUrl ? toCrmBaseUrl(bancaUrl) : '';
+      const [externalMetrics, hasConsultoresComCampanha] = await Promise.all([
+        crmBaseUrl
+          ? fetchDashboardMetrics(crmBaseUrl, dateFrom ?? undefined, dateTo ?? undefined, signal).catch((err) => {
+              if (isAbortError(err)) throw err;
+              return null;
+            })
+          : Promise.resolve(null),
+        resolvedBancaId ? bancaHasConsultoresComCampanha(resolvedBancaId) : Promise.resolve(false),
+      ]);
 
       return successResponse({
         bancaId: resolvedBancaId,
         bancaInfo: { name: bancaName, url: bancaUrl },
         externalMetrics,
+        hasConsultoresComCampanha,
       });
     }
 
@@ -148,11 +154,18 @@ export async function GET(req: NextRequest) {
     const totalGerentes =
       (data as { totalGerentes?: number }).totalGerentes ?? data.gerentes?.length ?? 0;
     const hasMore = (data as { hasMoreGerentes?: boolean }).hasMoreGerentes ?? false;
+    const resolvedBancaIdForFlag = (data as { bancaId?: string }).bancaId ?? bancaId;
+    const includeTrafegoFlag =
+      Boolean(resolvedBancaIdForFlag) && (!hasPaging || (gerentesOffset ?? 0) === 0);
+    const hasConsultoresComCampanha = includeTrafegoFlag
+      ? await bancaHasConsultoresComCampanha(resolvedBancaIdForFlag!)
+      : undefined;
 
     return successResponse({
       ...data,
       totalGerentes,
       hasMore,
+      ...(hasConsultoresComCampanha !== undefined ? { hasConsultoresComCampanha } : {}),
     });
   } catch (err: any) {
     if (isAbortError(err) || signal.aborted) {

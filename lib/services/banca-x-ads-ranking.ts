@@ -22,6 +22,7 @@ import {
   type ExternalMetricsShape,
 } from '@/lib/services/dashboard/dono-banca';
 import { consolidateActiveCampaignsSpendAllIntegrations } from '@/lib/services/meta-sync-service';
+import { buildCampaignConsultorSummary, type CampaignConsultorSummary } from '@/lib/services/meta-campaign-consultors';
 import { formatMetaCalendarDayYmd } from '@/lib/meta/metaAdsService';
 import { metaVerboseLog } from '@/lib/utils/meta-debug-log';
 
@@ -52,6 +53,37 @@ function normalizeBancaUrlAbsolute(bancaUrl: string | null | undefined): string 
   if (!normalized) return null;
   return `https://${normalized}`.toLowerCase();
 }
+
+export type BancaXAdsRankingCampaignConsultor = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  total_deposited: number;
+  whatsapp_group_name?: string | null;
+  whatsapp_group_invite_url?: string | null;
+  gerente_id?: string | null;
+  gerente_name?: string | null;
+  /** Gasto diário estimado configurado pelo gestor (BRL). */
+  daily_spend_estimate?: number | null;
+};
+
+export type BancaXAdsRankingCampaignAttribution = {
+  campaign_id: string;
+  campaign_name: string | null;
+  spend: number;
+  consultor_total_deposited: number;
+  consultor_total_daily_spend_estimate: number;
+  assigned_consultors: BancaXAdsRankingCampaignConsultor[];
+};
+
+export type BancaXAdsRankingGestorAttribution = {
+  campaigns: BancaXAdsRankingCampaignAttribution[];
+  /** Soma de consultor_total_deposited por campanha (mesma regra da Gestão de Tráfego). */
+  total_deposited_via_gestor: number;
+  /** Soma das estimativas diárias configuradas pelo gestor. */
+  total_daily_spend_estimate: number;
+  consultores_count: number;
+};
 
 export type BancaXAdsRankingRowAds = {
   spend: number;
@@ -96,6 +128,8 @@ export type BancaXAdsRankingRow = {
   ads: BancaXAdsRankingRowAds;
   banca: BancaXAdsRankingRowBanca;
   conciliacao: BancaXAdsRankingRowConciliacao;
+  /** Consultores e grupos configurados pelo gestor (meta_campaign_consultors + dashboard-metrics). */
+  gestor_attribution?: BancaXAdsRankingGestorAttribution | null;
 };
 
 export type BancaXAdsRankingTotals = {
@@ -207,6 +241,10 @@ type LiveAdsAggregate = {
   spendByBanca: Map<string, number>;
   campaignsByBanca: Map<string, number>;
   bancasWithActiveAds: Set<string>;
+  campaignsByBancaDetail: Map<
+    string,
+    Array<{ campaign_id: string; campaign_name: string | null; spend: number }>
+  >;
 };
 
 /**
@@ -339,7 +377,19 @@ async function fetchLiveAdsForRange(
     .sort((a, b) => b.total_spend - a.total_spend);
   metaVerboseLog('[banca-x-ads-ranking] grouping by banca', { grouped: groupedForLog });
 
-  return { spendByBanca, campaignsByBanca, bancasWithActiveAds };
+  const campaignsByBancaDetail = new Map<
+    string,
+    Array<{ campaign_id: string; campaign_name: string | null; spend: number }>
+  >();
+  for (const [bancaId, info] of trace.entries()) {
+    campaignsByBancaDetail.set(bancaId, info.campaigns.map((c) => ({
+      campaign_id: c.campaign_id,
+      campaign_name: c.campaign_name,
+      spend: c.spend,
+    })));
+  }
+
+  return { spendByBanca, campaignsByBanca, bancasWithActiveAds, campaignsByBancaDetail };
 }
 
 function computeConciliacao(
@@ -366,6 +416,135 @@ function computeConciliacao(
   }
 
   return { roi_absoluto, roas, cpa_deposito, cobertura_gasto_pct, margem_pct, status };
+}
+
+async function fetchGerenteInfoByConsultorId(
+  consultorIds: string[]
+): Promise<Map<string, { gerente_id: string | null; gerente_name: string | null }>> {
+  const result = new Map<string, { gerente_id: string | null; gerente_name: string | null }>();
+  if (!consultorIds.length) return result;
+
+  const { data: consultorProfiles } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, enroller')
+    .in('id', consultorIds);
+
+  const enrollerIds = Array.from(
+    new Set(
+      (consultorProfiles || [])
+        .map((p: { enroller?: string | null }) => p.enroller)
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+
+  const gerenteById = new Map<string, { full_name: string | null; email: string }>();
+  if (enrollerIds.length) {
+    const { data: gerenteProfiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', enrollerIds);
+    (gerenteProfiles || []).forEach((g: { id: string; full_name: string | null; email: string }) => {
+      gerenteById.set(g.id, { full_name: g.full_name, email: g.email });
+    });
+  }
+
+  (consultorProfiles || []).forEach((p: { id: string; enroller?: string | null }) => {
+    const gerenteId = p.enroller?.trim() || null;
+    const gerente = gerenteId ? gerenteById.get(gerenteId) : null;
+    result.set(p.id, {
+      gerente_id: gerenteId,
+      gerente_name: gerente ? gerente.full_name || gerente.email || null : null,
+    });
+  });
+
+  return result;
+}
+
+async function buildGestorAttributionForBanca(
+  bancaId: string,
+  campaigns: Array<{ campaign_id: string; campaign_name: string | null; spend: number }>,
+  dateFrom: string,
+  dateTo: string
+): Promise<BancaXAdsRankingGestorAttribution | null> {
+  if (!bancaId || !campaigns.length) return null;
+  const campaignIds = campaigns.map((c) => c.campaign_id).filter(Boolean);
+  if (!campaignIds.length) return null;
+
+  try {
+    const summaryByCampaign = await buildCampaignConsultorSummary(bancaId, campaignIds, dateFrom, dateTo);
+    const spendByCampaignId = new Map(campaigns.map((c) => [c.campaign_id, c.spend]));
+    const nameByCampaignId = new Map(campaigns.map((c) => [c.campaign_id, c.campaign_name]));
+
+    const attributedCampaigns: BancaXAdsRankingCampaignAttribution[] = [];
+    const consultorIds = new Set<string>();
+    const campaignDrafts: Array<{
+      campaignId: string;
+      summary: CampaignConsultorSummary;
+    }> = [];
+
+    for (const campaignId of campaignIds) {
+      const summary = summaryByCampaign.get(campaignId);
+      const assigned = summary?.assigned_consultors ?? [];
+      if (!assigned.length || !summary) continue;
+      assigned.forEach((c) => consultorIds.add(c.id));
+      campaignDrafts.push({ campaignId, summary });
+    }
+
+    const gerenteByConsultorId = await fetchGerenteInfoByConsultorId(Array.from(consultorIds));
+
+    for (const { campaignId, summary } of campaignDrafts) {
+      const assigned = summary.assigned_consultors ?? [];
+      const mappedConsultors = assigned.map((c) => {
+        const gerente = gerenteByConsultorId.get(c.id);
+        return {
+          id: c.id,
+          email: c.email,
+          full_name: c.full_name,
+          total_deposited: Number(c.total_deposited) || 0,
+          whatsapp_group_name: c.whatsapp_group_name ?? null,
+          whatsapp_group_invite_url: c.whatsapp_group_invite_url ?? null,
+          gerente_id: gerente?.gerente_id ?? null,
+          gerente_name: gerente?.gerente_name ?? null,
+          daily_spend_estimate:
+            c.daily_spend_estimate != null ? Number(c.daily_spend_estimate) || 0 : null,
+        };
+      });
+      const consultor_total_daily_spend_estimate = mappedConsultors.reduce(
+        (sum, c) => sum + (Number(c.daily_spend_estimate) || 0),
+        0
+      );
+      attributedCampaigns.push({
+        campaign_id: campaignId,
+        campaign_name: nameByCampaignId.get(campaignId) ?? null,
+        spend: Number(spendByCampaignId.get(campaignId)) || 0,
+        consultor_total_deposited: Number(summary.consultor_total_deposited) || 0,
+        consultor_total_daily_spend_estimate,
+        assigned_consultors: mappedConsultors,
+      });
+    }
+
+    if (!attributedCampaigns.length) return null;
+
+    const total_deposited_via_gestor = attributedCampaigns.reduce(
+      (sum, c) => sum + (c.consultor_total_deposited || 0),
+      0
+    );
+    const total_daily_spend_estimate = attributedCampaigns.reduce(
+      (sum, c) => sum + (c.consultor_total_daily_spend_estimate || 0),
+      0
+    );
+
+    return {
+      campaigns: attributedCampaigns.sort((a, b) => b.spend - a.spend),
+      total_deposited_via_gestor,
+      total_daily_spend_estimate,
+      consultores_count: consultorIds.size,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[banca-x-ads-ranking] gestor attribution error:', message, { bancaId });
+    return null;
+  }
 }
 
 /** Monta o ranking só com bancas que têm ads ativos no período (campanhas com delivery_info=active). */
@@ -512,6 +691,14 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
     });
   }
 
+  const gestorAttributionResults = await Promise.allSettled(
+    bancas.map((b) => {
+      const bancaId = String(b.id);
+      const campaigns = liveAds.campaignsByBancaDetail.get(bancaId) ?? [];
+      return buildGestorAttributionForBanca(bancaId, campaigns, dateFrom, dateTo);
+    })
+  );
+
   const rows: BancaXAdsRankingRow[] = bancas.map((b, idx) => {
     const bancaId = String(b.id);
     const spend = Number(liveAds.spendByBanca.get(bancaId)) || 0;
@@ -546,6 +733,9 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
     };
 
     const conciliacao = computeConciliacao(spend, totalDeposited, awardedCount, banca.available);
+    const gestorResult = gestorAttributionResults[idx];
+    const gestor_attribution =
+      gestorResult.status === 'fulfilled' ? gestorResult.value : null;
 
     return {
       rank: 0,
@@ -555,6 +745,7 @@ export async function getBancaXAdsRanking(opts: BancaXAdsRankingOptions = {}): P
       ads,
       banca,
       conciliacao,
+      gestor_attribution,
     };
   });
 

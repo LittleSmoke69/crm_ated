@@ -307,7 +307,7 @@ export default function GestorTrafegoZaplinkPage() {
 
   return (
     <Layout>
-      <div className="w-full min-w-0 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+      <div className="w-full min-w-0 px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Zaplink — Meus formulários e leads</h1>
         </div>

@@ -28,7 +28,9 @@ import {
   Trophy,
   Loader2,
   Filter,
-  Download
+  Download,
+  ExternalLink,
+  Megaphone
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
@@ -139,6 +141,11 @@ export default function DonoBancaHierarquia({
   const checking = serverUserId ? false : authChecking;
 
   const showBancaSelector = isAdminOrSuperAdmin || canSelectBanca;
+  const normalizedUserStatus = String(serverUserStatus ?? '').trim().toLowerCase();
+  const canShowGestorTrafegoButton =
+    isAdminOrSuperAdmin ||
+    normalizedUserStatus === 'admin' ||
+    normalizedUserStatus === 'super_admin';
   
   const [loading, setLoading] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(
@@ -149,6 +156,7 @@ export default function DonoBancaHierarquia({
   const [externalMetricsError, setExternalMetricsError] = useState<string | null>(initialData?.externalMetricsError || null);
   const [bancaName, setBancaName] = useState<string | null>(initialData?.bancaInfo?.name || null);
   const [bancaId, setBancaId] = useState<string | null>(initialData?.bancaId || null);
+  const [hasConsultoresComCampanha, setHasConsultoresComCampanha] = useState(false);
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -322,8 +330,8 @@ export default function DonoBancaHierarquia({
     return { dateFrom, dateTo };
   };
 
-  /** Mesmo padrão da gestão de consultores: lotes pequenos para não estourar timeout/edge na Netlify. */
-  const BATCH_SIZE = 5;
+  /** Lotes de gerentes por request — equilíbrio entre round-trips e timeout do edge. */
+  const BATCH_SIZE = 8;
 
   const parseDashboardResponse = async (response: Response) => {
     const rawText = await response.text();
@@ -379,6 +387,7 @@ export default function DonoBancaHierarquia({
     setExternalMetricsError(null);
     setGerentes([]);
     setTop5Consultants([]);
+    setHasConsultoresComCampanha(false);
     if (bancaChanged || lastLoadedBancaRef.current === null) {
       setExternalMetrics(null);
       setBancaName(null);
@@ -408,6 +417,9 @@ export default function DonoBancaHierarquia({
           setExternalMetrics(em as ExternalMetrics);
           setExternalMetricsError(null);
           setIsAuthorized(true);
+        }
+        if (typeof data.hasConsultoresComCampanha === 'boolean') {
+          setHasConsultoresComCampanha(data.hasConsultoresComCampanha);
         }
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') return;
@@ -462,6 +474,9 @@ export default function DonoBancaHierarquia({
             if ((data.bancaInfo as { name?: string } | undefined)?.name) {
               setBancaName((data.bancaInfo as { name: string }).name);
             }
+            if (typeof data.hasConsultoresComCampanha === 'boolean') {
+              setHasConsultoresComCampanha(data.hasConsultoresComCampanha);
+            }
             isFirstBatch = false;
           } else {
             setGerentes((prev) => [...prev, ...(((data.gerentes as Gerente[]) || []) as Gerente[])]);
@@ -496,9 +511,9 @@ export default function DonoBancaHierarquia({
     };
 
     try {
-      await loadExternalMetrics();
+      // Métricas do CRM e lotes de gerentes em paralelo (gerentes usam skip_external_metrics).
+      await Promise.all([loadExternalMetrics(), loadGerentesBatches()]);
       if (!dashboardFetchGen.isCurrent(requestId)) return;
-      await loadGerentesBatches();
       if (dashboardFetchGen.isCurrent(requestId)) {
         lastLoadedBancaRef.current = bancaKey;
       }
@@ -551,6 +566,19 @@ export default function DonoBancaHierarquia({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const effectiveBancaIdForTrafego = showBancaSelector ? selectedBancaId : bancaId;
+  const gestorTrafegoHref =
+    effectiveBancaIdForTrafego
+      ? withTenantSlug(`/gestor-trafego?banca_id=${encodeURIComponent(effectiveBancaIdForTrafego)}`)
+      : withTenantSlug('/gestor-trafego');
+
+  const handleOpenGestorTrafego = () => {
+    if (effectiveBancaIdForTrafego && typeof window !== 'undefined') {
+      window.sessionStorage.setItem('gestor_effective_dono_id', `banca:${effectiveBancaIdForTrafego}`);
+    }
+    window.location.href = gestorTrafegoHref;
   };
 
   const filteredGerentes = gerentes.filter(g => 
@@ -691,6 +719,19 @@ export default function DonoBancaHierarquia({
           </div>
           
           <div className="flex items-center gap-2 flex-wrap">
+            {canShowGestorTrafegoButton && hasConsultoresComCampanha && effectiveBancaIdForTrafego && (
+              <button
+                type="button"
+                onClick={handleOpenGestorTrafego}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-purple-600 hover:bg-purple-700 text-white"
+                title="Abrir Gestão de Tráfego desta banca"
+              >
+                <Megaphone className="w-4 h-4" />
+                Gestão de Tráfego
+                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+              </button>
+            )}
+
             <button
               onClick={() => setExportCsvModalOpen(true)}
               disabled={!userId}

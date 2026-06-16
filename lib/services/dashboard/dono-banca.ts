@@ -1,6 +1,7 @@
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getSubordinateIds } from '@/lib/middleware/permissions';
 import { getMetaInsightsAggregated, getMetaCampaignsWithInsights } from '@/lib/services/meta-sync-service';
+import { crmServiceVerboseLog } from '@/lib/utils/meta-debug-log';
 
 export interface DonoBancaDashboardParams {
   userId: string;
@@ -71,6 +72,26 @@ function getCrmFetchSignal(requestSignal?: AbortSignal | null, timeoutMs = 60000
   return AbortSignal.any([requestSignal, timeout]);
 }
 
+/** Consultores buscados em paralelo no CRM (evita N×latência sequencial). */
+const CRM_INDICATEDS_CONCURRENCY = (() => {
+  const raw = parseInt(String(process.env.CRM_INDICATEDS_CONCURRENCY ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return raw;
+  return 10;
+})();
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const chunk = items.slice(i, i + concurrency);
+    results.push(...(await Promise.all(chunk.map(fn))));
+  }
+  return results;
+}
+
 /** 404 esperado quando consultor não existe ou não tem indicados no período. */
 function isExpectedEmptyIndicatedsResponse(status: number, body: string): boolean {
   if (status !== 404) return false;
@@ -80,6 +101,12 @@ function isExpectedEmptyIndicatedsResponse(status: number, body: string): boolea
     lower.includes('no indicateds found') ||
     lower.includes('nenhum indicado')
   );
+}
+
+/** Erros que não devem gerar warn verboso por consultor (rate limit, vazio esperado). */
+function isSuppressedIndicatedsFetchError(status: number, body: string): boolean {
+  if (status === 429) return true;
+  return isExpectedEmptyIndicatedsResponse(status, body);
 }
 
 /** Lead retornado por get-indicateds-by-consultant (campos usados na agregação) */
@@ -169,6 +196,71 @@ export async function fetchIndicatedsByPeriod(
 }
 
 /**
+ * Busca indicados de um único consultor (com paginação interna).
+ */
+async function fetchIndicatedsForConsultant(
+  cleanBancaUrl: string,
+  email: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  signal?: AbortSignal
+): Promise<IndicatedLead[]> {
+  const trimmed = email?.trim?.();
+  if (!trimmed) return [];
+  const apiKey = process.env.CRM_API_KEY;
+  const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
+  const perPage = 2000;
+  const maxPagesPerConsultant = 50;
+  const leads: IndicatedLead[] = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore && page <= maxPagesPerConsultant) {
+    throwIfAborted(signal);
+    const params = new URLSearchParams();
+    params.set('consultant', trimmed);
+    params.set('per_page', String(perPage));
+    params.set('page', String(page));
+    params.set('sort', 'created_at');
+    params.set('direction', 'desc');
+    if (dateFrom) params.set('from', dateFrom);
+    if (dateTo) params.set('to', dateTo);
+    const url = `${baseUrl}?${params.toString()}`;
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+        signal: getCrmFetchSignal(signal),
+      });
+      if (!res.ok) {
+        if (page === 1) {
+          const body = await res.text().catch(() => '');
+          if (!isSuppressedIndicatedsFetchError(res.status, body)) {
+            await logCrmFetchFailure('get-indicateds-by-consultant', new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers }), {
+              url,
+              hasApiKey: Boolean(apiKey),
+              durationMs: 0,
+              extra: { consultant: `${trimmed.slice(0, 5)}***`, page },
+            });
+          }
+        }
+        break;
+      }
+      const result = await res.json();
+      const data = result?.data;
+      if (!Array.isArray(data) || data.length === 0) break;
+      leads.push(...(data as IndicatedLead[]));
+      if (data.length < perPage) hasMore = false;
+      else page++;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      break;
+    }
+  }
+  return leads;
+}
+
+/**
  * Busca indicados da banca da mesma forma que o CRM: uma chamada get-indicateds-by-consultant
  * por consultor/gerente (consultant=email). Agrega todos os resultados.
  * Usar quando a API externa exigir o parâmetro consultant para retornar dados.
@@ -181,73 +273,28 @@ export async function fetchIndicatedsByConsultants(
   signal?: AbortSignal
 ): Promise<IndicatedLead[]> {
   if (!consultantEmails.length) return [];
-  const apiKey = process.env.CRM_API_KEY;
-  const baseUrl = `${cleanBancaUrl}/api/crm/get-indicateds-by-consultant`;
-  const perPage = 2000;
-  const maxPagesPerConsultant = 50;
+  const uniqueEmails = [...new Set(consultantEmails.map((e) => e?.trim?.()).filter(Boolean) as string[])];
+  if (!uniqueEmails.length) return [];
+
+  const perConsultant = await mapWithConcurrency(
+    uniqueEmails,
+    CRM_INDICATEDS_CONCURRENCY,
+    (email) => fetchIndicatedsForConsultant(cleanBancaUrl, email, dateFrom, dateTo, signal)
+  );
+
   const allData: IndicatedLead[] = [];
   const seenIds = new Set<string>();
-
-  for (const email of consultantEmails) {
-    throwIfAborted(signal);
-    const trimmed = email?.trim?.();
-    if (!trimmed) continue;
-    let page = 1;
-    let hasMore = true;
-    while (hasMore && page <= maxPagesPerConsultant) {
-      throwIfAborted(signal);
-      const params = new URLSearchParams();
-      params.set('consultant', trimmed);
-      params.set('per_page', String(perPage));
-      params.set('page', String(page));
-      params.set('sort', 'created_at');
-      params.set('direction', 'desc');
-      if (dateFrom) params.set('from', dateFrom);
-      if (dateTo) params.set('to', dateTo);
-      const url = `${baseUrl}?${params.toString()}`;
-      try {
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-          signal: getCrmFetchSignal(signal),
-        });
-        if (!res.ok) {
-          if (page === 1) {
-            const body = await res.text().catch(() => '');
-            if (!isExpectedEmptyIndicatedsResponse(res.status, body)) {
-              await logCrmFetchFailure('get-indicateds-by-consultant', new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers }), {
-                url,
-                hasApiKey: Boolean(apiKey),
-                durationMs: 0,
-                extra: { consultant: `${trimmed.slice(0, 5)}***`, page },
-              });
-            }
-          }
-          break;
-        }
-        const result = await res.json();
-        const data = result?.data;
-        if (!Array.isArray(data) || data.length === 0) break;
-        for (const lead of data as IndicatedLead[]) {
-          const id = lead?.id ?? (lead as any)?._originalId;
-          if (id && !seenIds.has(String(id))) {
-            seenIds.add(String(id));
-            allData.push(lead);
-          } else if (!id) {
-            allData.push(lead);
-          }
-        }
-        if (data.length < perPage) hasMore = false;
-        else page++;
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') throw err;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[fetchIndicatedsByConsultants] Erro consultant=${trimmed.slice(0, 5)}*** page=${page}:`, message);
-        break;
+  for (const leads of perConsultant) {
+    for (const lead of leads) {
+      const id = lead?.id ?? (lead as { _originalId?: string | number })?._originalId;
+      if (id && !seenIds.has(String(id))) {
+        seenIds.add(String(id));
+        allData.push(lead);
+      } else if (!id) {
+        allData.push(lead);
       }
     }
   }
-  console.log(`[fetchIndicatedsByConsultants] ${consultantEmails.length} consultores | ${allData.length} leads`);
   return allData;
 }
 
@@ -379,7 +426,7 @@ export async function getDashboardDataFromIndicatedsOnly(
   let indicateds: IndicatedLead[] = [];
   try {
     indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo);
-    console.log('[GestorTrafego/IndicatedsOnly] Indicados no período:', indicateds.length);
+    crmServiceVerboseLog('[GestorTrafego/IndicatedsOnly] Indicados no período:', indicateds.length);
   } catch (err: any) {
     console.warn('[GestorTrafego/IndicatedsOnly] Erro ao buscar indicados:', err?.message);
     let metaFunnel = null;
@@ -797,13 +844,13 @@ export async function fetchDashboardMetrics(
 
   const cached = dashboardMetricsCache.get(key);
   if (cached && cached.freshUntil > Date.now()) {
-    console.log('[DonoBanca Service] dashboard-metrics cache HIT:', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics cache HIT:', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
     return cached.value;
   }
 
   let inflight = dashboardMetricsInflight.get(key);
   if (inflight) {
-    console.log('[DonoBanca Service] dashboard-metrics dedup (compartilhando requisição em voo):', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics dedup (compartilhando requisição em voo):', { url: cleanBancaUrl, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
   } else {
     inflight = fetchDashboardMetricsUncached(cleanBancaUrl, dateFrom, dateTo)
       .then((value) => {
@@ -852,7 +899,7 @@ async function fetchDashboardMetricsUncached(
       dateFrom: dateFrom ?? null,
       dateTo: dateTo ?? null,
     };
-    console.log('[DonoBanca Service] dashboard-metrics status:', res.status, `(${durationMs}ms)`, {
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics status:', res.status, `(${durationMs}ms)`, {
       url: requestUrl,
       hasApiKey: Boolean(apiKey),
     });
@@ -879,7 +926,7 @@ async function fetchDashboardMetricsUncached(
     const metricsKeys = metrics && typeof metrics === 'object'
       ? Object.keys(metrics as Record<string, unknown>)
       : [];
-    console.log('[DonoBanca Service] dashboard-metrics payload fields:', {
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics payload fields:', {
       rootKeys: externalRootKeys,
       metricsKeys,
       hasSuccessFlag: Boolean(externalData?.success),
@@ -906,7 +953,7 @@ async function fetchDashboardMetricsUncached(
       ltv_avg: Number(metrics.ltv_avg) || 0,
       net_profit: Number(metrics.net_profit) || (Number(metrics.total_deposited) || 0) - (Number(metrics.total_prizes) || 0),
     };
-    console.log('[DonoBanca Service] dashboard-metrics normalized snapshot:', normalizedMetrics);
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics normalized snapshot:', normalizedMetrics);
     return normalizedMetrics;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -973,6 +1020,7 @@ export async function getDonoBancaDashboardData({
 
   // Mesma forma que o CRM: buscar indicados por consultant=email — apenas para gerentes desta página (evita timeout na Netlify)
   let indicatedsRaw: IndicatedLead[] = [];
+  let consultoresPage: Array<{ id: string; email: string; full_name: string | null; enroller: string | null }> = [];
   if (cleanBancaUrl && gerentesPage.length > 0) {
     const consultantEmails: string[] = [];
     for (const g of gerentesPage) {
@@ -981,11 +1029,12 @@ export async function getDonoBancaDashboardData({
     const gerenteIds = gerentesPage.map((g: { id: string }) => g.id);
     const { data: consultores } = await supabaseServiceRole
       .from('profiles')
-      .select('id, email, full_name')
+      .select('id, email, full_name, enroller')
       .in('enroller', gerenteIds)
       .eq('status', 'consultor');
-    if (consultores?.length) {
-      for (const c of consultores) {
+    consultoresPage = consultores || [];
+    if (consultoresPage.length) {
+      for (const c of consultoresPage) {
         if (c.email?.trim()) consultantEmails.push(c.email.trim());
       }
     }
@@ -1005,13 +1054,13 @@ export async function getDonoBancaDashboardData({
   let externalMetrics: ExternalMetricsShape | null = externalMetricsRaw;
 
   if (externalMetrics) {
-    console.log('[DonoBanca Service] dashboard-metrics recebidas. total_leads:', externalMetrics.total_leads);
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics recebidas. total_leads:', externalMetrics.total_leads);
   }
-  console.log('[DonoBanca Service] Gerentes encontrados:', gerentes?.length || 0);
+  crmServiceVerboseLog('[DonoBanca Service] Gerentes encontrados:', gerentes?.length || 0);
 
   // Agrega indicados por consultor para preencher métricas dos gerentes
   const metricsByConsultantEmail = aggregateIndicatedsByConsultant(indicatedsRaw);
-  console.log('[DonoBanca Service] Indicados agregados por consultor:', metricsByConsultantEmail.size);
+  crmServiceVerboseLog('[DonoBanca Service] Indicados agregados por consultor:', metricsByConsultantEmail.size);
 
   // Dados de gráficos não são mais buscados da API externa
   const chartData = {};
@@ -1026,103 +1075,98 @@ export async function getDonoBancaDashboardData({
     net_profit: number;
   }> = [];
 
-  const gerentesComMetricas = await Promise.all(
-    (gerentesPage || []).map(async (gerente: any) => {
-      console.log(`[DonoBanca Service] 📊 TABELA GERENTES - Buscando métricas do gerente: ${gerente.email}`);
-      
-      // Busca consultores deste gerente (com nome completo)
-      const gerenteSubordinateIds = await getSubordinateIds(gerente.id);
-      const { data: gerenteConsultants } = await supabaseServiceRole
-        .from('profiles')
-        .select('id, email, full_name')
-        .in('id', gerenteSubordinateIds)
-        .eq('status', 'consultor');
+  const consultoresByGerenteId = new Map<string, typeof consultoresPage>();
+  for (const c of consultoresPage) {
+    if (!c.enroller) continue;
+    if (!consultoresByGerenteId.has(c.enroller)) consultoresByGerenteId.set(c.enroller, []);
+    consultoresByGerenteId.get(c.enroller)!.push(c);
+  }
 
-      const consultorsCount = gerenteConsultants?.length || 0;
-      console.log(`[DonoBanca Service] 👥 Gerente ${gerente.email} tem ${consultorsCount} consultores`);
+  const userIdsInThisBancaDono = new Set<string>();
+  if (bancaIdDono && consultoresPage.length > 0) {
+    const consultantIds = consultoresPage.map((c) => c.id);
+    const { data: ubRows } = await supabaseServiceRole
+      .from('user_bancas')
+      .select('user_id, banca_ids')
+      .in('user_id', consultantIds);
+    for (const r of ubRows || []) {
+      const row = r as { user_id: string; banca_ids: string[] };
+      if (Array.isArray(row.banca_ids) && row.banca_ids.includes(bancaIdDono)) {
+        userIdsInThisBancaDono.add(row.user_id);
+      }
+    }
+  }
 
-      // Inicializa métricas agregadas do gerente (soma de todos os consultores)
-      let gerenteMetrics = {
-        total_leads: 0,
-        total_deposited: 0,
-        total_bets: 0,
-        total_prizes: 0,
-        active_leads: 0,
-        net_profit: 0,
-        conversion_rate: 0,
-        total_depositos_count: 0,
-      };
+  const gerentesComMetricas = (gerentesPage || []).map((gerente: { id: string; email: string; full_name: string | null }) => {
+    const gerenteConsultants = consultoresByGerenteId.get(gerente.id) || [];
+    const consultorsCount = gerenteConsultants.length;
 
-      // Usa o mapa de métricas por consultor (uma única requisição get-indicateds-by-consultant já feita)
-      if (gerenteConsultants && gerenteConsultants.length > 0) {
-        const consultantsFiltered = gerenteConsultants.filter((c: any) => c.email);
-        for (const consultor of consultantsFiltered) {
-          const metrics = metricsByConsultantEmail.get(consultor.email) ?? EMPTY_CONSULTANT_METRICS;
-          gerenteMetrics.total_leads += metrics.total_leads;
-          gerenteMetrics.total_deposited += metrics.total_deposited;
-          gerenteMetrics.total_bets += metrics.total_bets;
-          gerenteMetrics.total_prizes += metrics.total_prizes;
-          gerenteMetrics.active_leads += metrics.active_leads;
-          gerenteMetrics.net_profit += metrics.net_profit;
-          gerenteMetrics.total_depositos_count += metrics.total_depositos_count;
-          allConsultantsData.push({
-            id: consultor.id,
-            email: consultor.email,
-            name: consultor.full_name || consultor.email,
-            total_deposited: metrics.total_deposited,
-            total_leads: metrics.total_leads,
-            net_profit: metrics.net_profit,
-          });
-        }
-        gerenteMetrics.conversion_rate = gerenteMetrics.total_leads > 0
-          ? (gerenteMetrics.active_leads / gerenteMetrics.total_leads) * 100
-          : 0;
-        console.log(`[DonoBanca Service] ✅ SOMA FINAL do gerente ${gerente.email} (${consultorsCount} consultores):`, {
-          total_leads: gerenteMetrics.total_leads,
-          total_deposited: `R$ ${(gerenteMetrics.total_deposited / 1000).toFixed(1)}k`,
-          net_profit: `R$ ${(gerenteMetrics.net_profit / 1000).toFixed(1)}k`,
-          conversion_rate: `${gerenteMetrics.conversion_rate.toFixed(2)}%`,
-          total_depositos_count: gerenteMetrics.total_depositos_count,
+    let gerenteMetrics = {
+      total_leads: 0,
+      total_deposited: 0,
+      total_bets: 0,
+      total_prizes: 0,
+      active_leads: 0,
+      net_profit: 0,
+      conversion_rate: 0,
+      total_depositos_count: 0,
+    };
+
+    if (gerenteConsultants.length > 0) {
+      const consultantsFiltered = gerenteConsultants.filter((c) => c.email);
+      for (const consultor of consultantsFiltered) {
+        const metrics = metricsByConsultantEmail.get(consultor.email) ?? EMPTY_CONSULTANT_METRICS;
+        gerenteMetrics.total_leads += metrics.total_leads;
+        gerenteMetrics.total_deposited += metrics.total_deposited;
+        gerenteMetrics.total_bets += metrics.total_bets;
+        gerenteMetrics.total_prizes += metrics.total_prizes;
+        gerenteMetrics.active_leads += metrics.active_leads;
+        gerenteMetrics.net_profit += metrics.net_profit;
+        gerenteMetrics.total_depositos_count += metrics.total_depositos_count;
+        allConsultantsData.push({
+          id: consultor.id,
+          email: consultor.email,
+          name: consultor.full_name || consultor.email,
+          total_deposited: metrics.total_deposited,
+          total_leads: metrics.total_leads,
+          net_profit: metrics.net_profit,
         });
       }
+      gerenteMetrics.conversion_rate = gerenteMetrics.total_leads > 0
+        ? (gerenteMetrics.active_leads / gerenteMetrics.total_leads) * 100
+        : 0;
+    }
 
-      let consultoresEmOutrasBancas: Array<{ id: string; email: string; full_name: string | null }> = [];
-      if (bancaIdDono && (gerenteConsultants || []).length > 0) {
-        const consultantIds = (gerenteConsultants || []).map((c: { id: string }) => c.id);
-        const { data: ubRows } = await supabaseServiceRole
-          .from('user_bancas')
-          .select('user_id, banca_ids')
-          .in('user_id', consultantIds);
-        const userIdsInThisBanca = new Set(
-          (ubRows || []).filter((r: { user_id: string; banca_ids: string[] }) => Array.isArray(r.banca_ids) && r.banca_ids.includes(bancaIdDono!)).map((r: { user_id: string }) => r.user_id)
-        );
-        consultoresEmOutrasBancas = (gerenteConsultants || []).filter((c: { id: string }) => !userIdsInThisBanca.has(c.id)).map((c: { id: string; email: string; full_name: string | null }) => ({ id: c.id, email: c.email, full_name: c.full_name }));
-      }
+    const consultoresEmOutrasBancas =
+      bancaIdDono && gerenteConsultants.length > 0
+        ? gerenteConsultants
+            .filter((c) => !userIdsInThisBancaDono.has(c.id))
+            .map((c) => ({ id: c.id, email: c.email, full_name: c.full_name }))
+        : [];
 
-      return {
-        ...gerente,
-        consultoresEmOutrasBancas,
-        metrics: {
-          campaigns: 0,
-          contacts: gerenteMetrics.total_leads,
-          processed: gerenteMetrics.total_leads,
-          failed: 0,
-          consultorsCount: consultorsCount,
-          successRate: gerenteMetrics.conversion_rate.toFixed(2),
-          externalKpis: {
-            total_leads: gerenteMetrics.total_leads,
-            total_deposited: gerenteMetrics.total_deposited,
-            total_bets: gerenteMetrics.total_bets,
-            total_prizes: gerenteMetrics.total_prizes,
-            active_leads: gerenteMetrics.active_leads,
-            net_profit: gerenteMetrics.net_profit,
-            conversion_rate: gerenteMetrics.conversion_rate,
-            total_depositos_count: gerenteMetrics.total_depositos_count,
-          },
+    return {
+      ...gerente,
+      consultoresEmOutrasBancas,
+      metrics: {
+        campaigns: 0,
+        contacts: gerenteMetrics.total_leads,
+        processed: gerenteMetrics.total_leads,
+        failed: 0,
+        consultorsCount,
+        successRate: gerenteMetrics.conversion_rate.toFixed(2),
+        externalKpis: {
+          total_leads: gerenteMetrics.total_leads,
+          total_deposited: gerenteMetrics.total_deposited,
+          total_bets: gerenteMetrics.total_bets,
+          total_prizes: gerenteMetrics.total_prizes,
+          active_leads: gerenteMetrics.active_leads,
+          net_profit: gerenteMetrics.net_profit,
+          conversion_rate: gerenteMetrics.conversion_rate,
+          total_depositos_count: gerenteMetrics.total_depositos_count,
         },
-      };
-    })
-  );
+      },
+    };
+  });
 
   // Total de depósitos (contagem) — só com visão completa de gerentes; em páginas parciais o funil usa só o agregado da API
   if (!paginateGerentes) {
@@ -1131,7 +1175,7 @@ export async function getDonoBancaDashboardData({
       0
     );
     const agregadoDepositosCount = externalMetrics?.total_depositos_count ?? 0;
-    console.log('[DonoBanca Service] 📦 total_depositos_count (funil):', {
+    crmServiceVerboseLog('[DonoBanca Service] 📦 total_depositos_count (funil):', {
       agregado_api: agregadoDepositosCount,
       soma_consultores: sumTotalDepositosCount,
     });
@@ -1143,7 +1187,7 @@ export async function getDonoBancaDashboardData({
   // ============================================
   // TOP 5 CONSULTORES: Ordena por vendas (total_deposited) e pega os top 5
   // ============================================
-  console.log('[DonoBanca Service] 📊 Total de consultores coletados:', allConsultantsData.length);
+  crmServiceVerboseLog('[DonoBanca Service] 📊 Total de consultores coletados:', allConsultantsData.length);
   
   const consultantRankContributors = allConsultantsData.map((c) => ({
     email: c.email,
@@ -1162,45 +1206,38 @@ export async function getDonoBancaDashboardData({
           value: c.total_deposited,
         }));
 
-  console.log('[DonoBanca Service] 🏆 Top 5 Consultores por Vendas:', top5Consultants);
+  crmServiceVerboseLog('[DonoBanca Service] 🏆 Top 5 Consultores por Vendas:', top5Consultants);
 
   // Calcula total de consultores para log
   const totalConsultores = gerentesComMetricas.reduce((sum, g) => sum + (g.metrics.consultorsCount || 0), 0);
   
   // Log final resumindo todas as requisições
-  console.log('[DonoBanca Service] 📋 Resumo das requisições:');
-  console.log('[DonoBanca Service]   ✅ RESUMO GERAL: Métricas agregadas da banca (sem consultant)');
-  console.log('[DonoBanca Service]   ✅ TABELA GERENTES: Soma de métricas de todos os consultores (com consultant)');
-  console.log('[DonoBanca Service]   ✅ Gerentes processados:', gerentesComMetricas.length);
-  console.log('[DonoBanca Service]   ✅ Total de consultores:', totalConsultores);
-  console.log('[DonoBanca Service]   ⚡ OTIMIZAÇÃO: Uma única requisição get-indicateds-by-consultant (from/to) → agregado por consultor');
-  console.log('[DonoBanca Service]   📊 API: /api/crm/get-indicateds-by-consultant');
-  console.log('[DonoBanca Service]   📅 Filtros aplicados: date_from=' + dateFrom + ', date_to=' + dateTo);
-  console.log('[DonoBanca Service]   💰 total_depositos_count (para estágio Depósitos do funil):', externalMetrics?.total_depositos_count ?? 'n/a');
-  console.log('[DonoBanca Service] 🎉 Processamento concluído!');
+  crmServiceVerboseLog('[DonoBanca Service] 📋 Resumo das requisições:');
+  crmServiceVerboseLog('[DonoBanca Service]   ✅ RESUMO GERAL: Métricas agregadas da banca (sem consultant)');
+  crmServiceVerboseLog('[DonoBanca Service]   ✅ TABELA GERENTES: Soma de métricas de todos os consultores (com consultant)');
+  crmServiceVerboseLog('[DonoBanca Service]   ✅ Gerentes processados:', gerentesComMetricas.length);
+  crmServiceVerboseLog('[DonoBanca Service]   ✅ Total de consultores:', totalConsultores);
+  crmServiceVerboseLog('[DonoBanca Service]   ⚡ OTIMIZAÇÃO: Uma única requisição get-indicateds-by-consultant (from/to) → agregado por consultor');
+  crmServiceVerboseLog('[DonoBanca Service]   📊 API: /api/crm/get-indicateds-by-consultant');
+  crmServiceVerboseLog('[DonoBanca Service]   📅 Filtros aplicados: date_from=' + dateFrom + ', date_to=' + dateTo);
+  crmServiceVerboseLog('[DonoBanca Service]   💰 total_depositos_count (para estágio Depósitos do funil):', externalMetrics?.total_depositos_count ?? 'n/a');
+  crmServiceVerboseLog('[DonoBanca Service] 🎉 Processamento concluído!');
 
-  // Meta Ads: busca insights agregados para o funil 3D e dados por campanha (pulado quando skipMeta=true)
   let metaFunnel = null;
   let metaCampaignsData: Awaited<ReturnType<typeof getMetaCampaignsWithInsights>> = [];
-  let bancaIdForMeta: string | undefined;
-  try {
-    const { data: bancas } = await supabaseServiceRole.from('crm_bancas').select('id, url');
-    const bancaMatch = (bancas || []).find(
-      (b: { url: string }) => normalizeBancaUrl(b.url) === normalizeBancaUrl(donoProfile?.banca_url ?? '')
-    );
-    bancaIdForMeta = bancaMatch?.id;
-    if (bancaIdForMeta && !skipMeta && (!paginateGerentes || goffset === 0)) {
+  if (bancaIdDono && !skipMeta && (!paginateGerentes || goffset === 0)) {
+    try {
       [metaFunnel, metaCampaignsData] = await Promise.all([
-        getMetaInsightsAggregated(bancaIdForMeta, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
-        getMetaCampaignsWithInsights(bancaIdForMeta, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
+        getMetaInsightsAggregated(bancaIdDono, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
+        getMetaCampaignsWithInsights(bancaIdDono, dateFrom ?? undefined, dateTo ?? undefined, metaActiveOnly),
       ]);
+    } catch (metaErr: any) {
+      console.warn('[DonoBanca Service] Meta insights não disponíveis:', metaErr?.message);
     }
-  } catch (metaErr: any) {
-    console.warn('[DonoBanca Service] Meta insights não disponíveis:', metaErr?.message);
   }
 
   return {
-    bancaId: bancaIdForMeta ?? undefined,
+    bancaId: bancaIdDono ?? undefined,
     bancaInfo: {
       name: donoProfile?.banca_name || null,
       url: donoProfile?.banca_url || null,
@@ -1315,12 +1352,31 @@ export async function getDashboardDataByBancaId({
   const consultoresByEnroller = new Map<string, typeof consultoresInBanca>();
   const consultoresSemGerente: typeof consultoresInBanca = [];
   const gerenteIdsToProcess = new Set<string>(gerentesProfiles.map((g: { id: string }) => g.id));
+  const profileStatusById = new Map(
+    (profilesInBanca || []).map((p: { id: string; status: string }) => [p.id, p.status])
+  );
+
+  const missingEnrollerIds = [
+    ...new Set(
+      consultoresInBanca
+        .map((c: { enroller?: string | null }) => c.enroller)
+        .filter((id): id is string => Boolean(id) && !profileStatusById.has(id!))
+    ),
+  ];
+  if (missingEnrollerIds.length > 0) {
+    const { data: enrollerProfiles } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, status')
+      .in('id', missingEnrollerIds);
+    for (const p of enrollerProfiles || []) {
+      profileStatusById.set(p.id, p.status);
+    }
+  }
 
   for (const c of consultoresInBanca) {
     if (c.enroller) {
-      const enrollerProfile = await supabaseServiceRole.from('profiles').select('id, status').eq('id', c.enroller).single();
-      if (enrollerProfile?.data?.status === 'gerente') {
-        gerenteIdsToProcess.add(enrollerProfile.data.id);
+      if (profileStatusById.get(c.enroller) === 'gerente') {
+        gerenteIdsToProcess.add(c.enroller);
         if (!consultoresByEnroller.has(c.enroller)) consultoresByEnroller.set(c.enroller, []);
         consultoresByEnroller.get(c.enroller)!.push(c);
       } else {
@@ -1331,10 +1387,11 @@ export async function getDashboardDataByBancaId({
     }
   }
 
-  // Gerentes na banca: incluir consultores subordinados que também estão na banca
+  // Gerentes na banca: incluir consultores subordinados diretos que também estão na banca
   for (const g of gerentesProfiles) {
-    const subIds = await getSubordinateIds(g.id);
-    const subsInBanca = (profilesInBanca || []).filter((p: { id: string; status?: string }) => subIds.includes(p.id) && p.status === 'consultor');
+    const subsInBanca = consultoresInBanca.filter(
+      (p: { enroller?: string | null; status?: string }) => p.enroller === g.id && p.status === 'consultor'
+    );
     const existing = consultoresByEnroller.get(g.id) || [];
     const merged = [...existing];
     for (const s of subsInBanca) {
@@ -1350,6 +1407,20 @@ export async function getDashboardDataByBancaId({
   }
 
   const gerentesToShow: Array<{ gerente: any; consultants: any[] }> = [];
+  const missingGerenteIds = [...gerenteIdsToProcess].filter(
+    (id) => id !== '__consultores_diretos__' && !gerentesProfiles.some((g: { id: string }) => g.id === id)
+  );
+  const gerenteProfileById = new Map(gerentesProfiles.map((g: { id: string }) => [g.id, g]));
+  if (missingGerenteIds.length > 0) {
+    const { data: extraGerentes } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, email, full_name, status, enroller')
+      .in('id', missingGerenteIds);
+    for (const g of extraGerentes || []) {
+      gerenteProfileById.set(g.id, g);
+    }
+  }
+
   for (const gerenteId of gerenteIdsToProcess) {
     const consultants = consultoresByEnroller.get(gerenteId) || [];
     if (gerenteId === '__consultores_diretos__') {
@@ -1358,12 +1429,7 @@ export async function getDashboardDataByBancaId({
         consultants,
       });
     } else {
-      const gerenteFromBanca = gerentesProfiles.find((g: { id: string }) => g.id === gerenteId);
-      let gerenteProfile = gerenteFromBanca;
-      if (!gerenteProfile) {
-        const { data: profileData } = await supabaseServiceRole.from('profiles').select('id, email, full_name, status, enroller').eq('id', gerenteId).single();
-        gerenteProfile = profileData ? { ...profileData } : undefined;
-      }
+      const gerenteProfile = gerenteProfileById.get(gerenteId);
       if (gerenteProfile) {
         gerentesToShow.push({ gerente: gerenteProfile, consultants });
       }
@@ -1390,7 +1456,7 @@ export async function getDashboardDataByBancaId({
       indicateds = await fetchIndicatedsByPeriod(cleanBancaUrl, dateFrom, dateTo, signal);
       externalMetrics = computeExternalMetricsFromLeads(indicateds);
       metricsByConsultantEmailBanca = aggregateIndicatedsByConsultant(indicateds);
-      console.log(
+      crmServiceVerboseLog(
         '[DonoBanca Service] getDashboardDataByBancaId - get-indicateds-by-consultant (banca/período):',
         indicateds.length,
         'leads → agregado por consultor:',
@@ -1419,7 +1485,7 @@ export async function getDashboardDataByBancaId({
       if (!externalMetrics && goffset === 0 && indicateds.length > 0) {
         externalMetrics = computeExternalMetricsFromLeads(indicateds);
       }
-      console.log('[DonoBanca Service] getDashboardDataByBancaId (paginado) consultants=', uniqueEmails.length, 'leads=', indicateds.length);
+      crmServiceVerboseLog('[DonoBanca Service] getDashboardDataByBancaId (paginado) consultants=', uniqueEmails.length, 'leads=', indicateds.length);
     }
   } catch (err: any) {
     if (err?.name === 'AbortError') throw err;
@@ -1484,7 +1550,7 @@ export async function getDashboardDataByBancaId({
       0
     );
     const agregadoDepositosCountBanca = externalMetrics?.total_depositos_count ?? 0;
-    console.log('[DonoBanca Service] getDashboardDataByBancaId - total_depositos_count (funil):', {
+    crmServiceVerboseLog('[DonoBanca Service] getDashboardDataByBancaId - total_depositos_count (funil):', {
       agregado_api: agregadoDepositosCountBanca,
       soma_consultores: sumTotalDepositosCount,
     });

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
+import { buildGestorEffectiveHeaders } from '@/lib/utils/gestor-effective-headers';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
 import ActivityByWeekdayChart from '@/components/Charts/ActivityByWeekdayChart';
@@ -179,8 +180,8 @@ export default function DetalheConsultor() {
       }
       
       const headers: Record<string, string> = { 'X-User-Id': userId as string };
-      const effectiveDonoId = typeof window !== 'undefined' ? sessionStorage.getItem('gestor_effective_dono_id') : null;
-      if (effectiveDonoId) headers['X-Effective-Dono-Id'] = effectiveDonoId;
+      const effectiveSelection = typeof window !== 'undefined' ? sessionStorage.getItem('gestor_effective_dono_id') : null;
+      if (effectiveSelection) Object.assign(headers, buildGestorEffectiveHeaders(effectiveSelection));
 
       const response = await fetch(url, { headers });
       const result = await response.json();
@@ -231,7 +232,7 @@ export default function DetalheConsultor() {
 
   return (
     <Layout onSignOut={handleSignOut}>
-      <div className="w-full min-w-0 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6">
+      <div className="w-full min-w-0 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6">
         {/* Breadcrumb & Header */}
         <div className="flex flex-col gap-4">
           <button 
