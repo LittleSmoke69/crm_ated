@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { appendImpersonationSession } from '@/lib/server/session-token';
 
 /**
  * POST /api/admin/users/[userId]/impersonate - Permite ao admin fazer login como outro usuário.
@@ -47,14 +48,16 @@ export async function POST(
       return errorResponse('Não é possível acessar a conta de outro administrador por segurança.', 403);
     }
 
-    // 4. Retorna os dados do usuário alvo para que o frontend possa fazer o login
-    return successResponse({
+    // 4. Retorna os dados do usuário alvo e atualiza cookie de sessão (zaploto_session)
+    const res = successResponse({
       targetUserId: targetProfile.id,
       targetEmail: targetProfile.email,
       targetName: targetProfile.full_name,
       adminUserId: adminUserId,
       adminEmail: adminProfile.email,
     });
+    await appendImpersonationSession(res, targetProfile.id, adminUserId);
+    return res;
   } catch (err: any) {
     return serverErrorResponse(err);
   }

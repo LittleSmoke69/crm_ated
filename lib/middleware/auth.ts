@@ -125,7 +125,6 @@ export async function validateUser(userId: string): Promise<boolean> {
       if (error) {
         lastError = error;
         if (isNetworkOrUnavailableError(error) && attempt < VALIDATE_USER_MAX_RETRIES) {
-          console.warn(`[validateUser] Tentativa ${attempt}/${VALIDATE_USER_MAX_RETRIES} falhou (rede):`, error.message);
           await new Promise((r) => setTimeout(r, VALIDATE_USER_RETRY_DELAY_MS * attempt));
           continue;
         }
@@ -146,7 +145,6 @@ export async function validateUser(userId: string): Promise<boolean> {
       if (e?.statusCode === 503) throw error;
       lastError = error;
       if (isNetworkOrUnavailableError(e) && attempt < VALIDATE_USER_MAX_RETRIES) {
-        console.warn(`[validateUser] Tentativa ${attempt}/${VALIDATE_USER_MAX_RETRIES} exceção (rede):`, e?.message);
         await new Promise((r) => setTimeout(r, VALIDATE_USER_RETRY_DELAY_MS * attempt));
         continue;
       }

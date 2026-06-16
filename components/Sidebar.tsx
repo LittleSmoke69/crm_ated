@@ -107,7 +107,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   // Usa onSignOut se fornecido, senão usa a função padrão
   const handleLogout = onSignOut || handleDefaultLogout;
 
-  const handleBackToAdmin = () => {
+  const handleBackToAdmin = async () => {
     if (typeof window === 'undefined') return;
     const adminId = sessionStorage.getItem('admin_original_id');
     const adminEmail = sessionStorage.getItem('admin_original_email');
@@ -117,27 +117,41 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       window.location.href = withTenantSlug('/admin/login');
       return;
     }
-    // Limpa sessão atual (usuário impersonado)
-    sessionStorage.removeItem('user_id');
-    sessionStorage.removeItem('profile_id');
-    sessionStorage.removeItem('profile_email');
-    localStorage.removeItem('profile_id');
-    localStorage.removeItem('profile_email');
-    document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-    // Restaura sessão do admin
-    sessionStorage.setItem('user_id', adminId);
-    sessionStorage.setItem('profile_id', adminId);
-    if (adminEmail) {
-      sessionStorage.setItem('profile_email', adminEmail);
-      localStorage.setItem('profile_email', adminEmail);
+
+    try {
+      const res = await fetch('/api/admin/users/restore-admin-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const result = await res.json().catch(() => ({}));
+
+      if (!res.ok || !result.success) {
+        console.error('[RestoreAdmin] Erro:', result);
+        alert(result.error || 'Não foi possível restaurar a sessão de admin.');
+        return;
+      }
+
+      const restoredAdminId = result.data?.adminUserId || adminId;
+      const restoredAdminEmail = result.data?.adminEmail || adminEmail;
+
+      sessionStorage.setItem('user_id', restoredAdminId);
+      sessionStorage.setItem('profile_id', restoredAdminId);
+      if (restoredAdminEmail) {
+        sessionStorage.setItem('profile_email', restoredAdminEmail);
+        localStorage.setItem('profile_email', restoredAdminEmail);
+      }
+      localStorage.setItem('profile_id', restoredAdminId);
+      sessionStorage.removeItem('profile_status');
+      sessionStorage.removeItem('zaploto_v1_admin_profile_session_ok_uid');
+      sessionStorage.removeItem('admin_original_id');
+      sessionStorage.removeItem('admin_original_email');
+
+      window.location.href = withTenantSlug('/admin');
+    } catch (error) {
+      console.error('[RestoreAdmin] Erro ao restaurar sessão:', error);
+      alert('Erro ao voltar ao painel admin.');
     }
-    localStorage.setItem('profile_id', adminId);
-    const isHttps = window.location.protocol === 'https:';
-    const secureAttr = isHttps ? ' Secure;' : '';
-    document.cookie = `user_id=${encodeURIComponent(adminId)}; Path=/; SameSite=Lax;${secureAttr}`;
-    sessionStorage.removeItem('admin_original_id');
-    sessionStorage.removeItem('admin_original_email');
-    window.location.href = withTenantSlug('/admin');
   };
 
   const [dynamicSidebar, setDynamicSidebar] = useState<{ items: MenuItem[]; useLegacy: boolean } | null>(null);

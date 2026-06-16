@@ -1,6 +1,7 @@
 import type { NextRequest, NextResponse } from 'next/server';
 
 export const ZAPLOTO_SESSION_COOKIE = 'zaploto_session';
+export const ZAPLOTO_IMPERSONATOR_COOKIE = 'zaploto_impersonator';
 
 const SESSION_TTL_SEC = 60 * 60 * 24 * 7; // 7 dias
 
@@ -111,6 +112,79 @@ export function clearSessionCookies(res: NextResponse): void {
   const opts = { path: '/', maxAge: 0 };
   res.cookies.set(ZAPLOTO_SESSION_COOKIE, '', { ...opts, httpOnly: true });
   res.cookies.set('user_id', '', { ...opts, httpOnly: false });
+  res.cookies.set(ZAPLOTO_IMPERSONATOR_COOKIE, '', { ...opts, httpOnly: true });
+}
+
+/** Cookie assinado adminId.targetUserId.exp.sig — usado para voltar ao painel admin após impersonação. */
+export async function createImpersonatorToken(
+  adminUserId: string,
+  targetUserId: string
+): Promise<string> {
+  const secret = getSessionSecret();
+  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
+  const payload = `${adminUserId}.${targetUserId}.${exp}`;
+  const sig = await signPayload(payload, secret);
+  return `${payload}.${sig}`;
+}
+
+export async function verifyImpersonatorToken(
+  token: string | null | undefined
+): Promise<{ adminUserId: string; targetUserId: string } | null> {
+  if (!token?.trim()) return null;
+  const secret = getSessionSecretOrNull();
+  if (!secret) return null;
+
+  const parts = token.trim().split('.');
+  if (parts.length !== 4) return null;
+  const [adminUserId, targetUserId, expStr, sig] = parts;
+  if (!adminUserId || !targetUserId || !expStr || !sig) return null;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) return null;
+  const payload = `${adminUserId}.${targetUserId}.${expStr}`;
+  const expected = await signPayload(payload, secret);
+  if (!safeEqual(sig, expected)) return null;
+  return { adminUserId, targetUserId };
+}
+
+export async function readImpersonatorFromRequest(
+  req: NextRequest
+): Promise<{ adminUserId: string; targetUserId: string } | null> {
+  const cookie = req.cookies.get(ZAPLOTO_IMPERSONATOR_COOKIE)?.value;
+  return verifyImpersonatorToken(cookie);
+}
+
+/** Troca sessão para o usuário alvo e grava cookie de impersonação (admin original). */
+export async function appendImpersonationSession(
+  res: NextResponse,
+  targetUserId: string,
+  adminUserId: string
+): Promise<void> {
+  await appendSessionCookie(res, targetUserId);
+  const impersonatorToken = await createImpersonatorToken(adminUserId, targetUserId);
+  const secure = process.env.NODE_ENV === 'production';
+  res.cookies.set(ZAPLOTO_IMPERSONATOR_COOKIE, impersonatorToken, {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SESSION_TTL_SEC,
+  });
+}
+
+/** Restaura sessão do admin após impersonação e remove cookie de impersonação. */
+export async function appendRestoreAdminSession(
+  res: NextResponse,
+  adminUserId: string
+): Promise<void> {
+  await appendSessionCookie(res, adminUserId);
+  const secure = process.env.NODE_ENV === 'production';
+  res.cookies.set(ZAPLOTO_IMPERSONATOR_COOKIE, '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0,
+  });
 }
 
 /** Em produção exige sessão assinada; em dev permite legacy se ALLOW_LEGACY_USER_ID_AUTH=true */

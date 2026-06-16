@@ -3,8 +3,6 @@
 import React, { useState } from 'react';
 import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Link from '@/components/WhitelabelLink';
-import { supabase } from '@/lib/supabase';
-import bcrypt from 'bcryptjs';
 import { Mail, Lock, LogIn, AlertCircle, Shield } from 'lucide-react';
 import Logo from '@/components/Logo';
 
@@ -53,53 +51,33 @@ const AdminLoginPage = () => {
     try {
       setLoading(true);
 
-      const emailLower = email.toLowerCase().trim();
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: email.toLowerCase().trim(),
+          password,
+        }),
+      });
 
-      const { data: user, error } = await supabase
-        .from('profiles')
-        .select('id, email, password_hash, status')
-        .eq('email', emailLower)
-        .single();
+      const json = await res.json().catch(() => ({}));
 
-      if (error || !user) {
-        setErrorMsg('Credenciais inválidas.');
+      if (!res.ok || !json.success) {
+        setErrorMsg(json.error || 'Credenciais inválidas.');
         setLoading(false);
         return;
       }
 
-      const matches = bcrypt.compareSync(password, user.password_hash || '');
-      if (!matches) {
-        setErrorMsg('Credenciais inválidas.');
+      const userId = json.data?.userId as string;
+      const userEmail = json.data?.email as string;
+      if (!userId || !userEmail) {
+        setErrorMsg('Erro ao efetuar login.');
         setLoading(false);
         return;
       }
 
-      // Verifica se o usuário pode acessar o painel: status fixo ou cargo com permissão na sidebar (ver página = acessar página)
-      const fixedAccess = user.status === 'super_admin' || user.status === 'admin' || user.status === 'dono_banca';
-      let canAccessAdmin = fixedAccess;
-      if (!canAccessAdmin) {
-        const res = await fetch(`/api/user/can-access-admin?userId=${encodeURIComponent(user.id)}`, { credentials: 'include' });
-        const json = await res.json();
-        canAccessAdmin = json?.success === true && json?.data?.canAccess === true;
-      }
-      if (!canAccessAdmin) {
-        setErrorMsg('Acesso negado. Esta conta não possui permissões de administrador.');
-        setLoading(false);
-        return;
-      }
-
-      // Guarda artefatos de sessão (sessionStorage + cookie + fallback localStorage)
-      setSessionArtifacts(user.id, user.email);
-
-      // (Opcional) registra último login — ignora erro
-      try {
-        await supabase
-          .from('profiles')
-          .update({ last_login_at: new Date().toISOString() })
-          .eq('id', user.id);
-      } catch {}
-
-      // Redireciona para o painel admin
+      setSessionArtifacts(userId, userEmail);
       router.push('/admin');
     } catch (err) {
       console.error('Erro ao efetuar login:', err);

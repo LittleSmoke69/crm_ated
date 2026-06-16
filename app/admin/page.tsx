@@ -2430,6 +2430,7 @@ const UsersSection = ({
           'X-User-Id': currentUserId,
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
       });
 
       const result = await res.json();
@@ -2443,33 +2444,16 @@ const UsersSection = ({
         // Salva o ID e email do admin original para poder voltar depois
         sessionStorage.setItem('admin_original_id', currentUserId);
         if (adminEmail) sessionStorage.setItem('admin_original_email', adminEmail);
-        
-        // Limpa dados antigos primeiro
-        sessionStorage.removeItem('user_id');
-        sessionStorage.removeItem('profile_id');
-        sessionStorage.removeItem('profile_email');
-        localStorage.removeItem('profile_id');
-        localStorage.removeItem('profile_email');
-        
-        // Limpa o cookie antigo
-        document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-        
-        // Aguarda um momento para garantir que os dados foram limpos
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Faz login como o usuário alvo
+
+        // Atualiza artefatos locais (cookie zaploto_session já foi definido pela API)
         sessionStorage.setItem('user_id', newUserId);
         sessionStorage.setItem('profile_id', newUserId);
         sessionStorage.setItem('profile_email', targetEmail);
-        
-        // Compatibilidade com localStorage
+        sessionStorage.removeItem('profile_status');
+        sessionStorage.removeItem('zaploto_v1_admin_profile_session_ok_uid');
+
         localStorage.setItem('profile_id', newUserId);
         localStorage.setItem('profile_email', targetEmail);
-        
-        // Cookie de sessão
-        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-        const secureAttr = isHttps ? ' Secure;' : '';
-        document.cookie = `user_id=${encodeURIComponent(newUserId)}; Path=/; SameSite=Lax;${secureAttr}`;
         
         console.log('[Impersonate] Sessão configurada, redirecionando...');
         

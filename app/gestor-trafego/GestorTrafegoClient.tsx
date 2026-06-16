@@ -176,6 +176,119 @@ type MetaCampaignConsultorDraftEntry = {
   daily_spend_estimate: string;
 };
 
+type SharedWhatsappGroupDraft = {
+  id: string;
+  whatsapp_group_name: string;
+  whatsapp_group_invite_url: string;
+  consultor_ids: string[];
+};
+
+function createSharedGroupId(): string {
+  return `sg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function buildSharedGroupsFromEntries(entries: MetaCampaignConsultorDraftEntry[]): SharedWhatsappGroupDraft[] {
+  if (!entries.length) {
+    return [{ id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }];
+  }
+  const grouped = groupConsultorsByWhatsappGroup(
+    entries.map((e) => ({
+      consultor_id: e.consultor_id,
+      whatsapp_group_name: e.whatsapp_group_name,
+      whatsapp_group_invite_url: e.whatsapp_group_invite_url,
+    }))
+  );
+  const groups: SharedWhatsappGroupDraft[] = [];
+  const unassignedIds: string[] = [];
+  for (const g of grouped) {
+    if (g.key === '__no_group__') {
+      unassignedIds.push(...g.items.map((i) => String((i as { consultor_id: string }).consultor_id)));
+      continue;
+    }
+    groups.push({
+      id: g.key,
+      whatsapp_group_name: g.whatsapp_group_name,
+      whatsapp_group_invite_url: g.whatsapp_group_invite_url,
+      consultor_ids: g.items.map((i) => String((i as { consultor_id: string }).consultor_id)),
+    });
+  }
+  if (unassignedIds.length) {
+    groups.push({
+      id: createSharedGroupId(),
+      whatsapp_group_name: '',
+      whatsapp_group_invite_url: '',
+      consultor_ids: unassignedIds,
+    });
+  }
+  if (!groups.length) {
+    return [
+      {
+        id: createSharedGroupId(),
+        whatsapp_group_name: '',
+        whatsapp_group_invite_url: '',
+        consultor_ids: entries.map((e) => e.consultor_id),
+      },
+    ];
+  }
+  return groups;
+}
+
+function syncEntriesFromSharedGroups(
+  entries: MetaCampaignConsultorDraftEntry[],
+  sharedGroups: SharedWhatsappGroupDraft[]
+): MetaCampaignConsultorDraftEntry[] {
+  const consultorToGroup = new Map<string, SharedWhatsappGroupDraft>();
+  for (const group of sharedGroups) {
+    for (const consultorId of group.consultor_ids) {
+      consultorToGroup.set(String(consultorId), group);
+    }
+  }
+  return entries.map((entry) => {
+    const group = consultorToGroup.get(String(entry.consultor_id));
+    if (!group) return entry;
+    return {
+      ...entry,
+      whatsapp_group_name: group.whatsapp_group_name,
+      whatsapp_group_invite_url: group.whatsapp_group_invite_url,
+    };
+  });
+}
+
+function validateSharedGroups(
+  entries: MetaCampaignConsultorDraftEntry[],
+  sharedGroups: SharedWhatsappGroupDraft[]
+): string | null {
+  const assigned = new Set<string>();
+  for (const group of sharedGroups) {
+    if (!group.consultor_ids.length) continue;
+    const name = String(group.whatsapp_group_name || '').trim();
+    const url = String(group.whatsapp_group_invite_url || '').trim();
+    if (!name || !url) {
+      return 'Preencha nome e link de convite para cada grupo compartilhado com consultores.';
+    }
+    for (const consultorId of group.consultor_ids) {
+      const id = String(consultorId);
+      if (assigned.has(id)) {
+        return 'Cada consultor deve pertencer a apenas um grupo compartilhado.';
+      }
+      assigned.add(id);
+    }
+  }
+  for (const entry of entries) {
+    if (!assigned.has(String(entry.consultor_id))) {
+      return 'Atribua todos os consultores selecionados a um grupo compartilhado.';
+    }
+    const spendRaw = String(entry.daily_spend_estimate || '').trim();
+    if (spendRaw) {
+      const parsed = parseFloat(spendRaw.replace(',', '.'));
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return 'Informe um gasto diário estimado válido (número ≥ 0) ou deixe em branco.';
+      }
+    }
+  }
+  return null;
+}
+
 function getSharedWhatsappGroupFromEntries(entries: MetaCampaignConsultorDraftEntry[]) {
   const first = entries[0];
   return {
@@ -186,14 +299,17 @@ function getSharedWhatsappGroupFromEntries(entries: MetaCampaignConsultorDraftEn
 
 function inferWhatsappGroupMode(entries: MetaCampaignConsultorDraftEntry[]): 'shared' | 'individual' {
   if (entries.length <= 1) return 'shared';
-  const keys = new Set(
-    entries.map((entry) => {
-      const name = String(entry.whatsapp_group_name || '').trim().toLowerCase();
-      const url = String(entry.whatsapp_group_invite_url || '').trim().toLowerCase();
-      return `${name}|||${url}`;
-    })
+  const grouped = groupConsultorsByWhatsappGroup(
+    entries.map((e) => ({
+      consultor_id: e.consultor_id,
+      whatsapp_group_name: e.whatsapp_group_name,
+      whatsapp_group_invite_url: e.whatsapp_group_invite_url,
+    }))
   );
-  return keys.size <= 1 ? 'shared' : 'individual';
+  const realGroups = grouped.filter((g) => g.key !== '__no_group__');
+  if (realGroups.length > 1) return 'shared';
+  if (realGroups.length === 1 && realGroups[0].items.length > 1) return 'shared';
+  return 'individual';
 }
 
 function getConsultorAssignmentsValidationError(entries: MetaCampaignConsultorDraftEntry[]): string | null {
@@ -226,6 +342,32 @@ function parseDailySpendDraftValue(value: string): number | null {
   const parsed = parseFloat(trimmed.replace(',', '.'));
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.round(parsed * 100) / 100;
+}
+
+function enrichDraftEntriesFromAssignedRow(
+  entries: MetaCampaignConsultorDraftEntry[],
+  assigned?: Array<{
+    id: string;
+    whatsapp_group_name?: string | null;
+    whatsapp_group_invite_url?: string | null;
+    daily_spend_estimate?: number | null;
+  }>
+): MetaCampaignConsultorDraftEntry[] {
+  return entries.map((entry) => {
+    const assignedRow = (assigned || []).find((ac) => String(ac.id) === String(entry.consultor_id));
+    return {
+      consultor_id: String(entry.consultor_id),
+      whatsapp_group_name: String(
+        entry.whatsapp_group_name || assignedRow?.whatsapp_group_name || ''
+      ).trim(),
+      whatsapp_group_invite_url: String(
+        entry.whatsapp_group_invite_url || assignedRow?.whatsapp_group_invite_url || ''
+      ).trim(),
+      daily_spend_estimate:
+        String(entry.daily_spend_estimate || '').trim() ||
+        formatDailySpendDraftValue(assignedRow?.daily_spend_estimate),
+    };
+  });
 }
 
 type WhatsappConsultorGroup<T> = {
@@ -365,6 +507,10 @@ export default function GestorTrafegoClient({
   const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
   const [consultorModalSearch, setConsultorModalSearch] = useState('');
   const [consultorModalGroupMode, setConsultorModalGroupMode] = useState<Record<string, 'shared' | 'individual'>>({});
+  const [consultorModalSharedGroups, setConsultorModalSharedGroups] = useState<
+    Record<string, SharedWhatsappGroupDraft[]>
+  >({});
+  const consultorModalWasOpenRef = useRef(false);
   const [consultorModalError, setConsultorModalError] = useState<string | null>(null);
   const [top5Consultants, setTop5Consultants] = useState<Array<{ name: string; value: number }>>(initialData?.top5Consultants || []);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -756,6 +902,70 @@ export default function GestorTrafegoClient({
     }
   };
 
+  const refreshMetaCampaignsDataOnly = async () => {
+    if (!userId) return;
+    const metaRange = getMetaInsightsQueryRange();
+    const metaParams = new URLSearchParams();
+    metaParams.append('meta_active_only', metaActiveOnly ? '1' : '0');
+    metaParams.set('date_from', metaRange.dateFrom);
+    metaParams.set('date_to', metaRange.dateTo);
+    metaParams.set('only_meta', '1');
+    const headers: Record<string, string> = { 'X-User-Id': userId as string };
+    if (showBancaDropdown && selectedDonoId) {
+      Object.assign(headers, buildGestorEffectiveHeaders(selectedDonoId));
+    }
+    try {
+      const result = await fetch(`/api/gestor-trafego/dashboard?${metaParams.toString()}`, {
+        headers,
+        credentials: 'include',
+      }).then((r) => r.json());
+      if (result?.success && result?.data) {
+        setMetaFunnel(result.data.metaFunnel || null);
+        setMetaCampaignsData(result.data.metaCampaignsData || []);
+        setMetaMetricsSource(result.data.metaLiveSource ?? null);
+        setMetaMetricsLiveError(result.data.metaLiveError ?? null);
+      }
+    } catch (err) {
+      console.warn('[GestorTrafego] Erro ao atualizar campanhas Meta:', err);
+    }
+  };
+
+  const applySavedConsultorsToCampaignRow = (
+    campaignId: string,
+    draftEntries: MetaCampaignConsultorDraftEntry[]
+  ) => {
+    setMetaCampaignsData((prev) =>
+      prev.map((row) => {
+        if (row.campaign_id !== campaignId) return row;
+        const assigned_consultors = draftEntries.map((entry) => {
+          const option = metaConsultorOptions.find((o) => String(o.id) === String(entry.consultor_id));
+          const existing = row.assigned_consultors?.find((ac) => String(ac.id) === String(entry.consultor_id));
+          return {
+            id: entry.consultor_id,
+            email: option?.email || existing?.email || '',
+            full_name: option?.full_name ?? existing?.full_name ?? null,
+            total_leads: existing?.total_leads ?? 0,
+            total_deposited: existing?.total_deposited ?? 0,
+            whatsapp_group_name: String(entry.whatsapp_group_name || '').trim() || null,
+            whatsapp_group_invite_url: String(entry.whatsapp_group_invite_url || '').trim() || null,
+            daily_spend_estimate: parseDailySpendDraftValue(entry.daily_spend_estimate),
+          };
+        });
+        const consultor_total_deposited = assigned_consultors.reduce(
+          (sum, c) => sum + (c.total_deposited || 0),
+          0
+        );
+        const consultor_total_leads = assigned_consultors.reduce((sum, c) => sum + (c.total_leads || 0), 0);
+        return {
+          ...row,
+          assigned_consultors,
+          consultor_total_deposited,
+          consultor_total_leads,
+        };
+      })
+    );
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
@@ -1039,17 +1249,32 @@ export default function GestorTrafegoClient({
     }
   };
 
-  const handleSaveMetaCampaignConsultors = async (campaignId: string): Promise<boolean> => {
+  const handleSaveMetaCampaignConsultors = async (
+    campaignId: string,
+    entriesOverride?: MetaCampaignConsultorDraftEntry[]
+  ): Promise<boolean> => {
     if (!effectiveBancaId || !userId) return false;
     const key = `${effectiveBancaId}:${campaignId}`;
-    const draftEntries = metaCampaignConsultorDraft[key] || [];
-    const validationError = getConsultorAssignmentsValidationError(draftEntries);
+    const draftEntries = entriesOverride ?? metaCampaignConsultorDraft[key] ?? [];
+    const groupMode = consultorModalGroupMode[key] ?? inferWhatsappGroupMode(draftEntries);
+    let entriesToSave = draftEntries;
+    let validationError: string | null = null;
+    if (groupMode === 'shared') {
+      const sharedGroups =
+        consultorModalSharedGroups[key] ?? buildSharedGroupsFromEntries(draftEntries);
+      validationError = validateSharedGroups(draftEntries, sharedGroups);
+      if (!validationError) {
+        entriesToSave = syncEntriesFromSharedGroups(draftEntries, sharedGroups);
+      }
+    } else {
+      validationError = getConsultorAssignmentsValidationError(draftEntries);
+    }
     if (validationError) {
       setConsultorModalError(validationError);
       return false;
     }
     setConsultorModalError(null);
-    const assignments = draftEntries.map((entry) => ({
+    const assignments = entriesToSave.map((entry) => ({
       consultor_id: String(entry.consultor_id).trim(),
       whatsapp_group_name: String(entry.whatsapp_group_name || '').trim() || null,
       whatsapp_group_invite_url: String(entry.whatsapp_group_invite_url || '').trim() || null,
@@ -1071,7 +1296,9 @@ export default function GestorTrafegoClient({
         setConsultorModalError(data.error || 'Erro ao salvar consultores da campanha.');
         return false;
       }
-      await checkAuthorization();
+      updateCampaignConsultorDraft(key, entriesToSave);
+      applySavedConsultorsToCampaignRow(campaignId, entriesToSave);
+      void refreshMetaCampaignsDataOnly();
       return true;
     } catch (err) {
       console.error('[GestorTrafego] erro ao salvar consultores da campanha:', err);
@@ -1080,6 +1307,16 @@ export default function GestorTrafegoClient({
     } finally {
       setMetaCampaignConsultorSavingKey(null);
     }
+  };
+
+  const removeAssignedConsultorFromCampaign = async (
+    campaignId: string,
+    consultorId: string,
+    currentEntries: MetaCampaignConsultorDraftEntry[]
+  ): Promise<boolean> => {
+    const id = String(consultorId);
+    const nextEntries = currentEntries.filter((entry) => String(entry.consultor_id) !== id);
+    return handleSaveMetaCampaignConsultors(campaignId, nextEntries);
   };
 
   const getDraftEntries = (campaignKey: string): MetaCampaignConsultorDraftEntry[] =>
@@ -1105,20 +1342,42 @@ export default function GestorTrafegoClient({
   const toggleCampaignConsultorInDraft = (campaignKey: string, consultorId: string, checked: boolean) => {
     const id = String(consultorId);
     const groupMode = consultorModalGroupMode[campaignKey] ?? 'shared';
+    if (!checked) {
+      setConsultorModalSharedGroups((sharedPrev) => {
+        const groups = sharedPrev[campaignKey];
+        if (!groups?.length) return sharedPrev;
+        return {
+          ...sharedPrev,
+          [campaignKey]: groups.map((g) => ({
+            ...g,
+            consultor_ids: g.consultor_ids.filter((cid) => String(cid) !== id),
+          })),
+        };
+      });
+    } else if (groupMode === 'shared') {
+      setConsultorModalSharedGroups((sharedPrev) => {
+        const groups = [...(sharedPrev[campaignKey] ?? [{ id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }])];
+        const next = groups.map((g) => ({
+          ...g,
+          consultor_ids: g.consultor_ids.filter((cid) => String(cid) !== id),
+        }));
+        next[0] = { ...next[0], consultor_ids: [...next[0].consultor_ids, id] };
+        return { ...sharedPrev, [campaignKey]: next };
+      });
+    }
     setMetaCampaignConsultorDraft((prev) => {
       const current = [...(prev[campaignKey] ?? [])];
       const idx = current.findIndex((e) => String(e.consultor_id) === id);
       if (checked) {
         if (idx >= 0) return prev;
-        const shared = getSharedWhatsappGroupFromEntries(current);
         return {
           ...prev,
           [campaignKey]: [
             ...current,
             {
               consultor_id: id,
-              whatsapp_group_name: groupMode === 'shared' ? shared.whatsapp_group_name : '',
-              whatsapp_group_invite_url: groupMode === 'shared' ? shared.whatsapp_group_invite_url : '',
+              whatsapp_group_name: '',
+              whatsapp_group_invite_url: '',
               daily_spend_estimate: '',
             },
           ],
@@ -1163,6 +1422,25 @@ export default function GestorTrafegoClient({
     });
   };
 
+  const clearWhatsappGroupFieldsInDraft = (campaignKey: string, consultorId?: string) => {
+    const targetId = consultorId ? String(consultorId) : null;
+    setMetaCampaignConsultorDraft((prev) => {
+      const current = [...(prev[campaignKey] ?? [])];
+      if (!current.length) return prev;
+      return {
+        ...prev,
+        [campaignKey]: current.map((entry) => {
+          if (targetId && String(entry.consultor_id) !== targetId) return entry;
+          return {
+            ...entry,
+            whatsapp_group_name: '',
+            whatsapp_group_invite_url: '',
+          };
+        }),
+      };
+    });
+  };
+
   const setConsultorDailySpendInDraft = (
     campaignKey: string,
     consultorId: string,
@@ -1184,20 +1462,77 @@ export default function GestorTrafegoClient({
   ) => {
     setConsultorModalGroupMode((prev) => ({ ...prev, [campaignKey]: mode }));
     if (mode === 'shared') {
-      setMetaCampaignConsultorDraft((prev) => {
-        const current = [...(prev[campaignKey] ?? [])];
-        if (!current.length) return prev;
-        const shared = getSharedWhatsappGroupFromEntries(current);
-        return {
-          ...prev,
-          [campaignKey]: current.map((entry) => ({
-            ...entry,
-            whatsapp_group_name: shared.whatsapp_group_name,
-            whatsapp_group_invite_url: shared.whatsapp_group_invite_url,
-          })),
-        };
-      });
+      const current = metaCampaignConsultorDraft[campaignKey] ?? [];
+      setConsultorModalSharedGroups((prev) => ({
+        ...prev,
+        [campaignKey]: buildSharedGroupsFromEntries(current),
+      }));
     }
+  };
+
+  const updateSharedGroupsForCampaign = (
+    campaignKey: string,
+    updater: (groups: SharedWhatsappGroupDraft[]) => SharedWhatsappGroupDraft[]
+  ) => {
+    setConsultorModalSharedGroups((prev) => {
+      const current =
+        prev[campaignKey] ?? buildSharedGroupsFromEntries(metaCampaignConsultorDraft[campaignKey] ?? []);
+      return { ...prev, [campaignKey]: updater(current) };
+    });
+  };
+
+  const addSharedGroupForCampaign = (campaignKey: string) => {
+    updateSharedGroupsForCampaign(campaignKey, (groups) => [
+      ...groups,
+      { id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] },
+    ]);
+  };
+
+  const removeSharedGroupForCampaign = (campaignKey: string, groupId: string) => {
+    updateSharedGroupsForCampaign(campaignKey, (groups) => {
+      if (groups.length <= 1) {
+        return [{ ...groups[0], whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }];
+      }
+      const removed = groups.find((g) => g.id === groupId);
+      const rest = groups.filter((g) => g.id !== groupId);
+      if (removed?.consultor_ids.length && rest[0]) {
+        rest[0] = {
+          ...rest[0],
+          consultor_ids: Array.from(new Set([...rest[0].consultor_ids, ...removed.consultor_ids])),
+        };
+      }
+      return rest;
+    });
+  };
+
+  const setSharedGroupFieldForCampaign = (
+    campaignKey: string,
+    groupId: string,
+    field: 'whatsapp_group_name' | 'whatsapp_group_invite_url',
+    value: string
+  ) => {
+    updateSharedGroupsForCampaign(campaignKey, (groups) =>
+      groups.map((g) => (g.id === groupId ? { ...g, [field]: value } : g))
+    );
+  };
+
+  const toggleConsultorInSharedGroup = (
+    campaignKey: string,
+    groupId: string,
+    consultorId: string,
+    include: boolean
+  ) => {
+    const id = String(consultorId);
+    updateSharedGroupsForCampaign(campaignKey, (groups) =>
+      groups.map((g) => {
+        const without = g.consultor_ids.filter((cid) => String(cid) !== id);
+        if (g.id !== groupId) {
+          return { ...g, consultor_ids: without };
+        }
+        if (!include) return { ...g, consultor_ids: without };
+        return { ...g, consultor_ids: [...without, id] };
+      })
+    );
   };
 
   const handleSignOut = () => {
@@ -1253,6 +1588,17 @@ export default function GestorTrafegoClient({
         [consultorModalCampaignKey]: inferWhatsappGroupMode(entries),
       };
     });
+  }, [consultorModalOpen, consultorModalCampaignKey, metaCampaignConsultorDraft]);
+
+  useEffect(() => {
+    if (consultorModalOpen && !consultorModalWasOpenRef.current && consultorModalCampaignKey) {
+      const entries = metaCampaignConsultorDraft[consultorModalCampaignKey] || [];
+      setConsultorModalSharedGroups((prev) => ({
+        ...prev,
+        [consultorModalCampaignKey]: buildSharedGroupsFromEntries(entries),
+      }));
+    }
+    consultorModalWasOpenRef.current = consultorModalOpen;
   }, [consultorModalOpen, consultorModalCampaignKey, metaCampaignConsultorDraft]);
 
   useEffect(() => {
@@ -1750,6 +2096,7 @@ export default function GestorTrafegoClient({
                             {(() => {
                               const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
                               const selected = getDraftEntries(key);
+                              const isRowSaving = metaCampaignConsultorSavingKey === key;
                               return (
                                 <div className="flex flex-col gap-1 min-w-[200px]">
                                   {selected.length > 0 ? (
@@ -1791,6 +2138,30 @@ export default function GestorTrafegoClient({
                                                       · {formatMetaSpend(item.daily_spend_estimate!)}/dia
                                                     </span>
                                                   ) : null}
+                                                  <button
+                                                    type="button"
+                                                    disabled={isRowSaving}
+                                                    onClick={() => {
+                                                      const resolved = enrichDraftEntriesFromAssignedRow(
+                                                        selected,
+                                                        row.assigned_consultors
+                                                      );
+                                                      void removeAssignedConsultorFromCampaign(
+                                                        row.campaign_id,
+                                                        item.id,
+                                                        resolved
+                                                      );
+                                                    }}
+                                                    className="text-emerald-700/70 hover:text-red-500 dark:text-emerald-300/80 disabled:opacity-50"
+                                                    aria-label={`Remover ${item.label} da campanha`}
+                                                    title="Remover consultor da campanha"
+                                                  >
+                                                    {isRowSaving ? (
+                                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                                    ) : (
+                                                      <X className="w-3 h-3" />
+                                                    )}
+                                                  </button>
                                                 </span>
                                               ))}
                                             </div>
@@ -2819,10 +3190,21 @@ export default function GestorTrafegoClient({
             entry: MetaCampaignConsultorDraftEntry;
           }>;
         const isSaving = metaCampaignConsultorSavingKey === consultorModalCampaignKey;
-        const sharedGroup = getSharedWhatsappGroupFromEntries(selectedEntries);
         const groupMode =
           consultorModalGroupMode[consultorModalCampaignKey] ?? inferWhatsappGroupMode(selectedEntries);
-        const saveValidationError = getConsultorAssignmentsValidationError(selectedEntries);
+        const sharedGroups =
+          consultorModalSharedGroups[consultorModalCampaignKey] ??
+          buildSharedGroupsFromEntries(selectedEntries);
+        const assignedConsultorIds = new Set(
+          sharedGroups.flatMap((g) => g.consultor_ids.map((id) => String(id)))
+        );
+        const unassignedConsultors = selectedConsultors.filter(
+          ({ consultor }) => !assignedConsultorIds.has(String(consultor.id))
+        );
+        const saveValidationError =
+          groupMode === 'shared'
+            ? validateSharedGroups(selectedEntries, sharedGroups)
+            : getConsultorAssignmentsValidationError(selectedEntries);
 
         return (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -2831,7 +3213,7 @@ export default function GestorTrafegoClient({
                 <div>
                   <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Atribuir consultores</h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Selecione consultores e escolha grupo compartilhado ou individual por consultor.
+                    Selecione consultores e organize um ou mais grupos compartilhados, ou grupo individual por consultor.
                   </p>
                   {campaignRow && (
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-md">
@@ -2878,19 +3260,32 @@ export default function GestorTrafegoClient({
                     type="button"
                     onClick={() => {
                       const merged = new Map<string, MetaCampaignConsultorDraftEntry>();
-                      const shared = getSharedWhatsappGroupFromEntries(selectedEntries);
                       for (const entry of selectedEntries) merged.set(String(entry.consultor_id), entry);
+                      const newIds: string[] = [];
                       for (const consultor of filtered) {
                         const id = String(consultor.id);
                         if (merged.has(id)) continue;
+                        newIds.push(id);
                         merged.set(id, {
                           consultor_id: id,
-                          whatsapp_group_name: groupMode === 'shared' ? shared.whatsapp_group_name : '',
-                          whatsapp_group_invite_url: groupMode === 'shared' ? shared.whatsapp_group_invite_url : '',
+                          whatsapp_group_name: '',
+                          whatsapp_group_invite_url: '',
                           daily_spend_estimate: '',
                         });
                       }
                       updateCampaignConsultorDraft(consultorModalCampaignKey, Array.from(merged.values()));
+                      if (groupMode === 'shared' && newIds.length) {
+                        updateSharedGroupsForCampaign(consultorModalCampaignKey, (groups) => {
+                          const next = groups.length
+                            ? [...groups]
+                            : [{ id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }];
+                          next[0] = {
+                            ...next[0],
+                            consultor_ids: Array.from(new Set([...next[0].consultor_ids, ...newIds])),
+                          };
+                          return next;
+                        });
+                      }
                     }}
                     disabled={filtered.length === 0}
                     className="px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-900/20 disabled:opacity-50"
@@ -2940,9 +3335,41 @@ export default function GestorTrafegoClient({
                 {selectedConsultors.length > 0 && (
                   <div className="space-y-3">
                     <div>
-                      <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                        Tipo de grupo WhatsApp
-                      </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                          Tipo de grupo WhatsApp
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            clearWhatsappGroupFieldsInDraft(consultorModalCampaignKey);
+                            setConsultorModalSharedGroups((prev) => ({
+                              ...prev,
+                              [consultorModalCampaignKey]: buildSharedGroupsFromEntries(
+                                selectedEntries.map((e) => ({
+                                  ...e,
+                                  whatsapp_group_name: '',
+                                  whatsapp_group_invite_url: '',
+                                }))
+                              ),
+                            }));
+                          }}
+                          className="text-[11px] font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50"
+                          disabled={
+                            !selectedEntries.some(
+                              (e) =>
+                                String(e.whatsapp_group_name || '').trim() ||
+                                String(e.whatsapp_group_invite_url || '').trim()
+                            ) && !sharedGroups.some(
+                              (g) =>
+                                String(g.whatsapp_group_name || '').trim() ||
+                                String(g.whatsapp_group_invite_url || '').trim()
+                            )
+                          }
+                        >
+                          Limpar dados do grupo
+                        </button>
+                      </div>
                       <div className="inline-flex rounded-xl border border-gray-200 dark:border-[#404040] p-1 bg-white dark:bg-[#2a2a2a]">
                         <button
                           type="button"
@@ -2953,7 +3380,7 @@ export default function GestorTrafegoClient({
                               : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
-                          Grupo compartilhado
+                          Grupos compartilhados
                         </button>
                         <button
                           type="button"
@@ -2973,104 +3400,171 @@ export default function GestorTrafegoClient({
                       <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
                         Consultores selecionados ({selectedConsultors.length})
                       </p>
-                      {groupMode === 'shared' ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {selectedConsultors.map(({ consultor }) => (
-                            <span
-                              key={consultor.id}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedConsultors.map(({ consultor }) => (
+                          <span
+                            key={consultor.id}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                          >
+                            {consultor.full_name || consultor.email}
+                            <button
+                              type="button"
+                              onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
+                              className="text-emerald-700/70 hover:text-red-500 dark:text-emerald-300/80"
+                              aria-label={`Remover ${consultor.full_name || consultor.email}`}
                             >
-                              {consultor.full_name || consultor.email}
-                              <button
-                                type="button"
-                                onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
-                                className="text-emerald-700/70 hover:text-red-500 dark:text-emerald-300/80"
-                                aria-label={`Remover ${consultor.full_name || consultor.email}`}
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      {groupMode === 'shared' && unassignedConsultors.length > 0 ? (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2">
+                          {unassignedConsultors.length} consultor{unassignedConsultors.length === 1 ? '' : 'es'} sem grupo — atribua abaixo.
+                        </p>
                       ) : null}
                     </div>
 
                     {groupMode === 'shared' ? (
-                      <div className="p-3 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#1e1e1e]">
-                        <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                          Grupo WhatsApp compartilhado
-                        </p>
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3">
-                          O mesmo grupo e link serão aplicados a todos os consultores selecionados.
-                        </p>
-                        <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                          Nome do grupo WhatsApp
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={sharedGroup.whatsapp_group_name}
-                          onChange={(e) =>
-                            setSharedWhatsappGroupInDraft(
-                              consultorModalCampaignKey,
-                              'whatsapp_group_name',
-                              e.target.value
-                            )
-                          }
-                          placeholder="Ex.: Grupo VIP Lotinha"
-                          className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
-                        />
-                        <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                          Link de convite
-                        </label>
-                        <input
-                          type="url"
-                          required
-                          value={sharedGroup.whatsapp_group_invite_url}
-                          onChange={(e) =>
-                            setSharedWhatsappGroupInDraft(
-                              consultorModalCampaignKey,
-                              'whatsapp_group_invite_url',
-                              e.target.value
-                            )
-                          }
-                          placeholder="https://chat.whatsapp.com/..."
-                          className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
-                        />
-                        <div className="mt-4 pt-3 border-t border-gray-200 dark:border-[#404040]">
-                          <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                            Gasto diário estimado por consultor
-                          </p>
-                          <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3">
-                            Valor em R$ que o gestor estima gastar por dia em cada consultor (aparece no Ranking Diário).
-                          </p>
-                          <div className="space-y-2">
-                            {selectedConsultors.map(({ consultor, entry }) => (
-                              <div key={consultor.id} className="flex items-center gap-2">
-                                <span className="text-xs text-gray-700 dark:text-gray-200 truncate flex-1 min-w-0">
-                                  {consultor.full_name || consultor.email}
-                                </span>
-                                <div className="relative w-28 shrink-0">
-                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={entry.daily_spend_estimate}
-                                    onChange={(e) =>
-                                      setConsultorDailySpendInDraft(
-                                        consultorModalCampaignKey,
-                                        consultor.id,
-                                        e.target.value
-                                      )
-                                    }
-                                    placeholder="0,00"
-                                    className="w-full pl-8 pr-2 py-1.5 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] tabular-nums"
-                                  />
-                                </div>
+                      <div className="space-y-3">
+                        {sharedGroups.map((group, groupIndex) => {
+                          const groupConsultors = selectedConsultors.filter(({ consultor }) =>
+                            group.consultor_ids.map(String).includes(String(consultor.id))
+                          );
+                          return (
+                            <div
+                              key={group.id}
+                              className="p-3 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#1e1e1e]"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                                <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                                  Grupo compartilhado {groupIndex + 1}
+                                  {group.consultor_ids.length > 0 ? (
+                                    <span className="ml-1 normal-case font-medium text-emerald-700 dark:text-emerald-300">
+                                      · {group.consultor_ids.length} consultor{group.consultor_ids.length === 1 ? '' : 'es'}
+                                    </span>
+                                  ) : null}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => removeSharedGroupForCampaign(consultorModalCampaignKey, group.id)}
+                                  className="text-[11px] font-medium text-red-600 dark:text-red-400 hover:underline"
+                                >
+                                  Remover grupo
+                                </button>
                               </div>
-                            ))}
-                          </div>
-                        </div>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3">
+                                Consultores marcados abaixo compartilham este nome e link de convite.
+                              </p>
+                              <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1.5">
+                                Consultores neste grupo
+                              </p>
+                              <div className="flex flex-wrap gap-1.5 mb-3">
+                                {selectedConsultors.map(({ consultor }) => {
+                                  const inGroup = group.consultor_ids.map(String).includes(String(consultor.id));
+                                  return (
+                                    <button
+                                      key={consultor.id}
+                                      type="button"
+                                      onClick={() =>
+                                        toggleConsultorInSharedGroup(
+                                          consultorModalCampaignKey,
+                                          group.id,
+                                          consultor.id,
+                                          !inGroup
+                                        )
+                                      }
+                                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                        inGroup
+                                          ? 'bg-emerald-600 text-white border-emerald-600'
+                                          : 'bg-white dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-[#404040] hover:border-emerald-400'
+                                      }`}
+                                    >
+                                      {consultor.full_name || consultor.email}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                                Nome do grupo WhatsApp
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={group.whatsapp_group_name}
+                                onChange={(e) =>
+                                  setSharedGroupFieldForCampaign(
+                                    consultorModalCampaignKey,
+                                    group.id,
+                                    'whatsapp_group_name',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Ex.: Grupo VIP Lotinha"
+                                className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
+                              />
+                              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                                Link de convite
+                              </label>
+                              <input
+                                type="url"
+                                required
+                                value={group.whatsapp_group_invite_url}
+                                onChange={(e) =>
+                                  setSharedGroupFieldForCampaign(
+                                    consultorModalCampaignKey,
+                                    group.id,
+                                    'whatsapp_group_invite_url',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="https://chat.whatsapp.com/..."
+                                className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a]"
+                              />
+                              {groupConsultors.length > 0 ? (
+                                <div className="mt-4 pt-3 border-t border-gray-200 dark:border-[#404040]">
+                                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+                                    Gasto diário estimado
+                                  </p>
+                                  <div className="space-y-2">
+                                    {groupConsultors.map(({ consultor, entry }) => (
+                                      <div key={consultor.id} className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-700 dark:text-gray-200 truncate flex-1 min-w-0">
+                                          {consultor.full_name || consultor.email}
+                                        </span>
+                                        <div className="relative w-28 shrink-0">
+                                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
+                                          <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={entry.daily_spend_estimate}
+                                            onChange={(e) =>
+                                              setConsultorDailySpendInDraft(
+                                                consultorModalCampaignKey,
+                                                consultor.id,
+                                                e.target.value
+                                              )
+                                            }
+                                            placeholder="0,00"
+                                            className="w-full pl-8 pr-2 py-1.5 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] tabular-nums"
+                                          />
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={() => addSharedGroupForCampaign(consultorModalCampaignKey)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-emerald-300 dark:border-emerald-700 text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Adicionar outro grupo compartilhado
+                        </button>
                       </div>
                     ) : (
                       <div className="space-y-2">
@@ -3089,14 +3583,26 @@ export default function GestorTrafegoClient({
                                 </p>
                                 <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{consultor.email}</p>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
-                                className="text-gray-400 hover:text-red-500 shrink-0"
-                                aria-label={`Remover ${consultor.full_name || consultor.email}`}
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    clearWhatsappGroupFieldsInDraft(consultorModalCampaignKey, consultor.id)
+                                  }
+                                  className="text-[11px] font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50"
+                                  disabled={!entry.whatsapp_group_name && !entry.whatsapp_group_invite_url}
+                                >
+                                  Remover grupo
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
+                                  className="text-gray-400 hover:text-red-500"
+                                  aria-label={`Remover ${consultor.full_name || consultor.email}`}
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                             <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
                               Nome do grupo WhatsApp

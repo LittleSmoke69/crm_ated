@@ -510,6 +510,21 @@ export async function isConsultorAllowedForAdsAttribution(bancaId: string, consu
   return list.some((c) => c.id === id);
 }
 
+async function assertConsultorsAllowedForAdsAttribution(
+  bancaId: string,
+  consultorIds: string[]
+): Promise<void> {
+  const ids = Array.from(new Set(consultorIds.map((id) => String(id ?? '').trim()).filter(Boolean)));
+  if (!ids.length) return;
+  const list = await listConsultoresForAdsAttributionDropdown(bancaId);
+  const allowed = new Set(list.map((c) => c.id));
+  for (const id of ids) {
+    if (!allowed.has(id)) {
+      throw new Error(`Consultor não permitido para esta banca (${id}).`);
+    }
+  }
+}
+
 export async function listCampaignConsultorAssignments(
   bancaId: string,
   campaignIds: string[]
@@ -565,12 +580,10 @@ export async function setCampaignConsultors(
     }
   }
 
-  for (const item of assignments) {
-    const allowed = await isConsultorAllowedForAdsAttribution(bancaId, item.consultor_id);
-    if (!allowed) {
-      throw new Error(`Consultor não permitido para esta banca (${item.consultor_id}).`);
-    }
-  }
+  await assertConsultorsAllowedForAdsAttribution(
+    bancaId,
+    assignments.map((item) => item.consultor_id)
+  );
 
   const payload = assignments.map((item) => ({
     banca_id: bancaId,

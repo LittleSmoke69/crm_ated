@@ -678,7 +678,17 @@ export default function BancaXAdsRanking({
                               </div>
                             </div>
                             <div className="space-y-2">
-                              {groupConsultorsByWhatsappGroup(campaign.assigned_consultors).map((group) => (
+                              {(() => {
+                                const whatsappGroups = groupConsultorsByWhatsappGroup(campaign.assigned_consultors);
+                                const sharedGroupsCount = whatsappGroups.filter((g) => g.key !== '__no_group__').length;
+                                return (
+                                  <>
+                                    {sharedGroupsCount > 1 ? (
+                                      <p className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium mb-1">
+                                        {sharedGroupsCount} grupos compartilhados nesta campanha
+                                      </p>
+                                    ) : null}
+                                    {whatsappGroups.map((group) => (
                                 <div
                                   key={group.key}
                                   className="rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-800/50 p-2.5"
@@ -767,7 +777,10 @@ export default function BancaXAdsRanking({
                                     </p>
                                   )}
                                 </div>
-                              ))}
+                                    ))}
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         ))}
