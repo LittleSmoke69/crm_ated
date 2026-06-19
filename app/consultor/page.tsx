@@ -33,6 +33,7 @@ import ConversionFunnelChart from '@/components/Charts/ConversionFunnelChart';
 import TopPerformersChart from '@/components/Charts/TopPerformersChart';
 import StarsDistributionChart from '@/components/Charts/StarsDistributionChart';
 import ExportCsvMenu from '@/components/consultor/ExportCsvMenu';
+import InvestmentRoundsReadonly from '@/components/Meta/InvestmentRoundsReadonly';
 
 interface ExternalKpis {
   total_leads: number;
@@ -1211,6 +1212,9 @@ export default function ConsultorPage() {
             </Link>
           </div>
         </div>
+
+        {/* Barra de gasto de ADS — abaixo do header, sempre visível (rodadas do próprio consultor) */}
+        <InvestmentRoundsReadonly apiBase="/api/consultor" userId={userId ?? null} />
 
         <div className="flex flex-col gap-6">
         {/* Resumo de Performance */}

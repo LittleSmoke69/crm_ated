@@ -41,6 +41,7 @@ import {
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { buildGestorEffectiveHeaders } from '@/lib/utils/gestor-effective-headers';
+import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
 import Funnel3DChart from '@/components/Charts/Funnel3DChart';
@@ -170,11 +171,35 @@ interface BancaGestorOption {
 }
 
 type MetaCampaignConsultorDraftEntry = {
+  draft_entry_id: string;
   consultor_id: string;
   whatsapp_group_name: string;
   whatsapp_group_invite_url: string;
   daily_spend_estimate: string;
 };
+
+function createDraftEntryId(): string {
+  return `de_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function draftEntryDedupeKey(entry: Pick<MetaCampaignConsultorDraftEntry, 'consultor_id' | 'whatsapp_group_invite_url' | 'draft_entry_id'>): string {
+  const url = String(entry.whatsapp_group_invite_url || '').trim().toLowerCase();
+  if (url) return `${entry.consultor_id}|||${url}`;
+  return entry.draft_entry_id;
+}
+
+function createDraftEntry(
+  consultorId: string,
+  partial?: Partial<Omit<MetaCampaignConsultorDraftEntry, 'draft_entry_id' | 'consultor_id'>>
+): MetaCampaignConsultorDraftEntry {
+  return {
+    draft_entry_id: createDraftEntryId(),
+    consultor_id: String(consultorId),
+    whatsapp_group_name: String(partial?.whatsapp_group_name || '').trim(),
+    whatsapp_group_invite_url: String(partial?.whatsapp_group_invite_url || '').trim(),
+    daily_spend_estimate: String(partial?.daily_spend_estimate || '').trim(),
+  };
+}
 
 type SharedWhatsappGroupDraft = {
   id: string;
@@ -206,7 +231,7 @@ function buildSharedGroupsFromEntries(entries: MetaCampaignConsultorDraftEntry[]
       continue;
     }
     groups.push({
-      id: g.key,
+      id: createSharedGroupId(),
       whatsapp_group_name: g.whatsapp_group_name,
       whatsapp_group_invite_url: g.whatsapp_group_invite_url,
       consultor_ids: g.items.map((i) => String((i as { consultor_id: string }).consultor_id)),
@@ -237,28 +262,47 @@ function syncEntriesFromSharedGroups(
   entries: MetaCampaignConsultorDraftEntry[],
   sharedGroups: SharedWhatsappGroupDraft[]
 ): MetaCampaignConsultorDraftEntry[] {
-  const consultorToGroup = new Map<string, SharedWhatsappGroupDraft>();
+  const spendByConsultor = new Map<string, string>();
+  for (const entry of entries) {
+    const spend = String(entry.daily_spend_estimate || '').trim();
+    if (spend) spendByConsultor.set(String(entry.consultor_id), spend);
+  }
+
+  const result: MetaCampaignConsultorDraftEntry[] = [];
   for (const group of sharedGroups) {
+    if (!group.consultor_ids.length) continue;
+    const groupName = String(group.whatsapp_group_name || '').trim();
+    const groupUrl = String(group.whatsapp_group_invite_url || '').trim();
     for (const consultorId of group.consultor_ids) {
-      consultorToGroup.set(String(consultorId), group);
+      const id = String(consultorId);
+      const existing = entries.find(
+        (entry) =>
+          String(entry.consultor_id) === id &&
+          String(entry.whatsapp_group_invite_url || '').trim().toLowerCase() === groupUrl.toLowerCase() &&
+          String(entry.whatsapp_group_name || '').trim().toLowerCase() === groupName.toLowerCase()
+      );
+      result.push(
+        existing
+          ? {
+              ...existing,
+              whatsapp_group_name: groupName,
+              whatsapp_group_invite_url: groupUrl,
+            }
+          : createDraftEntry(id, {
+              whatsapp_group_name: groupName,
+              whatsapp_group_invite_url: groupUrl,
+              daily_spend_estimate: spendByConsultor.get(id) || '',
+            })
+      );
     }
   }
-  return entries.map((entry) => {
-    const group = consultorToGroup.get(String(entry.consultor_id));
-    if (!group) return entry;
-    return {
-      ...entry,
-      whatsapp_group_name: group.whatsapp_group_name,
-      whatsapp_group_invite_url: group.whatsapp_group_invite_url,
-    };
-  });
+  return result;
 }
 
 function validateSharedGroups(
   entries: MetaCampaignConsultorDraftEntry[],
   sharedGroups: SharedWhatsappGroupDraft[]
 ): string | null {
-  const assigned = new Set<string>();
   for (const group of sharedGroups) {
     if (!group.consultor_ids.length) continue;
     const name = String(group.whatsapp_group_name || '').trim();
@@ -266,18 +310,11 @@ function validateSharedGroups(
     if (!name || !url) {
       return 'Preencha nome e link de convite para cada grupo compartilhado com consultores.';
     }
-    for (const consultorId of group.consultor_ids) {
-      const id = String(consultorId);
-      if (assigned.has(id)) {
-        return 'Cada consultor deve pertencer a apenas um grupo compartilhado.';
-      }
-      assigned.add(id);
-    }
   }
   for (const entry of entries) {
-    if (!assigned.has(String(entry.consultor_id))) {
-      return 'Atribua todos os consultores selecionados a um grupo compartilhado.';
-    }
+    const name = String(entry.whatsapp_group_name || '').trim();
+    const url = String(entry.whatsapp_group_invite_url || '').trim();
+    if (!name || !url) continue;
     const spendRaw = String(entry.daily_spend_estimate || '').trim();
     if (spendRaw) {
       const parsed = parseFloat(spendRaw.replace(',', '.'));
@@ -287,6 +324,20 @@ function validateSharedGroups(
     }
   }
   return null;
+}
+
+function getConsultorIdsInOtherSharedGroups(
+  sharedGroups: SharedWhatsappGroupDraft[],
+  exceptGroupId: string
+): Set<string> {
+  const ids = new Set<string>();
+  for (const group of sharedGroups) {
+    if (group.id === exceptGroupId) continue;
+    for (const consultorId of group.consultor_ids) {
+      ids.add(String(consultorId));
+    }
+  }
+  return ids;
 }
 
 function getSharedWhatsappGroupFromEntries(entries: MetaCampaignConsultorDraftEntry[]) {
@@ -314,11 +365,24 @@ function inferWhatsappGroupMode(entries: MetaCampaignConsultorDraftEntry[]): 'sh
 
 function getConsultorAssignmentsValidationError(entries: MetaCampaignConsultorDraftEntry[]): string | null {
   if (!entries.length) return null;
+  const selectedConsultorIds = Array.from(new Set(entries.map((entry) => String(entry.consultor_id))));
+  for (const consultorId of selectedConsultorIds) {
+    const completeEntries = entries.filter((entry) => {
+      if (String(entry.consultor_id) !== consultorId) return false;
+      const name = String(entry.whatsapp_group_name || '').trim();
+      const url = String(entry.whatsapp_group_invite_url || '').trim();
+      return Boolean(name && url);
+    });
+    if (!completeEntries.length) {
+      return 'Preencha o nome do grupo e o link de convite para todos os consultores selecionados.';
+    }
+  }
   for (const entry of entries) {
     const name = String(entry.whatsapp_group_name || '').trim();
     const url = String(entry.whatsapp_group_invite_url || '').trim();
+    if (!name && !url) continue;
     if (!name || !url) {
-      return 'Preencha o nome do grupo e o link de convite para todos os consultores selecionados.';
+      return 'Complete nome e link de convite de cada grupo ou remova o grupo incompleto.';
     }
     const spendRaw = String(entry.daily_spend_estimate || '').trim();
     if (spendRaw) {
@@ -354,8 +418,14 @@ function enrichDraftEntriesFromAssignedRow(
   }>
 ): MetaCampaignConsultorDraftEntry[] {
   return entries.map((entry) => {
-    const assignedRow = (assigned || []).find((ac) => String(ac.id) === String(entry.consultor_id));
+    const assignedRow = (assigned || []).find(
+      (ac) =>
+        String(ac.id) === String(entry.consultor_id) &&
+        String(ac.whatsapp_group_invite_url || '').trim().toLowerCase() ===
+          String(entry.whatsapp_group_invite_url || '').trim().toLowerCase()
+    );
     return {
+      ...entry,
       consultor_id: String(entry.consultor_id),
       whatsapp_group_name: String(
         entry.whatsapp_group_name || assignedRow?.whatsapp_group_name || ''
@@ -939,7 +1009,12 @@ export default function GestorTrafegoClient({
         if (row.campaign_id !== campaignId) return row;
         const assigned_consultors = draftEntries.map((entry) => {
           const option = metaConsultorOptions.find((o) => String(o.id) === String(entry.consultor_id));
-          const existing = row.assigned_consultors?.find((ac) => String(ac.id) === String(entry.consultor_id));
+          const existing = row.assigned_consultors?.find(
+            (ac) =>
+              String(ac.id) === String(entry.consultor_id) &&
+              String(ac.whatsapp_group_invite_url || '').trim().toLowerCase() ===
+                String(entry.whatsapp_group_invite_url || '').trim().toLowerCase()
+          );
           return {
             id: entry.consultor_id,
             email: option?.email || existing?.email || '',
@@ -951,11 +1026,20 @@ export default function GestorTrafegoClient({
             daily_spend_estimate: parseDailySpendDraftValue(entry.daily_spend_estimate),
           };
         });
-        const consultor_total_deposited = assigned_consultors.reduce(
-          (sum, c) => sum + (c.total_deposited || 0),
+        const consultor_total_deposited = Array.from(new Set(assigned_consultors.map((c) => c.id))).reduce(
+          (sum, consultorId) => {
+            const rowMatch = assigned_consultors.find((c) => c.id === consultorId);
+            return sum + (rowMatch?.total_deposited || 0);
+          },
           0
         );
-        const consultor_total_leads = assigned_consultors.reduce((sum, c) => sum + (c.total_leads || 0), 0);
+        const consultor_total_leads = Array.from(new Set(assigned_consultors.map((c) => c.id))).reduce(
+          (sum, consultorId) => {
+            const rowMatch = assigned_consultors.find((c) => c.id === consultorId);
+            return sum + (rowMatch?.total_leads || 0);
+          },
+          0
+        );
         return {
           ...row,
           assigned_consultors,
@@ -1261,10 +1345,20 @@ export default function GestorTrafegoClient({
     let validationError: string | null = null;
     if (groupMode === 'shared') {
       const sharedGroups =
-        consultorModalSharedGroups[key] ?? buildSharedGroupsFromEntries(draftEntries);
+        consultorModalSharedGroups[key]?.length
+          ? consultorModalSharedGroups[key]!
+          : buildSharedGroupsFromEntries(draftEntries);
       validationError = validateSharedGroups(draftEntries, sharedGroups);
       if (!validationError) {
         entriesToSave = syncEntriesFromSharedGroups(draftEntries, sharedGroups);
+        const selectedIds = new Set(draftEntries.map((entry) => String(entry.consultor_id)));
+        const savedIds = new Set(entriesToSave.map((entry) => String(entry.consultor_id)));
+        for (const consultorId of selectedIds) {
+          if (!savedIds.has(consultorId)) {
+            validationError = 'Atribua todos os consultores selecionados a ao menos um grupo compartilhado.';
+            break;
+          }
+        }
       }
     } else {
       validationError = getConsultorAssignmentsValidationError(draftEntries);
@@ -1274,12 +1368,19 @@ export default function GestorTrafegoClient({
       return false;
     }
     setConsultorModalError(null);
-    const assignments = entriesToSave.map((entry) => ({
-      consultor_id: String(entry.consultor_id).trim(),
-      whatsapp_group_name: String(entry.whatsapp_group_name || '').trim() || null,
-      whatsapp_group_invite_url: String(entry.whatsapp_group_invite_url || '').trim() || null,
-      daily_spend_estimate: parseDailySpendDraftValue(entry.daily_spend_estimate),
-    })).filter((entry) => entry.consultor_id);
+    const assignments = entriesToSave
+      .map((entry) => ({
+        consultor_id: String(entry.consultor_id).trim(),
+        whatsapp_group_name: String(entry.whatsapp_group_name || '').trim() || null,
+        whatsapp_group_invite_url: String(entry.whatsapp_group_invite_url || '').trim() || null,
+        daily_spend_estimate: parseDailySpendDraftValue(entry.daily_spend_estimate),
+      }))
+      .filter(
+        (entry) =>
+          entry.consultor_id &&
+          String(entry.whatsapp_group_name || '').trim() &&
+          String(entry.whatsapp_group_invite_url || '').trim()
+      );
     setMetaCampaignConsultorSavingKey(key);
     try {
       const res = await fetch('/api/gestor-trafego/meta/campaign-consultors', {
@@ -1325,65 +1426,69 @@ export default function GestorTrafegoClient({
   const updateCampaignConsultorDraft = (campaignKey: string, entries: MetaCampaignConsultorDraftEntry[]) => {
     const normalized = entries
       .map((entry) => ({
+        draft_entry_id: entry.draft_entry_id || createDraftEntryId(),
         consultor_id: String(entry.consultor_id).trim(),
         whatsapp_group_name: String(entry.whatsapp_group_name || '').trim(),
         whatsapp_group_invite_url: String(entry.whatsapp_group_invite_url || '').trim(),
         daily_spend_estimate: String(entry.daily_spend_estimate || '').trim(),
       }))
       .filter((entry) => entry.consultor_id);
-    const byConsultor = new Map<string, MetaCampaignConsultorDraftEntry>();
-    for (const entry of normalized) byConsultor.set(entry.consultor_id, entry);
+    const byKey = new Map<string, MetaCampaignConsultorDraftEntry>();
+    for (const entry of normalized) byKey.set(draftEntryDedupeKey(entry), entry);
     setMetaCampaignConsultorDraft((prev) => ({
       ...prev,
-      [campaignKey]: Array.from(byConsultor.values()),
+      [campaignKey]: Array.from(byKey.values()),
     }));
+  };
+
+  const updateSharedGroupsForCampaign = (
+    campaignKey: string,
+    updater: (groups: SharedWhatsappGroupDraft[]) => SharedWhatsappGroupDraft[]
+  ) => {
+    setConsultorModalSharedGroups((groupsPrev) => {
+      const current =
+        groupsPrev[campaignKey] ??
+        [
+          {
+            id: createSharedGroupId(),
+            whatsapp_group_name: '',
+            whatsapp_group_invite_url: '',
+            consultor_ids: [],
+          },
+        ];
+      const next = updater(current);
+      setMetaCampaignConsultorDraft((draftPrev) => {
+        const entries = draftPrev[campaignKey] ?? [];
+        if (!entries.length) return draftPrev;
+        return {
+          ...draftPrev,
+          [campaignKey]: syncEntriesFromSharedGroups(entries, next),
+        };
+      });
+      return { ...groupsPrev, [campaignKey]: next };
+    });
   };
 
   const toggleCampaignConsultorInDraft = (campaignKey: string, consultorId: string, checked: boolean) => {
     const id = String(consultorId);
-    const groupMode = consultorModalGroupMode[campaignKey] ?? 'shared';
     if (!checked) {
-      setConsultorModalSharedGroups((sharedPrev) => {
-        const groups = sharedPrev[campaignKey];
-        if (!groups?.length) return sharedPrev;
-        return {
-          ...sharedPrev,
-          [campaignKey]: groups.map((g) => ({
-            ...g,
-            consultor_ids: g.consultor_ids.filter((cid) => String(cid) !== id),
-          })),
-        };
-      });
-    } else if (groupMode === 'shared') {
-      setConsultorModalSharedGroups((sharedPrev) => {
-        const groups = [...(sharedPrev[campaignKey] ?? [{ id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }])];
-        const next = groups.map((g) => ({
+      updateSharedGroupsForCampaign(campaignKey, (groups) =>
+        groups.map((g) => ({
           ...g,
           consultor_ids: g.consultor_ids.filter((cid) => String(cid) !== id),
-        }));
-        next[0] = { ...next[0], consultor_ids: [...next[0].consultor_ids, id] };
-        return { ...sharedPrev, [campaignKey]: next };
-      });
+        }))
+      );
     }
     setMetaCampaignConsultorDraft((prev) => {
       const current = [...(prev[campaignKey] ?? [])];
-      const idx = current.findIndex((e) => String(e.consultor_id) === id);
       if (checked) {
-        if (idx >= 0) return prev;
+        if (current.some((e) => String(e.consultor_id) === id)) return prev;
         return {
           ...prev,
-          [campaignKey]: [
-            ...current,
-            {
-              consultor_id: id,
-              whatsapp_group_name: '',
-              whatsapp_group_invite_url: '',
-              daily_spend_estimate: '',
-            },
-          ],
+          [campaignKey]: [...current, createDraftEntry(id)],
         };
       }
-      if (idx < 0) return prev;
+      if (!current.some((e) => String(e.consultor_id) === id)) return prev;
       return {
         ...prev,
         [campaignKey]: current.filter((e) => String(e.consultor_id) !== id),
@@ -1408,17 +1513,75 @@ export default function GestorTrafegoClient({
 
   const setConsultorWhatsappGroupInDraft = (
     campaignKey: string,
-    consultorId: string,
+    draftEntryId: string,
     field: 'whatsapp_group_name' | 'whatsapp_group_invite_url',
     value: string
+  ) => {
+    setMetaCampaignConsultorDraft((prev) => {
+      const current = [...(prev[campaignKey] ?? [])];
+      const idx = current.findIndex((e) => e.draft_entry_id === draftEntryId);
+      if (idx < 0) return prev;
+      current[idx] = { ...current[idx], [field]: value };
+      return { ...prev, [campaignKey]: current };
+    });
+  };
+
+  const setConsultorDailySpendInDraft = (
+    campaignKey: string,
+    consultorId: string,
+    value: string,
+    draftEntryId?: string
   ) => {
     const id = String(consultorId);
     setMetaCampaignConsultorDraft((prev) => {
       const current = [...(prev[campaignKey] ?? [])];
-      const idx = current.findIndex((e) => String(e.consultor_id) === id);
-      if (idx < 0) return prev;
-      current[idx] = { ...current[idx], [field]: value };
-      return { ...prev, [campaignKey]: current };
+      if (draftEntryId) {
+        const idx = current.findIndex((e) => e.draft_entry_id === draftEntryId);
+        if (idx < 0) return prev;
+        current[idx] = { ...current[idx], daily_spend_estimate: value };
+        return { ...prev, [campaignKey]: current };
+      }
+      return {
+        ...prev,
+        [campaignKey]: current.map((entry) =>
+          String(entry.consultor_id) === id ? { ...entry, daily_spend_estimate: value } : entry
+        ),
+      };
+    });
+  };
+
+  const addIndividualGroupForConsultor = (campaignKey: string, consultorId: string) => {
+    const id = String(consultorId);
+    setMetaCampaignConsultorDraft((prev) => {
+      const current = [...(prev[campaignKey] ?? [])];
+      const spend = current.find((entry) => String(entry.consultor_id) === id)?.daily_spend_estimate || '';
+      return {
+        ...prev,
+        [campaignKey]: [...current, createDraftEntry(id, { daily_spend_estimate: spend })],
+      };
+    });
+  };
+
+  const removeIndividualGroupEntry = (campaignKey: string, draftEntryId: string) => {
+    setMetaCampaignConsultorDraft((prev) => {
+      const current = [...(prev[campaignKey] ?? [])];
+      const target = current.find((entry) => entry.draft_entry_id === draftEntryId);
+      if (!target) return prev;
+      const sameConsultorEntries = current.filter((entry) => String(entry.consultor_id) === String(target.consultor_id));
+      if (sameConsultorEntries.length <= 1) {
+        return {
+          ...prev,
+          [campaignKey]: current.map((entry) =>
+            entry.draft_entry_id === draftEntryId
+              ? { ...entry, whatsapp_group_name: '', whatsapp_group_invite_url: '' }
+              : entry
+          ),
+        };
+      }
+      return {
+        ...prev,
+        [campaignKey]: current.filter((entry) => entry.draft_entry_id !== draftEntryId),
+      };
     });
   };
 
@@ -1441,21 +1604,6 @@ export default function GestorTrafegoClient({
     });
   };
 
-  const setConsultorDailySpendInDraft = (
-    campaignKey: string,
-    consultorId: string,
-    value: string
-  ) => {
-    const id = String(consultorId);
-    setMetaCampaignConsultorDraft((prev) => {
-      const current = [...(prev[campaignKey] ?? [])];
-      const idx = current.findIndex((e) => String(e.consultor_id) === id);
-      if (idx < 0) return prev;
-      current[idx] = { ...current[idx], daily_spend_estimate: value };
-      return { ...prev, [campaignKey]: current };
-    });
-  };
-
   const setConsultorModalGroupModeForCampaign = (
     campaignKey: string,
     mode: 'shared' | 'individual'
@@ -1468,17 +1616,6 @@ export default function GestorTrafegoClient({
         [campaignKey]: buildSharedGroupsFromEntries(current),
       }));
     }
-  };
-
-  const updateSharedGroupsForCampaign = (
-    campaignKey: string,
-    updater: (groups: SharedWhatsappGroupDraft[]) => SharedWhatsappGroupDraft[]
-  ) => {
-    setConsultorModalSharedGroups((prev) => {
-      const current =
-        prev[campaignKey] ?? buildSharedGroupsFromEntries(metaCampaignConsultorDraft[campaignKey] ?? []);
-      return { ...prev, [campaignKey]: updater(current) };
-    });
   };
 
   const addSharedGroupForCampaign = (campaignKey: string) => {
@@ -1525,12 +1662,11 @@ export default function GestorTrafegoClient({
     const id = String(consultorId);
     updateSharedGroupsForCampaign(campaignKey, (groups) =>
       groups.map((g) => {
+        if (g.id !== groupId) return g;
         const without = g.consultor_ids.filter((cid) => String(cid) !== id);
-        if (g.id !== groupId) {
-          return { ...g, consultor_ids: without };
-        }
         if (!include) return { ...g, consultor_ids: without };
-        return { ...g, consultor_ids: [...without, id] };
+        if (g.consultor_ids.map(String).includes(id)) return g;
+        return { ...g, consultor_ids: [...g.consultor_ids, id] };
       })
     );
   };
@@ -1567,12 +1703,13 @@ export default function GestorTrafegoClient({
     for (const row of metaCampaignsData || []) {
       const key = `${effectiveBancaId || ''}:${row.campaign_id}`;
       nextDraft[key] = Array.isArray(row.assigned_consultors)
-        ? row.assigned_consultors.map((c) => ({
-            consultor_id: String(c.id),
-            whatsapp_group_name: c.whatsapp_group_name ? String(c.whatsapp_group_name) : '',
-            whatsapp_group_invite_url: c.whatsapp_group_invite_url ? String(c.whatsapp_group_invite_url) : '',
-            daily_spend_estimate: formatDailySpendDraftValue(c.daily_spend_estimate),
-          })).filter((e) => e.consultor_id)
+        ? row.assigned_consultors.map((c) =>
+            createDraftEntry(String(c.id), {
+              whatsapp_group_name: c.whatsapp_group_name ? String(c.whatsapp_group_name) : '',
+              whatsapp_group_invite_url: c.whatsapp_group_invite_url ? String(c.whatsapp_group_invite_url) : '',
+              daily_spend_estimate: formatDailySpendDraftValue(c.daily_spend_estimate),
+            })
+          ).filter((e) => e.consultor_id)
         : [];
     }
     setMetaCampaignConsultorDraft(nextDraft);
@@ -2105,10 +2242,14 @@ export default function GestorTrafegoClient({
                                         const displayItems = selected.map((entry) => {
                                           const c = metaConsultorOptions.find((o) => String(o.id) === String(entry.consultor_id));
                                           const assignedRow = (row.assigned_consultors || []).find(
-                                            (ac) => String(ac.id) === String(entry.consultor_id)
+                                            (ac) =>
+                                              String(ac.id) === String(entry.consultor_id) &&
+                                              String(ac.whatsapp_group_invite_url || '').trim().toLowerCase() ===
+                                                String(entry.whatsapp_group_invite_url || '').trim().toLowerCase()
                                           );
                                           return {
-                                            id: entry.consultor_id,
+                                            id: `${entry.consultor_id}|||${entry.whatsapp_group_invite_url || entry.draft_entry_id}`,
+                                            consultorId: entry.consultor_id,
                                             label: c?.full_name || c?.email || entry.consultor_id,
                                             whatsapp_group_name:
                                               entry.whatsapp_group_name.trim() ||
@@ -2148,7 +2289,7 @@ export default function GestorTrafegoClient({
                                                       );
                                                       void removeAssignedConsultorFromCampaign(
                                                         row.campaign_id,
-                                                        item.id,
+                                                        item.consultorId,
                                                         resolved
                                                       );
                                                     }}
@@ -2330,6 +2471,21 @@ export default function GestorTrafegoClient({
             </div>
           </div>
         </div>
+
+        {/* Rodadas de Investimento — gestor define meta de gasto por consultor e acompanha LTV do período */}
+        {bancasGestor.length > 0 && (
+          <div className="mb-6">
+            <InvestmentRoundsPanel
+              apiBase="/api/gestor-trafego/meta"
+              userId={userId ?? null}
+              bancas={bancasGestor.map((b) => ({
+                id: b.banca_id,
+                name: b.banca_name,
+                url: b.url ?? '',
+              }))}
+            />
+          </div>
+        )}
 
         {/* Configurar integração Meta (vinculada à banca) - gestor pode adicionar aqui; admin vê em Admin → Meta */}
         {effectiveBancaId && (
@@ -3179,26 +3335,31 @@ export default function GestorTrafegoClient({
           if (!term) return true;
           return (c.full_name || '').toLowerCase().includes(term) || c.email.toLowerCase().includes(term);
         });
-        const selectedConsultors = selectedEntries
-          .map((entry) => {
-            const consultor = metaConsultorOptions.find((o) => String(o.id) === String(entry.consultor_id));
+        const selectedConsultorIds = Array.from(selectedIdSet);
+        const uniqueSelectedConsultors = selectedConsultorIds
+          .map((consultorId) => {
+            const consultor = metaConsultorOptions.find((o) => String(o.id) === consultorId);
             if (!consultor) return null;
-            return { consultor, entry };
+            return {
+              consultor,
+              entries: selectedEntries.filter((entry) => String(entry.consultor_id) === consultorId),
+            };
           })
           .filter(Boolean) as Array<{
             consultor: { id: string; email: string; full_name: string | null };
-            entry: MetaCampaignConsultorDraftEntry;
+            entries: MetaCampaignConsultorDraftEntry[];
           }>;
         const isSaving = metaCampaignConsultorSavingKey === consultorModalCampaignKey;
         const groupMode =
           consultorModalGroupMode[consultorModalCampaignKey] ?? inferWhatsappGroupMode(selectedEntries);
         const sharedGroups =
-          consultorModalSharedGroups[consultorModalCampaignKey] ??
-          buildSharedGroupsFromEntries(selectedEntries);
+          consultorModalSharedGroups[consultorModalCampaignKey]?.length
+            ? consultorModalSharedGroups[consultorModalCampaignKey]!
+            : buildSharedGroupsFromEntries(selectedEntries);
         const assignedConsultorIds = new Set(
           sharedGroups.flatMap((g) => g.consultor_ids.map((id) => String(id)))
         );
-        const unassignedConsultors = selectedConsultors.filter(
+        const unassignedConsultors = uniqueSelectedConsultors.filter(
           ({ consultor }) => !assignedConsultorIds.has(String(consultor.id))
         );
         const saveValidationError =
@@ -3213,7 +3374,8 @@ export default function GestorTrafegoClient({
                 <div>
                   <h3 className="text-base font-semibold text-gray-900 dark:text-gray-50">Atribuir consultores</h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Selecione consultores e organize um ou mais grupos compartilhados, ou grupo individual por consultor.
+                    Selecione consultores e organize grupos compartilhados ou individuais. Cada consultor pode estar em
+                    vários grupos.
                   </p>
                   {campaignRow && (
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-md">
@@ -3260,32 +3422,14 @@ export default function GestorTrafegoClient({
                     type="button"
                     onClick={() => {
                       const merged = new Map<string, MetaCampaignConsultorDraftEntry>();
-                      for (const entry of selectedEntries) merged.set(String(entry.consultor_id), entry);
-                      const newIds: string[] = [];
+                      for (const entry of selectedEntries) merged.set(draftEntryDedupeKey(entry), entry);
                       for (const consultor of filtered) {
                         const id = String(consultor.id);
-                        if (merged.has(id)) continue;
-                        newIds.push(id);
-                        merged.set(id, {
-                          consultor_id: id,
-                          whatsapp_group_name: '',
-                          whatsapp_group_invite_url: '',
-                          daily_spend_estimate: '',
-                        });
+                        if (selectedIdSet.has(id)) continue;
+                        const draftEntry = createDraftEntry(id);
+                        merged.set(draftEntryDedupeKey(draftEntry), draftEntry);
                       }
                       updateCampaignConsultorDraft(consultorModalCampaignKey, Array.from(merged.values()));
-                      if (groupMode === 'shared' && newIds.length) {
-                        updateSharedGroupsForCampaign(consultorModalCampaignKey, (groups) => {
-                          const next = groups.length
-                            ? [...groups]
-                            : [{ id: createSharedGroupId(), whatsapp_group_name: '', whatsapp_group_invite_url: '', consultor_ids: [] }];
-                          next[0] = {
-                            ...next[0],
-                            consultor_ids: Array.from(new Set([...next[0].consultor_ids, ...newIds])),
-                          };
-                          return next;
-                        });
-                      }
                     }}
                     disabled={filtered.length === 0}
                     className="px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-900/20 disabled:opacity-50"
@@ -3332,7 +3476,7 @@ export default function GestorTrafegoClient({
                   </div>
                 </div>
 
-                {selectedConsultors.length > 0 && (
+                {uniqueSelectedConsultors.length > 0 && (
                   <div className="space-y-3">
                     <div>
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -3398,10 +3542,10 @@ export default function GestorTrafegoClient({
 
                     <div>
                       <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                        Consultores selecionados ({selectedConsultors.length})
+                        Consultores selecionados ({uniqueSelectedConsultors.length})
                       </p>
                       <div className="flex flex-wrap gap-1.5">
-                        {selectedConsultors.map(({ consultor }) => (
+                        {uniqueSelectedConsultors.map(({ consultor }) => (
                           <span
                             key={consultor.id}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
@@ -3428,9 +3572,10 @@ export default function GestorTrafegoClient({
                     {groupMode === 'shared' ? (
                       <div className="space-y-3">
                         {sharedGroups.map((group, groupIndex) => {
-                          const groupConsultors = selectedConsultors.filter(({ consultor }) =>
+                          const groupConsultors = uniqueSelectedConsultors.filter(({ consultor }) =>
                             group.consultor_ids.map(String).includes(String(consultor.id))
                           );
+                          const selectableConsultors = uniqueSelectedConsultors;
                           return (
                             <div
                               key={group.id}
@@ -3454,14 +3599,22 @@ export default function GestorTrafegoClient({
                                 </button>
                               </div>
                               <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-3">
-                                Consultores marcados abaixo compartilham este nome e link de convite.
+                                Marque os consultores deste grupo. Um consultor pode pertencer a vários grupos
+                                compartilhados ao mesmo tempo.
                               </p>
                               <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1.5">
                                 Consultores neste grupo
                               </p>
                               <div className="flex flex-wrap gap-1.5 mb-3">
-                                {selectedConsultors.map(({ consultor }) => {
-                                  const inGroup = group.consultor_ids.map(String).includes(String(consultor.id));
+                                {selectableConsultors.length === 0 ? (
+                                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    Nenhum consultor disponível — todos já estão em outros grupos ou nenhum foi selecionado.
+                                  </p>
+                                ) : (
+                                  selectableConsultors.map(({ consultor }) => {
+                                  const consultorId = String(consultor.id);
+                                  const inGroup = group.consultor_ids.map(String).includes(consultorId);
+                                  const alsoInOtherGroups = getConsultorIdsInOtherSharedGroups(sharedGroups, group.id).has(consultorId);
                                   return (
                                     <button
                                       key={consultor.id}
@@ -3474,16 +3627,27 @@ export default function GestorTrafegoClient({
                                           !inGroup
                                         )
                                       }
-                                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border transition-colors ${
                                         inGroup
                                           ? 'bg-emerald-600 text-white border-emerald-600'
-                                          : 'bg-white dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-[#404040] hover:border-emerald-400'
+                                          : alsoInOtherGroups
+                                            ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:border-emerald-400'
+                                            : 'bg-white dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-[#404040] hover:border-emerald-400'
                                       }`}
+                                      title={
+                                        alsoInOtherGroups && !inGroup
+                                          ? 'Consultor já está em outro grupo — clique para incluir também neste'
+                                          : undefined
+                                      }
                                     >
                                       {consultor.full_name || consultor.email}
+                                      {alsoInOtherGroups && !inGroup ? (
+                                        <span className="text-[10px] opacity-80">· em outro grupo</span>
+                                      ) : null}
                                     </button>
                                   );
-                                })}
+                                })
+                                )}
                               </div>
                               <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
                                 Nome do grupo WhatsApp
@@ -3527,7 +3691,9 @@ export default function GestorTrafegoClient({
                                     Gasto diário estimado
                                   </p>
                                   <div className="space-y-2">
-                                    {groupConsultors.map(({ consultor, entry }) => (
+                                    {groupConsultors.map(({ consultor, entries }) => {
+                                      const entry = entries[0];
+                                      return (
                                       <div key={consultor.id} className="flex items-center gap-2">
                                         <span className="text-xs text-gray-700 dark:text-gray-200 truncate flex-1 min-w-0">
                                           {consultor.full_name || consultor.email}
@@ -3537,7 +3703,7 @@ export default function GestorTrafegoClient({
                                           <input
                                             type="text"
                                             inputMode="decimal"
-                                            value={entry.daily_spend_estimate}
+                                            value={entry?.daily_spend_estimate || ''}
                                             onChange={(e) =>
                                               setConsultorDailySpendInDraft(
                                                 consultorModalCampaignKey,
@@ -3550,7 +3716,7 @@ export default function GestorTrafegoClient({
                                           />
                                         </div>
                                       </div>
-                                    ))}
+                                    )})}
                                   </div>
                                 </div>
                               ) : null}
@@ -3567,102 +3733,120 @@ export default function GestorTrafegoClient({
                         </button>
                       </div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">
-                          Grupo WhatsApp por consultor
+                          Grupos WhatsApp por consultor
                         </p>
-                        {selectedConsultors.map(({ consultor, entry }) => (
+                        {uniqueSelectedConsultors.map(({ consultor, entries }) => (
                           <div
                             key={consultor.id}
-                            className="p-3 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#1e1e1e]"
+                            className="p-3 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50/80 dark:bg-[#1e1e1e] space-y-3"
                           >
-                            <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-gray-900 dark:text-gray-50 truncate">
                                   {consultor.full_name || consultor.email}
                                 </p>
                                 <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{consultor.email}</p>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    clearWhatsappGroupFieldsInDraft(consultorModalCampaignKey, consultor.id)
+                              <button
+                                type="button"
+                                onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
+                                className="text-gray-400 hover:text-red-500 shrink-0"
+                                aria-label={`Remover ${consultor.full_name || consultor.email}`}
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                            {entries.map((entry, entryIndex) => (
+                              <div
+                                key={entry.draft_entry_id}
+                                className="p-3 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a]"
+                              >
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                                    Grupo {entryIndex + 1}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeIndividualGroupEntry(consultorModalCampaignKey, entry.draft_entry_id)
+                                    }
+                                    className="text-[11px] font-medium text-red-600 dark:text-red-400 hover:underline"
+                                  >
+                                    Remover grupo
+                                  </button>
+                                </div>
+                                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                                  Nome do grupo WhatsApp
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={entry.whatsapp_group_name}
+                                  onChange={(e) =>
+                                    setConsultorWhatsappGroupInDraft(
+                                      consultorModalCampaignKey,
+                                      entry.draft_entry_id,
+                                      'whatsapp_group_name',
+                                      e.target.value
+                                    )
                                   }
-                                  className="text-[11px] font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-50"
-                                  disabled={!entry.whatsapp_group_name && !entry.whatsapp_group_invite_url}
-                                >
-                                  Remover grupo
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleCampaignConsultorInDraft(consultorModalCampaignKey, consultor.id, false)}
-                                  className="text-gray-400 hover:text-red-500"
-                                  aria-label={`Remover ${consultor.full_name || consultor.email}`}
-                                >
-                                  <X className="w-4 h-4" />
-                                </button>
+                                  placeholder="Ex.: Grupo VIP Lotinha"
+                                  className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
+                                />
+                                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                                  Link de convite
+                                </label>
+                                <input
+                                  type="url"
+                                  required
+                                  value={entry.whatsapp_group_invite_url}
+                                  onChange={(e) =>
+                                    setConsultorWhatsappGroupInDraft(
+                                      consultorModalCampaignKey,
+                                      entry.draft_entry_id,
+                                      'whatsapp_group_invite_url',
+                                      e.target.value
+                                    )
+                                  }
+                                  placeholder="https://chat.whatsapp.com/..."
+                                  className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
+                                />
+                                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                                  Gasto diário estimado (R$)
+                                </label>
+                                <div className="relative">
+                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={entry.daily_spend_estimate}
+                                    onChange={(e) =>
+                                      setConsultorDailySpendInDraft(
+                                        consultorModalCampaignKey,
+                                        consultor.id,
+                                        e.target.value,
+                                        entry.draft_entry_id
+                                      )
+                                    }
+                                    placeholder="Ex.: 15,00"
+                                    className="w-full pl-9 pr-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] tabular-nums"
+                                  />
+                                </div>
+                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                                  Estimativa exibida no Ranking Diário — Banca x ADS.
+                                </p>
                               </div>
-                            </div>
-                            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                              Nome do grupo WhatsApp
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              value={entry.whatsapp_group_name}
-                              onChange={(e) =>
-                                setConsultorWhatsappGroupInDraft(
-                                  consultorModalCampaignKey,
-                                  consultor.id,
-                                  'whatsapp_group_name',
-                                  e.target.value
-                                )
-                              }
-                              placeholder="Ex.: Grupo VIP Lotinha"
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
-                            />
-                            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                              Link de convite
-                            </label>
-                            <input
-                              type="url"
-                              required
-                              value={entry.whatsapp_group_invite_url}
-                              onChange={(e) =>
-                                setConsultorWhatsappGroupInDraft(
-                                  consultorModalCampaignKey,
-                                  consultor.id,
-                                  'whatsapp_group_invite_url',
-                                  e.target.value
-                                )
-                              }
-                              placeholder="https://chat.whatsapp.com/..."
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] mb-2"
-                            />
-                            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                              Gasto diário estimado (R$)
-                            </label>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={entry.daily_spend_estimate}
-                                onChange={(e) =>
-                                  setConsultorDailySpendInDraft(
-                                    consultorModalCampaignKey,
-                                    consultor.id,
-                                    e.target.value
-                                  )
-                                }
-                                placeholder="Ex.: 15,00"
-                                className="w-full pl-9 pr-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] tabular-nums"
-                              />
-                            </div>
-                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
-                              Estimativa exibida no Ranking Diário — Banca x ADS.
-                            </p>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => addIndividualGroupForConsultor(consultorModalCampaignKey, consultor.id)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-emerald-300 dark:border-emerald-700 text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Adicionar outro grupo
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -3671,8 +3855,9 @@ export default function GestorTrafegoClient({
                 )}
 
                 <p className="text-[11px] text-gray-500">
-                  Selecionados: <span className="font-semibold text-gray-700 dark:text-gray-300">{selectedEntries.length}</span>
-                  {selectedEntries.length > 1 ? ' consultores' : selectedEntries.length === 1 ? ' consultor' : ''}
+                  Consultores: <span className="font-semibold text-gray-700 dark:text-gray-300">{selectedConsultorIds.length}</span>
+                  {' · '}
+                  Grupos: <span className="font-semibold text-gray-700 dark:text-gray-300">{selectedEntries.length}</span>
                 </p>
               </div>
 

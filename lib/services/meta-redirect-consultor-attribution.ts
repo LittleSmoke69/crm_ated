@@ -486,58 +486,65 @@ export function mergeCampaignConsultorAssignments(
   }>,
   redirectAssignments: RedirectCampaignConsultorAssignment[]
 ): CombinedCampaignConsultorAssignment[] {
-  const assignmentsByKey = new Map<string, CombinedCampaignConsultorAssignment>();
+  const manualRows: CombinedCampaignConsultorAssignment[] = manualAssignments.map((assignment) => ({
+    campaign_id: assignment.campaign_id,
+    consultor_id: assignment.consultor_id,
+    source: 'manual' as const,
+    redirect_groups: [],
+    manual_whatsapp_group_name: assignment.whatsapp_group_name ?? null,
+    manual_whatsapp_group_invite_url: assignment.whatsapp_group_invite_url ?? null,
+    manual_daily_spend_estimate: assignment.daily_spend_estimate ?? null,
+    redirect_from_clicks: false,
+    redirect_from_linked_project: false,
+  }));
 
-  for (const assignment of manualAssignments) {
-    assignmentsByKey.set(`${assignment.campaign_id}:${assignment.consultor_id}`, {
-      campaign_id: assignment.campaign_id,
-      consultor_id: assignment.consultor_id,
-      source: 'manual',
-      redirect_groups: [],
-      manual_whatsapp_group_name: assignment.whatsapp_group_name ?? null,
-      manual_whatsapp_group_invite_url: assignment.whatsapp_group_invite_url ?? null,
-      manual_daily_spend_estimate: assignment.daily_spend_estimate ?? null,
-      redirect_from_clicks: false,
-      redirect_from_linked_project: false,
-    });
-  }
-
+  const redirectByKey = new Map<string, RedirectCampaignConsultorAssignment>();
   for (const assignment of redirectAssignments) {
     const key = `${assignment.campaign_id}:${assignment.consultor_id}`;
-    const current = assignmentsByKey.get(key);
-    const rfC = Boolean(assignment.from_clicks);
-    const rfL = Boolean(assignment.from_linked_project);
-
+    const current = redirectByKey.get(key);
     if (!current) {
-      assignmentsByKey.set(key, {
-        campaign_id: assignment.campaign_id,
-        consultor_id: assignment.consultor_id,
-        source: 'redirect',
-        redirect_groups: [...(assignment.redirect_groups || [])],
-        redirect_from_clicks: rfC,
-        redirect_from_linked_project: rfL,
-      });
+      redirectByKey.set(key, assignment);
       continue;
     }
-
-    if (current.source === 'manual') {
-      assignmentsByKey.set(key, {
-        ...current,
-        source: 'manual_redirect',
-        redirect_groups: [...(assignment.redirect_groups || [])],
-        redirect_from_clicks: rfC,
-        redirect_from_linked_project: rfL,
-      });
-      continue;
-    }
-
-    assignmentsByKey.set(key, {
+    redirectByKey.set(key, {
       ...current,
       redirect_groups: mergeRedirectGroupLists(current.redirect_groups || [], assignment.redirect_groups || []),
-      redirect_from_clicks: Boolean(current.redirect_from_clicks || rfC),
-      redirect_from_linked_project: Boolean(current.redirect_from_linked_project || rfL),
+      from_clicks: Boolean(current.from_clicks || assignment.from_clicks),
+      from_linked_project: Boolean(current.from_linked_project || assignment.from_linked_project),
     });
   }
 
-  return Array.from(assignmentsByKey.values());
+  const manualByConsultorCampaign = new Map<string, CombinedCampaignConsultorAssignment[]>();
+  for (const row of manualRows) {
+    const key = `${row.campaign_id}:${row.consultor_id}`;
+    const list = manualByConsultorCampaign.get(key) ?? [];
+    list.push(row);
+    manualByConsultorCampaign.set(key, list);
+  }
+
+  const result: CombinedCampaignConsultorAssignment[] = [...manualRows];
+
+  for (const [key, redirect] of redirectByKey) {
+    const manualForConsultor = manualByConsultorCampaign.get(key);
+    if (manualForConsultor?.length) {
+      for (const row of manualForConsultor) {
+        row.source = 'manual_redirect';
+        row.redirect_groups = mergeRedirectGroupLists(row.redirect_groups || [], redirect.redirect_groups || []);
+        row.redirect_from_clicks = Boolean(redirect.from_clicks);
+        row.redirect_from_linked_project = Boolean(redirect.from_linked_project);
+      }
+      continue;
+    }
+
+    result.push({
+      campaign_id: redirect.campaign_id,
+      consultor_id: redirect.consultor_id,
+      source: 'redirect',
+      redirect_groups: [...(redirect.redirect_groups || [])],
+      redirect_from_clicks: Boolean(redirect.from_clicks),
+      redirect_from_linked_project: Boolean(redirect.from_linked_project),
+    });
+  }
+
+  return result;
 }

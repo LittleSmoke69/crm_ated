@@ -25,7 +25,7 @@ function getLandingRouteByStatus(status: string | null | undefined): string {
     case 'gerente':
       return '/gerente';
     case 'consultor':
-      return '/crm/kanban';
+      return '/consultor';
     case 'auditoria':
       return '/admin';
     case 'suporte':

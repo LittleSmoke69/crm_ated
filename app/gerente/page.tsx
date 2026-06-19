@@ -40,6 +40,7 @@ import {
 import Link from '@/components/WhitelabelLink';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
+import InvestmentRoundsReadonly from '@/components/Meta/InvestmentRoundsReadonly';
 import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
@@ -1547,6 +1548,14 @@ export default function GerentePage() {
       )}
 
       <div className="w-full space-y-6 p-4 sm:p-6 bg-gray-50 dark:bg-[#1a1a1a] min-h-screen">
+        {/* Barra de gasto de ADS — sempre no topo (rodadas dele e dos consultores, leitura) */}
+        <InvestmentRoundsReadonly
+          apiBase="/api/gerente"
+          userId={userId ?? null}
+          showConsultorFilter
+          showAggregate
+        />
+
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">

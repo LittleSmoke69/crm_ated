@@ -2,7 +2,16 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from '@/components/WhitelabelLink';
-import { BarChart3, Loader2, RefreshCw, Calendar, ChevronDown, ChevronUp, Headphones } from 'lucide-react';
+import {
+  BarChart3,
+  Loader2,
+  RefreshCw,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Headphones,
+  Users,
+} from 'lucide-react';
 
 interface InstanceRow {
   assignment_id: string;
@@ -56,6 +65,42 @@ interface AttendanceData {
   to: string | null;
 }
 
+interface SupportRow {
+  user_id: string;
+  name: string;
+  email: string | null;
+  online: boolean;
+  last_seen_at: string | null;
+  last_login_at: string | null;
+  total_online_time: number;
+  atendimentos_periodo: number;
+  fora_janela: number;
+  em_atendimento: number;
+  mensagens_periodo: number;
+}
+
+interface SupportData {
+  byUser: SupportRow[];
+  summary: {
+    totalSupport: number;
+    onlineNow: number;
+    atendimentosPeriodo: number;
+    foraJanelaPeriodo: number;
+    mensagensPeriodo: number;
+  };
+  from: string | null;
+  to: string | null;
+}
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
+}
+
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60);
@@ -64,6 +109,12 @@ function formatDuration(seconds: number): string {
   const h = Math.floor(m / 60);
   const min = m % 60;
   return `${h}h ${min}min`;
+}
+
+function todayLocalISODate(): string {
+  const d = new Date();
+  const off = d.getTimezoneOffset();
+  return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10);
 }
 
 type Props = {
@@ -83,6 +134,12 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
   const [attOpen, setAttOpen] = useState(false);
   const [attFrom, setAttFrom] = useState('');
   const [attTo, setAttTo] = useState('');
+
+  const [support, setSupport] = useState<SupportData | null>(null);
+  const [supLoading, setSupLoading] = useState(false);
+  const [supOpen, setSupOpen] = useState(false);
+  const [supFrom, setSupFrom] = useState(() => todayLocalISODate());
+  const [supTo, setSupTo] = useState(() => todayLocalISODate());
 
   const fetchOps = useCallback(async () => {
     setOpsLoading(true);
@@ -130,6 +187,30 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
   useEffect(() => {
     if (attOpen && isAdminFull) fetchAttendance();
   }, [attOpen, isAdminFull, fetchAttendance]);
+
+  const fetchSupport = useCallback(async () => {
+    if (!isAdminFull) return;
+    setSupLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (supFrom) params.set('from', supFrom);
+      if (supTo) params.set('to', supTo);
+      const res = await fetch(`/api/admin/chat-support-activity?${params}`, {
+        headers: { 'X-User-Id': userId },
+      });
+      const json = await res.json();
+      if (json.success && json.data) setSupport(json.data);
+      else setSupport(null);
+    } catch {
+      setSupport(null);
+    } finally {
+      setSupLoading(false);
+    }
+  }, [userId, supFrom, supTo, isAdminFull]);
+
+  useEffect(() => {
+    if (supOpen && isAdminFull) fetchSupport();
+  }, [supOpen, isAdminFull, fetchSupport]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
@@ -293,6 +374,153 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
           )}
         </ul>
       </div>
+
+      {isAdminFull && (
+        <div className="rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setSupOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#333] text-left"
+          >
+            <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100">
+              <Users className="w-5 h-5 text-[#8CD955]" />
+              Equipe de suporte — acessos e atendimentos
+            </span>
+            {supOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+          </button>
+          {supOpen && (
+            <div className="p-4 border-t border-gray-200 dark:border-[#404040] space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+                <input
+                  type="date"
+                  value={supFrom}
+                  onChange={(e) => setSupFrom(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                />
+                <span className="text-gray-500">até</span>
+                <input
+                  type="date"
+                  value={supTo}
+                  onChange={(e) => setSupTo(e.target.value)}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                />
+                <button
+                  type="button"
+                  onClick={() => fetchSupport()}
+                  disabled={supLoading}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-[#8CD955] text-white disabled:opacity-60 flex items-center gap-2"
+                >
+                  {supLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  Atualizar
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Usuários com cargo <strong>Suporte</strong>. &quot;Online&quot; = heartbeat nos últimos 2 minutos.
+                Contagem pelo histórico de mensagens (quem do suporte respondeu): &quot;Atendimentos&quot; = conversas
+                distintas em que o usuário enviou mensagem no período; &quot;Mensagens&quot; = mensagens enviadas no
+                período; &quot;Em atendimento&quot; = conversas atendidas ainda em aberto e dentro da janela de 24h do
+                WhatsApp Oficial (Evolution não tem janela); &quot;Fora da janela 24h&quot; = conversas atendidas cuja
+                última mensagem do cliente já passou de 24h.
+              </p>
+              {supLoading && !support ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+                </div>
+              ) : support ? (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]">
+                      <p className="text-xs text-gray-500">Suporte (total)</p>
+                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        {support.summary.totalSupport}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]">
+                      <p className="text-xs text-gray-500">Online agora</p>
+                      <p className="text-lg font-semibold text-green-600">{support.summary.onlineNow}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]">
+                      <p className="text-xs text-gray-500">Atendimentos (período)</p>
+                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        {support.summary.atendimentosPeriodo}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]">
+                      <p className="text-xs text-gray-500">Fora da janela 24h</p>
+                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        {support.summary.foraJanelaPeriodo}
+                      </p>
+                    </div>
+                  </div>
+                  {support.byUser.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-4 text-center">
+                      Nenhum usuário com cargo Suporte encontrado.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 dark:border-[#404040] text-left text-gray-500 dark:text-gray-400">
+                            <th className="py-2 pr-3 font-medium">Usuário</th>
+                            <th className="py-2 pr-3 font-medium">Situação</th>
+                            <th className="py-2 pr-3 font-medium">Último acesso</th>
+                            <th className="py-2 pr-3 font-medium text-right">Em atendimento</th>
+                            <th className="py-2 pr-3 font-medium text-right">Atendimentos</th>
+                            <th className="py-2 pr-3 font-medium text-right">Mensagens</th>
+                            <th className="py-2 font-medium text-right">Fora da janela 24h</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {support.byUser.map((row) => (
+                            <tr key={row.user_id} className="border-b border-gray-100 dark:border-[#333]">
+                              <td className="py-2 pr-3">
+                                <span className="text-gray-900 dark:text-gray-100 font-medium">{row.name}</span>
+                                {row.email && row.email !== row.name && (
+                                  <span className="block text-xs text-gray-400">{row.email}</span>
+                                )}
+                              </td>
+                              <td className="py-2 pr-3">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span
+                                    className={`w-2 h-2 rounded-full ${
+                                      row.online ? 'bg-green-500 animate-pulse' : 'bg-gray-300 dark:bg-gray-600'
+                                    }`}
+                                  />
+                                  <span
+                                    className={
+                                      row.online
+                                        ? 'text-green-600 font-medium'
+                                        : 'text-gray-500 dark:text-gray-400'
+                                    }
+                                  >
+                                    {row.online ? 'Online' : 'Offline'}
+                                  </span>
+                                </span>
+                              </td>
+                              <td className="py-2 pr-3 text-gray-600 dark:text-gray-300">
+                                {formatDateTime(row.last_seen_at)}
+                              </td>
+                              <td className="py-2 pr-3 text-right">{row.em_atendimento}</td>
+                              <td className="py-2 pr-3 text-right font-medium">{row.atendimentos_periodo}</td>
+                              <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-300">
+                                {row.mensagens_periodo}
+                              </td>
+                              <td className="py-2 text-right">{row.fora_janela}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">Sem dados.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {isAdminFull && (
         <div className="rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">

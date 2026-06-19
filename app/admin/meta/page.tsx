@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
 import SpendVsDepositChart from '@/components/Meta/SpendVsDepositChart';
+import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -3371,6 +3372,9 @@ export default function AdminMetaPage() {
           dateTo={adminMetaInsightsDateRange.dateTo}
           refreshKey={rankingRefreshKey}
         />
+
+        <InvestmentRoundsPanel bancas={bancas} userId={userId} />
+
 
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">

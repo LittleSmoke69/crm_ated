@@ -194,18 +194,20 @@ function normalizeCampaignConsultorInputs(
         daily_spend_estimate: null,
       }));
   }
-  const byConsultor = new Map<string, CampaignConsultorAssignmentInput>();
+  const byKey = new Map<string, CampaignConsultorAssignmentInput>();
   for (const item of raw as CampaignConsultorAssignmentInput[]) {
     const consultor_id = String(item?.consultor_id ?? '').trim();
     if (!consultor_id) continue;
-    byConsultor.set(consultor_id, {
+    const groupUrl = normalizeWhatsappGroupInviteUrl(item?.whatsapp_group_invite_url) ?? '';
+    const key = `${consultor_id}|||${groupUrl}`;
+    byKey.set(key, {
       consultor_id,
       whatsapp_group_name: normalizeWhatsappGroupName(item?.whatsapp_group_name),
       whatsapp_group_invite_url: normalizeWhatsappGroupInviteUrl(item?.whatsapp_group_invite_url),
       daily_spend_estimate: normalizeDailySpendEstimate(item?.daily_spend_estimate),
     });
   }
-  return Array.from(byConsultor.values());
+  return Array.from(byKey.values());
 }
 
 async function listConsultorProfilesForAdsFromUserIds(
@@ -906,8 +908,12 @@ export async function buildCampaignConsultorSummary(
       }
     );
 
-    const consultor_total_leads = assignedConsultors.reduce((sum, c) => sum + (c.total_leads || 0), 0);
-    const consultor_total_deposited = assignedConsultors.reduce((sum, c) => sum + (c.total_deposited || 0), 0);
+    const consultor_total_leads = Array.from(
+      new Set(assignedConsultors.map((c) => c.id))
+    ).reduce((sum, consultorId) => sum + (metricsByConsultorId.get(consultorId)?.total_leads || 0), 0);
+    const consultor_total_deposited = Array.from(
+      new Set(assignedConsultors.map((c) => c.id))
+    ).reduce((sum, consultorId) => sum + (depositedFromDashboardById.get(consultorId) || 0), 0);
     result.set(campaignId, {
       assigned_consultors: assignedConsultors,
       consultor_total_leads,

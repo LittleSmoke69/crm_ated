@@ -200,3 +200,5 @@ add_transfer_stats_rpc_gerente_performed_by.sql
 add_stock_reservation_fields.sql
 fix_resolved_transfer_stats_lucro_sem_estoque_intermediario.sql
 fix_claim_maturation_steps_instance_name_conflict.sql
+
+create_meta_investment_rounds.sql
