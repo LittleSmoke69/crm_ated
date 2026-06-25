@@ -178,6 +178,45 @@ interface ChartData {
   };
 }
 
+/** Card de uma métrica com botão "!" que abre uma explicação simples. */
+function MetricInfoCard({
+  label,
+  value,
+  explanation,
+  tone = 'emerald',
+}: {
+  label: string;
+  value: string;
+  explanation: string;
+  tone?: 'emerald' | 'gray';
+}) {
+  const [open, setOpen] = useState(false);
+  const bg = tone === 'emerald' ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-gray-50 dark:bg-gray-800/60';
+  const labelColor = tone === 'emerald' ? 'text-emerald-700 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400';
+  return (
+    <div className={`relative rounded-xl ${bg} px-3 py-2`}>
+      <div className="flex items-start justify-between gap-1">
+        <p className={`text-[10px] uppercase tracking-wide font-bold ${labelColor}`}>{label}</p>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="shrink-0 w-4 h-4 rounded-full bg-white/80 dark:bg-gray-700 border border-gray-300 dark:border-gray-500 text-[10px] font-bold text-gray-600 dark:text-gray-200 flex items-center justify-center leading-none hover:bg-white dark:hover:bg-gray-600"
+          title="O que é isso?"
+          aria-label={`O que é ${label}?`}
+        >
+          !
+        </button>
+      </div>
+      <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{value}</p>
+      {open && (
+        <div className="mt-1.5 text-[11px] leading-snug text-gray-600 dark:text-gray-200 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-2 shadow-sm">
+          {explanation}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Card de LTV recorrente por consultor + botão para ver clientes. */
 function CohortLtvCard({
   consultants,
@@ -208,34 +247,90 @@ function CohortLtvCard({
         LTV gerado e depósitos dos jogadores adquiridos no período (cohort de jogadores reais).
       </p>
 
-      {totals ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">LTV Total</p>
-            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.total_ltv_in_window)}</p>
+      {!loading && totals ? (
+        <>
+          {/* Resumo da safra — um card por campo, com botão "!" de explicação */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+            <MetricInfoCard
+              label="Jogadores da safra"
+              value={String(totals.cohort_size)}
+              explanation="Quantos jogadores reais entraram no período. É a base usada para calcular o LTV médio."
+            />
+            <MetricInfoCard
+              label="LTV médio por jogador"
+              value={fmtBRL2(totals.ltv_avg)}
+              explanation="Em média, quanto cada jogador da safra gerou de recorrência. É o LTV total dividido pelo número de jogadores."
+            />
+            <MetricInfoCard
+              label="LTV (recorrência)"
+              value={fmtBRL2(totals.total_ltv_in_window)}
+              explanation="Quanto os jogadores depositaram ALÉM do primeiro depósito. Mostra o quanto eles voltam a depositar."
+            />
+            <MetricInfoCard
+              label="Geraram recorrência"
+              value={String(totals.players_with_ltv)}
+              explanation="Quantos jogadores depositaram mais de uma vez, ou seja, voltaram a depositar."
+            />
+            <MetricInfoCard
+              label="Total depositado"
+              value={fmtBRL2(totals.total_deposited_in_window)}
+              explanation="Soma de TODOS os depósitos no período, incluindo o primeiro depósito de cada jogador."
+            />
+            <MetricInfoCard
+              label="Nº de depósitos"
+              value={String(totals.total_deposits_count_in_window)}
+              explanation="Quantidade total de depósitos feitos no período (contando todos os depósitos)."
+            />
+            <MetricInfoCard
+              label="Depositaram ao menos 1x"
+              value={String(totals.players_that_deposited)}
+              explanation="Quantos jogadores fizeram pelo menos um depósito no período."
+            />
           </div>
-          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">Depósitos (período)</p>
-            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.total_deposited_in_window)}</p>
+
+          {/* Distribuição de depósitos (cumulativa) — um card por faixa */}
+          <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-3 mb-4">
+            <p className="text-xs font-bold text-gray-700 dark:text-gray-200 mb-2">Quantos depositaram N vezes ou mais</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <MetricInfoCard
+                tone="gray"
+                label="Depositaram 1x ou +"
+                value={String(totals.deposit_buckets.dep_1x)}
+                explanation="Jogadores que depositaram pelo menos 1 vez no período."
+              />
+              <MetricInfoCard
+                tone="gray"
+                label="Depositaram 2x ou +"
+                value={String(totals.deposit_buckets.dep_2x)}
+                explanation="Jogadores que depositaram 2 vezes ou mais. Já estão contados também na faixa de 1x ou +."
+              />
+              <MetricInfoCard
+                tone="gray"
+                label="Depositaram 3x ou +"
+                value={String(totals.deposit_buckets.dep_3x)}
+                explanation="Jogadores que depositaram 3 vezes ou mais. Já estão contados nas faixas de 1x e 2x ou +."
+              />
+              <MetricInfoCard
+                tone="gray"
+                label="Depositaram 4x ou +"
+                value={String(totals.deposit_buckets.dep_4x_plus)}
+                explanation="Jogadores que depositaram 4 vezes ou mais. Já estão contados nas faixas anteriores."
+              />
+            </div>
+            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2">
+              Faixas cumulativas (cada uma inclui as seguintes): 1x ou + ≥ 2x ou + ≥ 3x ou + ≥ 4x ou +.
+            </p>
           </div>
-          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">Cohort / Depositantes</p>
-            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{totals.cohort_size} / {totals.players_that_deposited}</p>
-          </div>
-          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">LTV Médio</p>
-            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.ltv_avg)}</p>
-          </div>
-        </div>
+        </>
       ) : null}
 
-      {error ? (
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-10 justify-center">
+          <Loader2 className="w-5 h-5 animate-spin text-emerald-500" /> Carregando LTV por consultor…
+        </div>
+      ) : error ? (
         <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400 py-3">
           <AlertCircle className="w-4 h-4 shrink-0" /> {error}
-        </div>
-      ) : loading && consultants.length === 0 ? (
-        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-6 justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-emerald-500" /> Carregando LTV por consultor…
         </div>
       ) : consultants.length === 0 ? (
         <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum jogador no período.</p>
@@ -947,13 +1042,18 @@ export default function DonoBancaHierarquia({
       {/* Modal: clientes (jogadores) do consultor selecionado */}
       {cohortModalConsultor !== null && (() => {
         const key = cohortModalConsultor.toLowerCase();
-        const clients = cohortData.filter(
-          (p) => (p.consultant_email || p.consultant_name || '').toLowerCase() === key
-        );
+        const clients = cohortData
+          .filter((p) => (p.consultant_email || p.consultant_name || '').toLowerCase() === key)
+          // Quem depositou fica no topo (maior depósito primeiro), depois por LTV.
+          .sort(
+            (a, b) =>
+              (Number(b.deposited_in_window) || 0) - (Number(a.deposited_in_window) || 0) ||
+              (Number(b.ltv_in_window) || 0) - (Number(a.ltv_in_window) || 0)
+          );
         const consultorNome = clients[0]?.consultant_name || cohortModalConsultor;
         return (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setCohortModalConsultor(null)}>
-            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-5xl w-full max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-[90rem] w-full max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between gap-3 p-4 border-b border-gray-100 dark:border-gray-700">
                 <div>
                   <h3 className="text-base font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
@@ -1457,7 +1557,7 @@ export default function DonoBancaHierarquia({
                     <p className="text-xs font-bold text-white/90 uppercase">{label}</p>
                   </div>
                   <p className="text-2xl font-bold text-white">
-                    {loadingMetrics && !extractTotals
+                    {loadingMetrics
                       ? <Loader2 className="w-6 h-6 animate-spin inline" />
                       : `R$ ${(value || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </p>

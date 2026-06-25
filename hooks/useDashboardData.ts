@@ -217,40 +217,17 @@ export const useDashboardData = () => {
         });
         const instancesResult = await instancesResponse.json().catch(() => null);
 
-        const list = Array.isArray(instancesResult?.data) ? instancesResult.data : [];
-        const connectedN = list.filter((i: WhatsAppInstance) =>
-          instanceListUiStatusIsConnected(i.status)
-        ).length;
-
-        console.log('[ListaInstancias] cliente ← GET /api/instances', {
-          userShort: `${userId.slice(0, 8)}…`,
-          httpStatus: instancesResponse.status,
-          ok: instancesResponse.ok,
-          success: instancesResult?.success,
-          message: instancesResult?.message,
-          error: instancesResult?.error,
-          count: list.length,
-          connected: connectedN,
-          disconnected: list.length - connectedN,
-          xZaplotoSlug: wl['X-Zaploto-Slug'] ?? '(não enviado)',
-          path:
-            typeof window !== 'undefined' ? window.location.pathname : '',
-        });
-
         if (instancesResponse.ok && instancesResult?.success && Array.isArray(instancesResult.data)) {
           instancesData = instancesResult.data as WhatsAppInstance[];
         } else if (!instancesResponse.ok) {
-          console.warn('[ListaInstancias] HTTP não OK — corpo:', instancesResult);
           addLog(
             `Instâncias: servidor retornou HTTP ${instancesResponse.status}${instancesResult?.error ? ` — ${instancesResult.error}` : ''}`,
             'error'
           );
         } else if (instancesResult && instancesResult.success === false) {
-          console.warn('[ListaInstancias] success=false:', instancesResult);
           addLog(`Instâncias: ${instancesResult.error || instancesResult.message || 'resposta inválida'}`, 'error');
         }
-      } catch (instancesError) {
-        console.error('[ListaInstancias] Exceção ao buscar instâncias:', instancesError);
+      } catch {
         addLog('Erro ao buscar instâncias. Usando dados locais se disponíveis.', 'error');
       }
 

@@ -21,13 +21,6 @@ import {
 import { assignProxyToEvolutionInstance } from '@/lib/services/evolution-instance-proxy';
 import { evolutionDbStatusToPublicListUi } from '@/lib/utils/evolution-instance-status';
 
-function shortUuid(id: string | undefined | null): string {
-  if (!id || typeof id !== 'string') return '(none)';
-  const t = id.trim();
-  if (t.length <= 12) return t;
-  return `${t.slice(0, 8)}…${t.slice(-4)}`;
-}
-
 /**
  * GET /api/instances - Lista instâncias do usuário
  * - Admin: vê todas as instâncias
@@ -101,30 +94,6 @@ export async function GET(req: NextRequest) {
 
     const sharedIdArr = Array.from(instanceIdsForOrFilter);
 
-    console.log('[ListaInstancias] GET /api/instances — filtros', {
-      user: shortUuid(userId),
-      cargo: userStatus,
-      profileZaplotoId: shortUuid(fullProfile.zaploto_id ?? undefined),
-      effectiveZaplotoIdWl: shortUuid(effectiveZaplotoId),
-      instancesZaplotoScopeId: shortUuid(instancesZaplotoScopeId),
-      tenantSlugHeader: req.headers.get('x-zaploto-slug')?.trim() || null,
-      isSuperAdmin,
-      isAdmin,
-      isGerente,
-      isDonoBanca,
-      allowedUserIdsCount: allowedUserIds.length,
-      sharedWlCount: sharedWithMeIds.size,
-      extraIdsForOrCount: sharedIdArr.length,
-      gerenteAtendimentoAssignmentRows,
-      filterMode: isAdmin
-        ? 'admin_all_users_in_tenant'
-        : sharedIdArr.length > 0
-          ? 'or_user_id_in_plus_id_in'
-          : 'user_id_in_only',
-      zaplotoTenantFilter:
-        isSuperAdmin ? 'none' : instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID ? 'default_or_null' : 'eq_only',
-    });
-
     // Query base SEM !inner para garantir LEFT JOIN e retornar TODAS as instâncias
     // IMPORTANTE: Sem !inner, o Supabase faz LEFT JOIN por padrão, retornando TODAS as instâncias,
     // incluindo as que estão associadas a APIs Evolution bloqueadas (is_blocked_for_instances = true)
@@ -179,16 +148,9 @@ export async function GET(req: NextRequest) {
       console.error('[ListaInstancias] Supabase erro na query evolution_instances', {
         message: error.message,
         code: (error as { code?: string }).code,
-        details: (error as { details?: string }).details,
-        hint: (error as { hint?: string }).hint,
-        cargo: userStatus,
-        user: shortUuid(userId),
       });
       return errorResponse(`Erro ao buscar instâncias: ${error.message}`, 500);
     }
-
-    const rawCount = (data || []).length;
-    const inactiveFiltered = (data || []).filter((row: any) => row?.is_active === false).length;
 
     // IMPORTANTE: Mostra TODAS as instâncias do usuário (user_id/Owner)
     // Independente de estarem conectadas, desconectadas ou bloqueadas
@@ -205,11 +167,6 @@ export async function GET(req: NextRequest) {
           evolutionApi = evolutionApi.length > 0 ? evolutionApi[0] : null;
         }
         
-        // Se não encontrou evolution_api no join, tenta buscar diretamente
-        if (!evolutionApi && inst.evolution_api_id) {
-          console.warn(`[API Instances] ⚠️ Instância ${inst.instance_name} não tem evolution_api no join, mas tem evolution_api_id: ${inst.evolution_api_id}`);
-        }
-
         // Mapeia status do banco para o frontend (case-insensitive: OK, ok, connected)
         const frontendStatus = evolutionDbStatusToPublicListUi(inst.status);
 
@@ -271,21 +228,6 @@ export async function GET(req: NextRequest) {
           owner_display_name: inst.user_id ? displayByUserId.get(inst.user_id) ?? null : null,
         }));
       }
-
-    const connectedOut = instances.filter((i: { status?: string }) => i.status === 'connected').length;
-    const disconnectedOut = instances.length - connectedOut;
-
-    console.log('[ListaInstancias] GET /api/instances — resultado', {
-      user: shortUuid(userId),
-      cargo: userStatus,
-      instancesZaplotoScopeId: shortUuid(instancesZaplotoScopeId),
-      rawRowsFromDb: rawCount,
-      droppedInactiveIsActiveFalse: inactiveFiltered,
-      returnedToClient: instances.length,
-      uiConnected: connectedOut,
-      uiDisconnected: disconnectedOut,
-      sampleNames: instances.slice(0, 5).map((i: { instance_name?: string }) => i.instance_name),
-    });
 
     return successResponse(instances, 'Instâncias carregadas com sucesso');
   } catch (err: any) {
