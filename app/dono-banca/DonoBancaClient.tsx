@@ -92,6 +92,71 @@ interface ExternalMetrics {
   net_profit: number;
 }
 
+/** Métricas recorrentes da banca (todas as recargas/transações no período) — extract-totals. */
+interface ExtractTotals {
+  recarga_pix: number;
+  recarga_manual: number;
+  total_recargas: number;
+  total_bonus: number;
+  bonus_afiliado: number;
+  bonus_estrelas: number;
+  apostas_loterias: number;
+  apostas_jogo_do_bicho: number;
+  premios_loterias: number;
+  premios_jb: number;
+  venda_combo_total: number;
+  venda_bolao_total: number;
+  solicitacao_saque: number;
+  total_saque_disponivel: number;
+  total_balance: number;
+  total_transacts: number;
+}
+
+/** Jogador do cohort-real-players (LTV recorrente). */
+interface CohortPlayer {
+  id: number;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  registered_at: string | null;
+  consultant_id: number | null;
+  consultant_name: string | null;
+  consultant_email: string | null;
+  deposited_in_window: number;
+  deposits_count_in_window: number;
+  ltv_in_window: number;
+  ltv_count_in_window: number;
+  deposit_bucket: string | null;
+  last_deposit_at: string | null;
+  last_deposit_value: number | null;
+}
+
+interface CohortTotals {
+  cohort_size: number;
+  total_deposited_in_window: number;
+  total_deposits_count_in_window: number;
+  players_that_deposited: number;
+  total_ltv_in_window: number;
+  players_with_ltv: number;
+  ltv_avg: number;
+  deposit_buckets: { dep_1x: number; dep_2x: number; dep_3x: number; dep_4x_plus: number };
+}
+
+/** Agregado de LTV recorrente por consultor. */
+interface CohortConsultantAgg {
+  consultant_email: string;
+  consultant_name: string;
+  ltv: number;
+  deposited: number;
+  deposits_count: number;
+  players: number;
+  players_that_deposited: number;
+}
+
+function fmtBRL2(v: number | null | undefined): string {
+  return `R$ ${(Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 interface ChartData {
   engagement_distribution?: Record<string, number>;
   status_distribution?: Record<string, number>;
@@ -111,6 +176,106 @@ interface ChartData {
     weekdays: string[];
     values: number[];
   };
+}
+
+/** Card de LTV recorrente por consultor + botão para ver clientes. */
+function CohortLtvCard({
+  consultants,
+  totals,
+  loading,
+  error,
+  hasBanca,
+  onViewClients,
+}: {
+  consultants: CohortConsultantAgg[];
+  totals: CohortTotals | null;
+  loading: boolean;
+  error: string | null;
+  hasBanca: boolean;
+  onViewClients: (consultantEmail: string) => void;
+}) {
+  if (!hasBanca) return null;
+  return (
+    <div className="bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+        <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+          LTV Recorrente por Consultor
+        </h2>
+        {loading ? <Loader2 className="w-5 h-5 animate-spin text-emerald-500" /> : null}
+      </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        LTV gerado e depósitos dos jogadores adquiridos no período (cohort de jogadores reais).
+      </p>
+
+      {totals ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">LTV Total</p>
+            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.total_ltv_in_window)}</p>
+          </div>
+          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">Depósitos (período)</p>
+            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.total_deposited_in_window)}</p>
+          </div>
+          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">Cohort / Depositantes</p>
+            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{totals.cohort_size} / {totals.players_that_deposited}</p>
+          </div>
+          <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-400 font-bold">LTV Médio</p>
+            <p className="text-lg font-bold text-gray-900 dark:text-gray-100 tabular-nums">{fmtBRL2(totals.ltv_avg)}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400 py-3">
+          <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+        </div>
+      ) : loading && consultants.length === 0 ? (
+        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-6 justify-center">
+          <Loader2 className="w-5 h-5 animate-spin text-emerald-500" /> Carregando LTV por consultor…
+        </div>
+      ) : consultants.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum jogador no período.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 dark:text-gray-400 uppercase border-b border-gray-100 dark:border-gray-700">
+                <th className="px-3 py-2 font-bold">Consultor</th>
+                <th className="px-3 py-2 font-bold text-right">LTV Gerado</th>
+                <th className="px-3 py-2 font-bold text-right">Total Depositado</th>
+                <th className="px-3 py-2 font-bold text-right">Depósitos</th>
+                <th className="px-3 py-2 font-bold text-right">Jogadores</th>
+                <th className="px-3 py-2 font-bold text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {consultants.map((c) => (
+                <tr key={c.consultant_email || c.consultant_name} className="border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
+                  <td className="px-3 py-2.5 text-gray-800 dark:text-gray-100 font-medium">{c.consultant_name}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{fmtBRL2(c.ltv)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-gray-800 dark:text-gray-100">{fmtBRL2(c.deposited)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300">{c.deposits_count}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300">{c.players_that_deposited}/{c.players}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    <button
+                      onClick={() => onViewClients(c.consultant_email || c.consultant_name)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                      <Users className="w-3.5 h-3.5" /> Ver clientes
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface DonoBancaClientProps {
@@ -153,7 +318,14 @@ export default function DonoBancaHierarquia({
   );
   const [gerentes, setGerentes] = useState<Gerente[]>(initialData?.gerentes || []);
   const [externalMetrics, setExternalMetrics] = useState<ExternalMetrics | null>(initialData?.externalMetrics || null);
+  const [extractTotals, setExtractTotals] = useState<ExtractTotals | null>((initialData as { extractTotals?: ExtractTotals } | undefined)?.extractTotals || null);
   const [externalMetricsError, setExternalMetricsError] = useState<string | null>(initialData?.externalMetricsError || null);
+  // LTV recorrente por consultor (cohort-real-players)
+  const [cohortData, setCohortData] = useState<CohortPlayer[]>([]);
+  const [cohortTotals, setCohortTotals] = useState<CohortTotals | null>(null);
+  const [cohortLoading, setCohortLoading] = useState(false);
+  const [cohortError, setCohortError] = useState<string | null>(null);
+  const [cohortModalConsultor, setCohortModalConsultor] = useState<string | null>(null);
   const [bancaName, setBancaName] = useState<string | null>(initialData?.bancaInfo?.name || null);
   const [bancaId, setBancaId] = useState<string | null>(initialData?.bancaId || null);
   const [hasConsultoresComCampanha, setHasConsultoresComCampanha] = useState(false);
@@ -210,9 +382,7 @@ export default function DonoBancaHierarquia({
       .then((result) => {
         if (!cancelled && result.success && Array.isArray(result.data)) {
           setBancas(result.data);
-          if (result.data.length > 0 && !selectedBancaId) {
-            setSelectedBancaId(result.data[0].id);
-          }
+          // Não auto-seleciona: aguarda o usuário escolher a banca antes de puxar resultados.
         }
       })
       .finally(() => { if (!cancelled) setBancasLoading(false); });
@@ -330,6 +500,33 @@ export default function DonoBancaHierarquia({
     return { dateFrom, dateTo };
   };
 
+  // O cohort (LTV recorrente por consultor) é buscado dentro de checkAuthorization,
+  // com prioridade na fila do CRM (ver loadCohort).
+
+  // Agrega o cohort por consultor (LTV gerado, total depositado, nº de jogadores).
+  const cohortByConsultant: CohortConsultantAgg[] = React.useMemo(() => {
+    const map = new Map<string, CohortConsultantAgg>();
+    for (const p of cohortData) {
+      const key = (p.consultant_email || p.consultant_name || `id:${p.consultant_id ?? '—'}`).toLowerCase();
+      const cur = map.get(key) || {
+        consultant_email: p.consultant_email || '',
+        consultant_name: p.consultant_name || p.consultant_email || 'Consultor',
+        ltv: 0,
+        deposited: 0,
+        deposits_count: 0,
+        players: 0,
+        players_that_deposited: 0,
+      };
+      cur.ltv += Number(p.ltv_in_window) || 0;
+      cur.deposited += Number(p.deposited_in_window) || 0;
+      cur.deposits_count += Number(p.deposits_count_in_window) || 0;
+      cur.players += 1;
+      if ((Number(p.deposited_in_window) || 0) > 0) cur.players_that_deposited += 1;
+      map.set(key, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.ltv - a.ltv || b.deposited - a.deposited);
+  }, [cohortData]);
+
   /** Lotes de gerentes por request — equilíbrio entre round-trips e timeout do edge. */
   const BATCH_SIZE = 8;
 
@@ -390,6 +587,9 @@ export default function DonoBancaHierarquia({
     setHasConsultoresComCampanha(false);
     if (bancaChanged || lastLoadedBancaRef.current === null) {
       setExternalMetrics(null);
+      setExtractTotals(null);
+      setCohortData([]);
+      setCohortTotals(null);
       setBancaName(null);
       setBancaId(null);
     }
@@ -418,6 +618,8 @@ export default function DonoBancaHierarquia({
           setExternalMetricsError(null);
           setIsAuthorized(true);
         }
+        const et = (data as { extractTotals?: unknown }).extractTotals;
+        setExtractTotals(et != null && typeof et === 'object' ? (et as ExtractTotals) : null);
         if (typeof data.hasConsultoresComCampanha === 'boolean') {
           setHasConsultoresComCampanha(data.hasConsultoresComCampanha);
         }
@@ -510,9 +712,44 @@ export default function DonoBancaHierarquia({
       }
     };
 
+    // LTV recorrente por consultor (cohort) — disparado PRIMEIRO para ter prioridade
+    // na fila de saída ao CRM (entra no portão de throttle antes dos demais).
+    const loadCohort = async () => {
+      setCohortLoading(true);
+      setCohortError(null);
+      try {
+        const params = new URLSearchParams();
+        if (dateFrom) params.set('date_from', dateFrom);
+        if (dateTo) params.set('date_to', dateTo);
+        if (bancaIdAtRequest) params.set('banca_id', bancaIdAtRequest);
+        const res = await fetch(`/api/dono-banca/cohort-real-players?${params.toString()}`, { headers, signal });
+        if (!dashboardFetchGen.isCurrent(requestId)) return;
+        const json = await res.json();
+        if (json?.success && json.data) {
+          setCohortData(Array.isArray(json.data.data) ? json.data.data : []);
+          setCohortTotals(json.data.totals ?? null);
+        } else {
+          setCohortData([]);
+          setCohortTotals(null);
+          setCohortError(json?.error || 'Não foi possível carregar o LTV por consultor.');
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+        setCohortError('Não foi possível carregar o LTV por consultor.');
+      } finally {
+        if (dashboardFetchGen.isCurrent(requestId)) setCohortLoading(false);
+      }
+    };
+
     try {
-      // Métricas do CRM e lotes de gerentes em paralelo (gerentes usam skip_external_metrics).
-      await Promise.all([loadExternalMetrics(), loadGerentesBatches()]);
+      // Ordem de prioridade na fila do CRM:
+      //   1) cohort (LTV Recorrente por Consultor)
+      //   2) dashboard-metrics (Resumo Geral - Primeiro Depósito) + 3) extract-totals (Métricas Recorrentes)
+      //   4) get-indicateds-by-consultant (tabela de gerentes) — POR ÚLTIMO.
+      const cohortPromise = loadCohort(); // entra no portão de throttle antes dos demais
+      await loadExternalMetrics();
+      await loadGerentesBatches();
+      await cohortPromise;
       if (!dashboardFetchGen.isCurrent(requestId)) return;
       if (dashboardFetchGen.isCurrent(requestId)) {
         lastLoadedBancaRef.current = bancaKey;
@@ -707,6 +944,69 @@ export default function DonoBancaHierarquia({
 
   return (
     <Layout onSignOut={handleSignOut}>
+      {/* Modal: clientes (jogadores) do consultor selecionado */}
+      {cohortModalConsultor !== null && (() => {
+        const key = cohortModalConsultor.toLowerCase();
+        const clients = cohortData.filter(
+          (p) => (p.consultant_email || p.consultant_name || '').toLowerCase() === key
+        );
+        const consultorNome = clients[0]?.consultant_name || cohortModalConsultor;
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setCohortModalConsultor(null)}>
+            <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-5xl w-full max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-3 p-4 border-b border-gray-100 dark:border-gray-700">
+                <div>
+                  <h3 className="text-base font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-emerald-600 dark:text-emerald-400" /> Clientes de {consultorNome}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{clients.length} jogador(es) no período</p>
+                </div>
+                <button onClick={() => setCohortModalConsultor(null)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="overflow-auto p-2">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-white dark:bg-[#2a2a2a]">
+                    <tr className="text-left text-[11px] text-gray-500 dark:text-gray-400 uppercase border-b border-gray-100 dark:border-gray-700">
+                      <th className="px-3 py-2 font-bold">Cliente</th>
+                      <th className="px-3 py-2 font-bold">Email</th>
+                      <th className="px-3 py-2 font-bold">Cadastro</th>
+                      <th className="px-3 py-2 font-bold text-right">Depositado</th>
+                      <th className="px-3 py-2 font-bold text-right">Nº Dep.</th>
+                      <th className="px-3 py-2 font-bold text-right">LTV</th>
+                      <th className="px-3 py-2 font-bold text-center">Bucket</th>
+                      <th className="px-3 py-2 font-bold">Último Dep.</th>
+                      <th className="px-3 py-2 font-bold text-right">Vlr. Últ.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clients.map((p) => (
+                      <tr key={p.id} className="border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
+                        <td className="px-3 py-2 text-gray-800 dark:text-gray-100">
+                          {p.name || '—'}
+                          {p.phone ? <span className="block text-[11px] text-gray-400">{p.phone}</span> : null}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-300 break-all">{p.email || '—'}</td>
+                        <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{p.registered_at?.slice(0, 10) || '—'}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-gray-800 dark:text-gray-100">{fmtBRL2(p.deposited_in_window)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-gray-600 dark:text-gray-300">{p.deposits_count_in_window}</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{fmtBRL2(p.ltv_in_window)}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200">{p.deposit_bucket || '0x'}</span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{p.last_deposit_at?.slice(0, 16).replace('T', ' ') || '—'}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-gray-600 dark:text-gray-300">{p.last_deposit_value != null ? fmtBRL2(p.last_deposit_value) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="min-h-screen p-4 sm:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto bg-gray-50 dark:bg-[#1a1a1a]">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -993,7 +1293,7 @@ export default function DonoBancaHierarquia({
               <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 dark:border-emerald-700/50">
                 <div className="flex items-center gap-2 mb-6">
                   <BarChart3 className="w-6 h-6 text-white" />
-                  <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'}</h2>
+                  <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-3 gap-4">
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
@@ -1013,7 +1313,7 @@ export default function DonoBancaHierarquia({
               <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 dark:border-emerald-700/50">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
-                <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'}</h2>
+                <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
               </div>
               
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-3 gap-4">
@@ -1033,7 +1333,7 @@ export default function DonoBancaHierarquia({
                     <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
                   </div>
                   <p className="text-2xl font-bold text-white">
-                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </p>
                 </div>
 
@@ -1044,7 +1344,7 @@ export default function DonoBancaHierarquia({
                     <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
                   </div>
                   <p className="text-2xl font-bold text-white">
-                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </p>
                 </div>
 
@@ -1055,7 +1355,7 @@ export default function DonoBancaHierarquia({
                     <p className="text-xs font-bold text-white/90 uppercase">Total Premiado</p>
                   </div>
                   <p className="text-2xl font-bold text-white">
-                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </p>
                 </div>
 
@@ -1106,7 +1406,7 @@ export default function DonoBancaHierarquia({
                     <p className="text-xs font-bold text-white/90 uppercase">Profit da Rede</p>
                   </div>
                   <p className="text-2xl font-bold text-white">
-                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                    {loadingMetrics ? <Loader2 className="w-6 h-6 animate-spin inline" /> : `R$ ${(externalMetrics.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </p>
                 </div>
               </div>
@@ -1121,6 +1421,62 @@ export default function DonoBancaHierarquia({
             )}
           </div>
         </div>
+
+        {/* Métricas Recorrentes da Banca (extract-totals) — todas as recargas/transações no período */}
+        {(externalMetrics || extractTotals || loadingMetrics) && (
+          <div className="bg-gradient-to-br from-indigo-500 to-blue-600 dark:from-indigo-800 dark:to-blue-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-indigo-400/40 dark:border-indigo-700/50">
+            <div className="flex items-center gap-2 mb-1">
+              <BarChart3 className="w-6 h-6 text-white" />
+              <h2 className="text-xl font-bold text-white">Métricas Recorrentes - {bancaName || 'Banca'}</h2>
+            </div>
+            <p className="text-xs text-white/80 mb-6">Todas as recargas e transações da banca no período (não apenas primeiro depósito).</p>
+            {!extractTotals && !loadingMetrics ? (
+              <p className="text-sm text-white/80 py-4">Não foi possível carregar as métricas recorrentes para este período. Tente atualizar.</p>
+            ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {([
+                { label: 'Total de Recargas', value: extractTotals?.total_recargas, icon: DollarSign },
+                { label: 'Recarga PIX', value: extractTotals?.recarga_pix, icon: DollarSign },
+                { label: 'Recarga Manual', value: extractTotals?.recarga_manual, icon: DollarSign },
+                { label: 'Total de Bônus', value: extractTotals?.total_bonus, icon: Award },
+                { label: 'Bônus Afiliado', value: extractTotals?.bonus_afiliado, icon: Award },
+                { label: 'Bônus Estrelas', value: extractTotals?.bonus_estrelas, icon: Award },
+                { label: 'Apostas Loterias', value: extractTotals?.apostas_loterias, icon: Target },
+                { label: 'Apostas Jogo do Bicho', value: extractTotals?.apostas_jogo_do_bicho, icon: Target },
+                { label: 'Prêmios Loterias', value: extractTotals?.premios_loterias, icon: Award },
+                { label: 'Prêmios JB', value: extractTotals?.premios_jb, icon: Award },
+                { label: 'Venda Combo', value: extractTotals?.venda_combo_total, icon: Target },
+                { label: 'Saque Solicitado', value: extractTotals?.solicitacao_saque, icon: Wallet },
+                { label: 'Saque Disponível', value: extractTotals?.total_saque_disponivel, icon: Wallet },
+                { label: 'Saldo Total', value: extractTotals?.total_balance, icon: Wallet },
+                { label: 'Total Transações', value: extractTotals?.total_transacts, icon: TrendingUp },
+              ] as const).map(({ label, value, icon: Icon }) => (
+                <div key={label} className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Icon className="w-4 h-4 text-white" />
+                    <p className="text-xs font-bold text-white/90 uppercase">{label}</p>
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {loadingMetrics && !extractTotals
+                      ? <Loader2 className="w-6 h-6 animate-spin inline" />
+                      : `R$ ${(value || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  </p>
+                </div>
+              ))}
+            </div>
+            )}
+          </div>
+        )}
+
+        {/* LTV Recorrente por Consultor (cohort-real-players) */}
+        <CohortLtvCard
+          consultants={cohortByConsultant}
+          totals={cohortTotals}
+          loading={cohortLoading}
+          error={cohortError}
+          hasBanca={Boolean(showBancaSelector ? selectedBancaId : bancaId)}
+          onViewClients={(consultorEmail) => setCohortModalConsultor(consultorEmail)}
+        />
 
         {/* Gráficos Detalhados do Resumo Geral */}
         {externalMetrics && (

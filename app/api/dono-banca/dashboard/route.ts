@@ -5,8 +5,10 @@ import {
   getDonoBancaDashboardData,
   getDashboardDataByBancaId,
   fetchDashboardMetrics,
+  fetchExtractTotals,
 } from '@/lib/services/dashboard/dono-banca';
 import { bancaHasConsultoresComCampanha } from '@/lib/services/meta-campaign-consultors';
+import { getBancasDoUsuario } from '@/lib/crm/user-bancas';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /** Netlify/Vercel: dashboard agrega CRM por muitos consultores — precisa de limite alto para evitar 504/HTML de erro. */
@@ -45,7 +47,7 @@ export async function GET(req: NextRequest) {
       return errorResponse('Requisição cancelada.', 499);
     }
 
-    const { userId, profile } = await requireStatusOrSidebarPermission(req, ['dono_banca', 'super_admin', 'admin'], 'gestao_banca');
+    const { userId, profile } = await requireStatusOrSidebarPermission(req, ['dono_banca', 'super_admin', 'admin', 'gestor'], 'gestao_banca');
 
     const { searchParams } = req.nextUrl;
     const dateFrom = searchParams.get('date_from');
@@ -65,6 +67,18 @@ export async function GET(req: NextRequest) {
     const normalizedStatus = String(profile?.status ?? '').trim().toLowerCase();
     const isAdminOrSuperAdmin = normalizedStatus === 'super_admin' || normalizedStatus === 'admin';
     const isDonoBanca = normalizedStatus === 'dono_banca';
+    const isGestor = normalizedStatus === 'gestor';
+
+    // Gestor de tráfego: só pode ver bancas atribuídas a ele (user_bancas).
+    if (isGestor) {
+      if (!bancaId) {
+        return errorResponse('Informe banca_id na URL para visualizar os dados da banca.', 400);
+      }
+      const bancasDoGestor = await getBancasDoUsuario(userId);
+      if (!bancasDoGestor.some((b) => b.id === bancaId)) {
+        return errorResponse('Você não tem acesso a esta banca.', 403);
+      }
+    }
 
     if (onlyExternalMetrics) {
       let resolvedBancaId: string | null = bancaId;
@@ -104,9 +118,15 @@ export async function GET(req: NextRequest) {
       }
 
       const crmBaseUrl = bancaUrl ? toCrmBaseUrl(bancaUrl) : '';
-      const [externalMetrics, hasConsultoresComCampanha] = await Promise.all([
+      const [externalMetrics, extractTotals, hasConsultoresComCampanha] = await Promise.all([
         crmBaseUrl
           ? fetchDashboardMetrics(crmBaseUrl, dateFrom ?? undefined, dateTo ?? undefined, signal).catch((err) => {
+              if (isAbortError(err)) throw err;
+              return null;
+            })
+          : Promise.resolve(null),
+        crmBaseUrl
+          ? fetchExtractTotals(crmBaseUrl, dateFrom ?? undefined, dateTo ?? undefined, signal).catch((err) => {
               if (isAbortError(err)) throw err;
               return null;
             })
@@ -118,6 +138,7 @@ export async function GET(req: NextRequest) {
         bancaId: resolvedBancaId,
         bancaInfo: { name: bancaName, url: bancaUrl },
         externalMetrics,
+        extractTotals,
         hasConsultoresComCampanha,
       });
     }

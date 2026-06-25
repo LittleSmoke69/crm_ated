@@ -72,12 +72,88 @@ function getCrmFetchSignal(requestSignal?: AbortSignal | null, timeoutMs = 60000
   return AbortSignal.any([requestSignal, timeout]);
 }
 
-/** Consultores buscados em paralelo no CRM (evita N×latência sequencial). */
+/** Consultores buscados em paralelo no CRM (evita N×latência sequencial). Reduzido para
+ *  4 por padrão: concorrência alta era a principal causa de 429 (Too Many Attempts) no CRM. */
 const CRM_INDICATEDS_CONCURRENCY = (() => {
   const raw = parseInt(String(process.env.CRM_INDICATEDS_CONCURRENCY ?? '').trim(), 10);
   if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return raw;
-  return 10;
+  return 4;
 })();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Espera aleatória (default 1s–3s) para espaçar requisições e contornar rate limit (429). */
+function randomDelayMs(minMs = 1000, maxMs = 3000): number {
+  return Math.floor(minMs + Math.random() * (maxMs - minMs));
+}
+
+/** Nº máximo de novas tentativas em dashboard-metrics quando a CRM responde 429 (Too Many Attempts). */
+const DASHBOARD_METRICS_429_MAX_RETRIES = (() => {
+  const raw = parseInt(String(process.env.CRM_DASHBOARD_METRICS_429_RETRIES ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 6) return raw;
+  return 3;
+})();
+
+/** Tentativas para cohort-real-players (chamada pesada; throttle do CRM é mais agressivo). */
+const COHORT_429_MAX_RETRIES = (() => {
+  const raw = parseInt(String(process.env.CRM_COHORT_429_RETRIES ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 10) return raw;
+  return 5;
+})();
+
+/**
+ * Timeout (ms) por requisição do cohort-real-players. Bem maior que o default (60s)
+ * porque a query do CRM é pesada e pode levar 60s+. A rota permite até 300s (maxDuration).
+ * Ajustável via env CRM_COHORT_TIMEOUT_MS.
+ */
+const COHORT_FETCH_TIMEOUT_MS = (() => {
+  const raw = parseInt(String(process.env.CRM_COHORT_TIMEOUT_MS ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 30000 && raw <= 290000) return raw;
+  return 180000;
+})();
+
+/**
+ * Espera sugerida pelo header `Retry-After` (segundos ou data HTTP), em ms.
+ * Limitada a [1s, 15s] para não travar a request por muito tempo. null se ausente.
+ */
+function parseRetryAfterMs(res: Response): number | null {
+  const ra = res.headers.get('retry-after');
+  if (!ra) return null;
+  const secs = Number(ra);
+  if (Number.isFinite(secs)) return Math.min(15000, Math.max(1000, secs * 1000));
+  const when = Date.parse(ra);
+  if (!Number.isNaN(when)) return Math.min(15000, Math.max(0, when - Date.now()));
+  return null;
+}
+
+/**
+ * Espaçamento mínimo (ms) entre INÍCIOS de requisições ao CRM. Mesmo com concorrência,
+ * o portão serializa os "starts" para não estourar o throttle (Too Many Attempts).
+ * Ajustável via env CRM_MIN_REQUEST_INTERVAL_MS.
+ */
+const CRM_MIN_REQUEST_INTERVAL_MS = (() => {
+  const raw = parseInt(String(process.env.CRM_MIN_REQUEST_INTERVAL_MS ?? '').trim(), 10);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 2000) return raw;
+  return 200;
+})();
+
+let crmNextAllowedAt = 0;
+
+/** Aguarda a vez na fila de saída para o CRM (espaça os starts em CRM_MIN_REQUEST_INTERVAL_MS). */
+async function crmThrottleGate(signal?: AbortSignal): Promise<void> {
+  if (CRM_MIN_REQUEST_INTERVAL_MS <= 0) {
+    throwIfAborted(signal);
+    return;
+  }
+  const now = Date.now();
+  const scheduled = Math.max(now, crmNextAllowedAt);
+  crmNextAllowedAt = scheduled + CRM_MIN_REQUEST_INTERVAL_MS;
+  const wait = scheduled - now;
+  if (wait > 0) await sleep(wait);
+  throwIfAborted(signal);
+}
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -178,6 +254,7 @@ export async function fetchIndicatedsByPeriod(
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     const url = `${baseUrl}?${params.toString()}`;
+    await crmThrottleGate(signal);
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
@@ -227,6 +304,7 @@ async function fetchIndicatedsForConsultant(
     if (dateTo) params.set('to', dateTo);
     const url = `${baseUrl}?${params.toString()}`;
     try {
+      await crmThrottleGate(signal);
       const res = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
@@ -885,21 +963,43 @@ async function fetchDashboardMetricsUncached(
     if (dateTo) externalApiUrl.searchParams.append('date_to', dateTo);
     const apiKey = process.env.CRM_API_KEY;
     requestUrl = externalApiUrl.toString();
-    const startTime = Date.now();
-    const res = await fetch(requestUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
-      signal: getCrmFetchSignal(null),
-    });
-    const durationMs = Date.now() - startTime;
+
+    // Retry com espera aleatória (1s–3s) quando a CRM responde 429 (Too Many Attempts).
+    // O request em si funciona (confirmado no Postman); o 429 vem de chamadas muito próximas.
+    let res: Response;
+    let durationMs = 0;
+    let attempt = 0;
+    while (true) {
+      await crmThrottleGate();
+      const startTime = Date.now();
+      res = await fetch(requestUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+        signal: getCrmFetchSignal(null),
+      });
+      durationMs = Date.now() - startTime;
+      if (res.status !== 429 || attempt >= DASHBOARD_METRICS_429_MAX_RETRIES) break;
+      attempt++;
+      // Honra Retry-After; senão backoff crescente com jitter (~2s, 4s… até 10s).
+      const waitMs = parseRetryAfterMs(res) ?? Math.min(10000, randomDelayMs(1500, 3000) * attempt);
+      crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics 429 — aguardando para retry:', {
+        url: requestUrl,
+        attempt,
+        maxRetries: DASHBOARD_METRICS_429_MAX_RETRIES,
+        waitMs,
+      });
+      await sleep(waitMs);
+    }
+
     const logContext = {
       url: requestUrl,
       hasApiKey: Boolean(apiKey),
       durationMs,
       dateFrom: dateFrom ?? null,
       dateTo: dateTo ?? null,
+      ...(attempt > 0 ? { retries: attempt } : {}),
     };
-    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics status:', res.status, `(${durationMs}ms)`, {
+    crmServiceVerboseLog('[DonoBanca Service] dashboard-metrics status:', res.status, `(${durationMs}ms, retries: ${attempt})`, {
       url: requestUrl,
       hasApiKey: Boolean(apiKey),
     });
@@ -968,6 +1068,253 @@ async function fetchDashboardMetricsUncached(
     });
     return null;
   }
+}
+
+/**
+ * Métricas RECORRENTES da banca (todas as recargas/transações no período, não só
+ * primeiro depósito). Fonte: CRM `/api/crm/extract-totals?date_from=&date_to=`.
+ */
+export interface ExtractTotalsShape {
+  recarga_pix: number;
+  recarga_manual: number;
+  total_recargas: number;
+  total_bonus: number;
+  bonus_afiliado: number;
+  bonus_estrelas: number;
+  apostas_loterias: number;
+  apostas_jogo_do_bicho: number;
+  premios_loterias: number;
+  premios_jb: number;
+  venda_combo_total: number;
+  venda_bolao_total: number;
+  solicitacao_saque: number;
+  total_saque_disponivel: number;
+  total_balance: number;
+  total_transacts: number;
+}
+
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export async function fetchExtractTotals(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  signal?: AbortSignal
+): Promise<ExtractTotalsShape | null> {
+  throwIfAborted(signal);
+  let requestUrl: string | null = null;
+  try {
+    const apiUrl = new URL(`${cleanBancaUrl}/api/crm/extract-totals`);
+    if (dateFrom) apiUrl.searchParams.append('date_from', dateFrom);
+    if (dateTo) apiUrl.searchParams.append('date_to', dateTo);
+    const apiKey = process.env.CRM_API_KEY;
+    requestUrl = apiUrl.toString();
+
+    // Retry de 429 com Retry-After + backoff (mesmo tratamento do dashboard-metrics).
+    let res: Response;
+    let attempt = 0;
+    while (true) {
+      await crmThrottleGate(signal);
+      res = await fetch(requestUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+        signal: getCrmFetchSignal(signal),
+      });
+      if (res.status !== 429 || attempt >= DASHBOARD_METRICS_429_MAX_RETRIES) break;
+      attempt++;
+      const waitMs = parseRetryAfterMs(res) ?? Math.min(10000, randomDelayMs(1500, 3000) * attempt);
+      crmServiceVerboseLog('[DonoBanca Service] extract-totals 429 — aguardando para retry:', {
+        url: requestUrl,
+        attempt,
+        waitMs,
+      });
+      await sleep(waitMs);
+    }
+
+    if (!res.ok) {
+      await logCrmFetchFailure('extract-totals', res, {
+        url: requestUrl,
+        hasApiKey: Boolean(apiKey),
+        durationMs: 0,
+        extra: { dateFrom: dateFrom ?? null, dateTo: dateTo ?? null, ...(attempt > 0 ? { retries: attempt } : {}) },
+      });
+      return null;
+    }
+    const json = await res.json();
+    const t = json?.totals;
+    if (!t || typeof t !== 'object') {
+      console.warn('[DonoBanca Service] extract-totals OK, mas sem objeto totals');
+      return null;
+    }
+    return {
+      recarga_pix: num(t.recarga_pix),
+      recarga_manual: num(t.recarga_manual),
+      total_recargas: num(t.total_recargas),
+      total_bonus: num(t.total_bonus),
+      bonus_afiliado: num(t.bonus_afiliado),
+      bonus_estrelas: num(t.bonus_estrelas),
+      apostas_loterias: num(t.apostas_loterias),
+      apostas_jogo_do_bicho: num(t.apostas_jogo_do_bicho),
+      premios_loterias: num(t.premios_loterias),
+      premios_jb: num(t.premios_jb),
+      venda_combo_total: num(t.venda_combo?.total),
+      venda_bolao_total: num(t.venda_bolao?.total),
+      solicitacao_saque: num(t.solicitacao_saque),
+      total_saque_disponivel: num(t.total_saque_disponivel),
+      total_balance: num(t.total_balance),
+      total_transacts: num(t.total_transacts),
+    };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    console.warn('[DonoBanca Service] Erro ao buscar extract-totals:', {
+      message: err instanceof Error ? err.message : String(err),
+      url: requestUrl ?? `${cleanBancaUrl}/api/crm/extract-totals`,
+    });
+    return null;
+  }
+}
+
+/**
+ * Cohort de jogadores reais (LTV recorrente por jogador/consultor).
+ * Fonte: CRM `/api/crm/cohort-real-players` — registrados em [cohort] que depositaram
+ * em [deposit_window]. Aqui cohort = deposit_window = período selecionado.
+ */
+export interface CohortPlayer {
+  id: number;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  registered_at: string | null;
+  consultant_id: number | null;
+  consultant_name: string | null;
+  consultant_email: string | null;
+  deposited_in_window: number;
+  deposits_count_in_window: number;
+  ltv_in_window: number;
+  ltv_count_in_window: number;
+  deposit_bucket: string | null;
+  last_deposit_at: string | null;
+  last_deposit_value: number | null;
+}
+
+export interface CohortTotals {
+  cohort_size: number;
+  total_deposited_in_window: number;
+  total_deposits_count_in_window: number;
+  players_that_deposited: number;
+  total_ltv_in_window: number;
+  players_with_ltv: number;
+  ltv_avg: number;
+  deposit_buckets: { dep_1x: number; dep_2x: number; dep_3x: number; dep_4x_plus: number };
+}
+
+export interface CohortRealPlayersResult {
+  totals: CohortTotals | null;
+  data: CohortPlayer[];
+}
+
+export async function fetchCohortRealPlayers(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  signal?: AbortSignal
+): Promise<CohortRealPlayersResult | null> {
+  throwIfAborted(signal);
+  const perPage = 1000;
+  const maxPages = 20;
+  const allData: CohortPlayer[] = [];
+  let totals: CohortTotals | null = null;
+  const apiKey = process.env.CRM_API_KEY;
+
+  for (let page = 1; page <= maxPages; page++) {
+    throwIfAborted(signal);
+    const apiUrl = new URL(`${cleanBancaUrl}/api/crm/cohort-real-players`);
+    if (dateFrom) {
+      apiUrl.searchParams.set('cohort_from', dateFrom);
+      apiUrl.searchParams.set('deposit_from', dateFrom);
+    }
+    if (dateTo) {
+      apiUrl.searchParams.set('cohort_to', dateTo);
+      apiUrl.searchParams.set('deposit_to', dateTo);
+    }
+    apiUrl.searchParams.set('per_page', String(perPage));
+    apiUrl.searchParams.set('page', String(page));
+    const requestUrl = apiUrl.toString();
+
+    // Retry de 429 com backoff crescente + Retry-After (throttle do CRM é agressivo nesta rota).
+    let res: Response;
+    let attempt = 0;
+    while (true) {
+      await crmThrottleGate(signal);
+      res = await fetch(requestUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+        signal: getCrmFetchSignal(signal, COHORT_FETCH_TIMEOUT_MS),
+      });
+      if (res.status !== 429 || attempt >= COHORT_429_MAX_RETRIES) break;
+      attempt++;
+      // Honra Retry-After; senão backoff crescente (~2s, 4s, 6s…) com jitter, até 10s.
+      const retryAfter = parseRetryAfterMs(res);
+      const backoff = Math.min(10000, randomDelayMs(1500, 3000) * attempt);
+      await sleep(retryAfter ?? backoff);
+    }
+
+    if (!res.ok) {
+      await logCrmFetchFailure('cohort-real-players', res, {
+        url: requestUrl,
+        hasApiKey: Boolean(apiKey),
+        durationMs: 0,
+        extra: { page, ...(attempt > 0 ? { retries: attempt } : {}) },
+      });
+      break;
+    }
+    const json = await res.json().catch(() => null);
+    if (page === 1 && json?.totals && typeof json.totals === 'object') {
+      const t = json.totals;
+      const b = t.deposit_buckets ?? {};
+      totals = {
+        cohort_size: num(t.cohort_size),
+        total_deposited_in_window: num(t.total_deposited_in_window),
+        total_deposits_count_in_window: num(t.total_deposits_count_in_window),
+        players_that_deposited: num(t.players_that_deposited),
+        total_ltv_in_window: num(t.total_ltv_in_window),
+        players_with_ltv: num(t.players_with_ltv),
+        ltv_avg: num(t.ltv_avg),
+        deposit_buckets: {
+          dep_1x: num(b.dep_1x),
+          dep_2x: num(b.dep_2x),
+          dep_3x: num(b.dep_3x),
+          dep_4x_plus: num(b.dep_4x_plus),
+        },
+      };
+    }
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    for (const r of rows) {
+      allData.push({
+        id: num(r.id),
+        name: r.name ?? null,
+        email: r.email ?? null,
+        phone: r.phone ?? null,
+        registered_at: r.registered_at ?? null,
+        consultant_id: r.consultant_id != null ? num(r.consultant_id) : null,
+        consultant_name: r.consultant_name ?? null,
+        consultant_email: r.consultant_email ?? null,
+        deposited_in_window: num(r.deposited_in_window),
+        deposits_count_in_window: num(r.deposits_count_in_window),
+        ltv_in_window: num(r.ltv_in_window),
+        ltv_count_in_window: num(r.ltv_count_in_window),
+        deposit_bucket: r.deposit_bucket ?? null,
+        last_deposit_at: r.last_deposit_at ?? null,
+        last_deposit_value: r.last_deposit_value != null ? num(r.last_deposit_value) : null,
+      });
+    }
+    if (rows.length < perPage) break;
+  }
+
+  return { totals, data: allData };
 }
 
 export async function getDonoBancaDashboardData({

@@ -16,9 +16,11 @@ export default async function DonoBancaPage() {
   const normalizedStatus = String(userStatus ?? '').trim().toLowerCase();
   const isAdminOrSuperAdmin = normalizedStatus === 'super_admin' || normalizedStatus === 'admin';
   const isDonoBanca = userStatus === 'dono_banca';
+  // Gestor de tráfego pode acessar a Gestão de Banca (escopo: bancas atribuídas em user_bancas).
+  const isGestor = normalizedStatus === 'gestor';
   const hasSidebarAccess = await hasSidebarPermission(profile ?? null, 'gestao_banca');
-  const canAccessDonoBanca = isAdminOrSuperAdmin || isDonoBanca || hasSidebarAccess;
-  const canSelectBanca = isAdminOrSuperAdmin || (hasSidebarAccess && !isDonoBanca);
+  const canAccessDonoBanca = isAdminOrSuperAdmin || isDonoBanca || isGestor || hasSidebarAccess;
+  const canSelectBanca = isAdminOrSuperAdmin || isGestor || (hasSidebarAccess && !isDonoBanca);
 
   return (
     <DonoBancaClient

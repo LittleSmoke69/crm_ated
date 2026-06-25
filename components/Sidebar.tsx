@@ -524,6 +524,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gestor') {
       return [
         itemGestaoTrafego,
+        itemGestaoBanca,
         itemMeuDesempenho,
         itemDesempenhoDetalhado,
         itemZaplinkGestorTrafego,
