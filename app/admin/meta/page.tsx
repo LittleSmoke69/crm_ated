@@ -36,6 +36,7 @@ import {
 import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
 import SpendVsDepositChart from '@/components/Meta/SpendVsDepositChart';
 import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
+import BancaAnalysisCard from '@/components/Banca/BancaAnalysisCard';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -919,6 +920,44 @@ export default function AdminMetaPage() {
     return `${y}-${m}-${day}`;
   };
 
+  /** IDs das bancas com campanha ativa no período (LIVE, = Ranking). null = ainda não carregado. */
+  const [liveActiveBancaIds, setLiveActiveBancaIds] = useState<string[] | null>(null);
+
+  /** Bancas com campanha ativa no período (mesmo conjunto do Ranking Diário) — para os cards "Análise da Banca". */
+  const activeAdsBancas = useMemo(() => {
+    const nameById = new Map<string, string>();
+    for (const r of overviewRows) {
+      const id = String(r.banca_id ?? '').trim();
+      if (id && !nameById.has(id)) nameById.set(id, r.banca_name || r.banca_url || id);
+    }
+    for (const b of bancas) if (b.id && !nameById.has(b.id)) nameById.set(b.id, b.name || b.url || b.id);
+
+    // Preferir o conjunto LIVE (campanhas ativas no período). Fallback: overviewRows com spend/campanha ativa.
+    if (liveActiveBancaIds) {
+      const seen = new Set<string>();
+      const out: Array<{ id: string; name: string }> = [];
+      for (const raw of liveActiveBancaIds) {
+        const id = String(raw).trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push({ id, name: nameById.get(id) || id });
+      }
+      return out;
+    }
+
+    const seen = new Set<string>();
+    const out: Array<{ id: string; name: string }> = [];
+    for (const r of overviewRows) {
+      const id = String(r.banca_id ?? '').trim();
+      if (!id || seen.has(id)) continue;
+      const hasAds = (r.metrics?.spend ?? 0) > 0 || (r.campaigns?.active ?? 0) > 0;
+      if (!hasAds) continue;
+      seen.add(id);
+      out.push({ id, name: nameById.get(id) || id });
+    }
+    return out;
+  }, [overviewRows, bancas, liveActiveBancaIds]);
+
   const adminMetaInsightsDateRange = useMemo(() => {
     const now = new Date();
     const todayStr = toMetaDateString(now);
@@ -959,6 +998,28 @@ export default function AdminMetaPage() {
         return { dateFrom: null as string | null, dateTo: null as string | null, label: 'Todo o período' };
     }
   }, [metaInsightsPeriod, metaInsightsCustomFrom, metaInsightsCustomTo]);
+
+  /** Carrega as bancas com campanha ativa no período (LIVE, = Ranking) para filtrar os cards "Análise da Banca". */
+  useEffect(() => {
+    if (!userId) return;
+    const { dateFrom, dateTo } = adminMetaInsightsDateRange;
+    if (!dateFrom || !dateTo) {
+      setLiveActiveBancaIds(null); // período "todos": usa fallback (overviewRows)
+      return;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    fetch(`/api/admin/meta/active-ads-bancas?${params.toString()}`, { headers: { 'X-User-Id': userId } })
+      .then((r) => r.json())
+      .then((res) => {
+        if (cancelled) return;
+        if (res?.success && Array.isArray(res.data?.banca_ids)) {
+          setLiveActiveBancaIds(res.data.banca_ids.map((x: unknown) => String(x)));
+        }
+      })
+      .catch(() => { /* mantém fallback */ });
+    return () => { cancelled = true; };
+  }, [userId, adminMetaInsightsDateRange]);
 
   /**
    * Bancas realmente vinculadas à integração selecionada no dropdown (cada linha de meta_integration_configs tem seu próprio conjunto).
@@ -3367,6 +3428,36 @@ export default function AdminMetaPage() {
           </div>
         ) : null}
 
+        {/* Card Análise da Banca — segue o filtro "Banca Meta". Sem filtro: todas as bancas com Ads ativo (igual ao Ranking). */}
+        {overviewFilterBancaId ? (
+          <BancaAnalysisCard
+            bancaId={overviewFilterBancaId}
+            userId={userId}
+            dateFrom={adminMetaInsightsDateRange.dateFrom}
+            dateTo={adminMetaInsightsDateRange.dateTo}
+            bancaName={bancas.find((b) => b.id === overviewFilterBancaId)?.name ?? null}
+          />
+        ) : activeAdsBancas.length > 0 ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 items-stretch">
+            {activeAdsBancas.map((b) => (
+              <BancaAnalysisCard
+                key={b.id}
+                bancaId={b.id}
+                userId={userId}
+                dateFrom={adminMetaInsightsDateRange.dateFrom}
+                dateTo={adminMetaInsightsDateRange.dateTo}
+                bancaName={b.name}
+                lazy
+                compact
+              />
+            ))}
+          </div>
+        ) : (
+          <div className={`${metaCard} p-4 text-sm text-gray-500 dark:text-gray-400`}>
+            Nenhuma banca com Ads ativo no período. Selecione uma banca no filtro <strong>Banca Meta</strong> para ver a Análise da Banca.
+          </div>
+        )}
+
         <BancaXAdsRanking
           dateFrom={adminMetaInsightsDateRange.dateFrom}
           dateTo={adminMetaInsightsDateRange.dateTo}
@@ -3374,7 +3465,6 @@ export default function AdminMetaPage() {
         />
 
         <InvestmentRoundsPanel bancas={bancas} userId={userId} />
-
 
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">

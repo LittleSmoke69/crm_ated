@@ -42,6 +42,7 @@ import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { buildGestorEffectiveHeaders } from '@/lib/utils/gestor-effective-headers';
 import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
+import BancaAnalysisGrid from '@/components/Banca/BancaAnalysisGrid';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
 import Funnel3DChart from '@/components/Charts/Funnel3DChart';
@@ -2470,6 +2471,15 @@ export default function GestorTrafegoClient({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Análise da Banca — admin/super: todas; gestor: bancas vinculadas (escopo no servidor) */}
+        <div className="mb-6">
+          <BancaAnalysisGrid
+            userId={userId ?? null}
+            dateFrom={getDateRange().dateFrom}
+            dateTo={getDateRange().dateTo}
+          />
         </div>
 
         {/* Rodadas de Investimento — gestor define meta de gasto por consultor e acompanha LTV do período */}

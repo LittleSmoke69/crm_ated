@@ -237,7 +237,7 @@ async function fetchAllMetaCampaignsWithBanca(): Promise<MetaCampaignRecord[]> {
   }));
 }
 
-type LiveAdsAggregate = {
+export type LiveAdsAggregate = {
   spendByBanca: Map<string, number>;
   campaignsByBanca: Map<string, number>;
   bancasWithActiveAds: Set<string>;
@@ -257,7 +257,7 @@ type LiveAdsAggregate = {
  *      - Sem vínculo + integração 1-banca → atribui (fallback).
  *      - Sem vínculo + integração compartilhada → descarta (não chuta).
  */
-async function fetchLiveAdsForRange(
+export async function fetchLiveAdsForRange(
   dateFrom: string,
   dateTo: string,
   tz: string

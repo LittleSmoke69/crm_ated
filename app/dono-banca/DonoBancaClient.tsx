@@ -33,6 +33,7 @@ import {
   Megaphone
 } from 'lucide-react';
 import Layout from '@/components/Layout';
+import BancaAnalysisGrid from '@/components/Banca/BancaAnalysisGrid';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import FinancialMetricsBarChart from '@/components/Charts/FinancialMetricsBarChart';
 import LeadsDistributionChart from '@/components/Charts/LeadsDistributionChart';
@@ -1567,6 +1568,13 @@ export default function DonoBancaHierarquia({
             )}
           </div>
         )}
+
+        {/* Análise da Banca — admin/super: todas; dono: própria banca (escopo no servidor) */}
+        <BancaAnalysisGrid
+          userId={userId ?? null}
+          dateFrom={getDateRange().dateFrom}
+          dateTo={getDateRange().dateTo}
+        />
 
         {/* LTV Recorrente por Consultor (cohort-real-players) */}
         <CohortLtvCard
