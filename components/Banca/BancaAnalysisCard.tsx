@@ -92,14 +92,30 @@ function brl(v: number): string {
 function int(v: number): string {
   return String(Number(v) || 0);
 }
+/** % do faturamento que foi LTV (recorrência) = ltv ÷ faturamento. */
+function ltvPctStr(faturamento: number, ltv: number): string {
+  const f = Number(faturamento) || 0;
+  if (f <= 0) return '—';
+  return `${(((Number(ltv) || 0) / f) * 100).toFixed(1)}%`;
+}
 
 function authHeaders(userId: string | null): Record<string, string> {
   return { 'Content-Type': 'application/json', ...(userId ? { 'X-User-Id': userId } : {}) };
 }
 
-function BigStat({ label, value, icon, accent, compact }: { label: string; value: string; icon: React.ReactNode; accent: 'rose' | 'emerald'; compact?: boolean }) {
-  const ring = accent === 'rose' ? 'from-rose-500/15 to-rose-600/5 border-rose-400/30' : 'from-emerald-500/15 to-emerald-600/5 border-emerald-400/30';
-  const iconColor = accent === 'rose' ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500 dark:text-emerald-400';
+function BigStat({ label, value, icon, accent, compact }: { label: string; value: string; icon: React.ReactNode; accent: 'rose' | 'emerald' | 'indigo'; compact?: boolean }) {
+  const ring =
+    accent === 'rose'
+      ? 'from-rose-500/15 to-rose-600/5 border-rose-400/30'
+      : accent === 'indigo'
+        ? 'from-indigo-500/15 to-indigo-600/5 border-indigo-400/30'
+        : 'from-emerald-500/15 to-emerald-600/5 border-emerald-400/30';
+  const iconColor =
+    accent === 'rose'
+      ? 'text-rose-500 dark:text-rose-400'
+      : accent === 'indigo'
+        ? 'text-indigo-500 dark:text-indigo-400'
+        : 'text-emerald-500 dark:text-emerald-400';
   return (
     <div className={`rounded-2xl border bg-gradient-to-br ${ring} ${compact ? 'p-3 min-h-[80px]' : 'p-4 min-h-[110px]'} flex flex-col justify-between`}>
       <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-wide ${iconColor}`}>
@@ -354,14 +370,14 @@ export default function BancaAnalysisCard({
           >
             {/* Painel 1: visão da banca */}
             <div className="w-1/2 shrink-0 pr-1 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <BigStat label="Gasto de Ads" value={brl(data.ads_spend)} icon={<Megaphone className="w-4 h-4" />} accent="rose" compact={compact} />
                 <BigStat label="Faturamento" value={brl(data.faturamento)} icon={<DollarSign className="w-4 h-4" />} accent="emerald" compact={compact} />
+                <BigStat label="LTV % do Faturamento" value={`${data.ltv_pct.toFixed(1)}%`} icon={<TrendingUp className="w-4 h-4" />} accent="indigo" compact={compact} />
               </div>
 
               <div className={metricGrid}>
                 <Stat label="LTV" value={brl(data.ltv)} hint="Valor total gerado pelos jogadores além do primeiro depósito. Mostra o quanto eles voltaram a depositar após a captação." />
-                <Stat label="LTV %" value={`${data.ltv_pct.toFixed(1)}%`} hint="Percentual do faturamento que veio de depósitos recorrentes. Calculado como LTV ÷ Faturamento total." />
                 <Stat label="Total de Depósitos" value={int(data.total_depositos)} hint="Número total de transações de depósito no período, contando primeiros depósitos e recorrentes juntos." />
                 <Stat label="Depósitos recorrentes" value={int(data.depositos_recorrentes)} hint="Quantidade de jogadores que depositaram mais de uma vez no período, ou seja, voltaram a apostar." />
                 <Stat label="Total Gerados (lucro)" value={brl(data.total_gerados)} hint="Lucro bruto da banca no período: Faturamento total menos o total de prêmios pagos aos jogadores." />
@@ -436,68 +452,87 @@ export default function BancaAnalysisCard({
                 data.ads_consultants.length === 0 ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor atribuído às campanhas.</p>
                 ) : (
-                  <div className="max-h-[420px] overflow-y-auto space-y-1.5 pr-1">
-                    {data.ads_consultants.map((c) => {
-                      const st = metricsByEmail[c.consultant_email];
-                      const m = st?.data;
-                      return (
-                        <div key={c.consultant_email} className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{c.consultant_name}</p>
-                              <p className="text-[10px] text-gray-400 truncate">{c.consultant_email}</p>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="text-xs tabular-nums text-rose-600 dark:text-rose-400" title="Gasto de ADS">{brl(c.ads)}</span>
-                              {st?.loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" /> : null}
-                            </div>
-                          </div>
-                          {m ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
-                              <Stat label="Cadastros" value={int(m.cadastros)} />
-                              <Stat label="Faturamento" value={brl(m.faturamento)} />
-                              <Stat label="LTV" value={brl(m.ltv)} />
-                              <Stat label="Nº depósitos" value={int(m.total_deposits_count)} />
-                              <Stat label="Depositaram" value={int(m.players_that_deposited)} />
-                              <Stat label="LTV médio" value={brl(m.ltv_avg)} />
-                            </div>
-                          ) : st?.error ? (
-                            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">{st.error}</p>
-                          ) : !st ? (
-                            <p className="text-[11px] text-gray-400 mt-1">Aguardando…</p>
-                          ) : st.loading ? null : (
-                            <p className="text-[11px] text-gray-400 mt-1">Sem dados no período.</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                  <div className="overflow-x-auto max-h-[420px] overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
+                    <table className="w-full text-sm border-collapse">
+                      <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-800">
+                        <tr className="text-left text-[11px] text-gray-600 dark:text-gray-300 uppercase">
+                          <th className="px-3 py-2 font-bold">Consultor</th>
+                          <th className="px-3 py-2 font-bold text-right">ADS</th>
+                          <th className="px-3 py-2 font-bold text-right">Cadastros</th>
+                          <th className="px-3 py-2 font-bold text-right">Faturamento</th>
+                          <th className="px-3 py-2 font-bold text-right">LTV</th>
+                          <th className="px-3 py-2 font-bold text-right">LTV %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.ads_consultants.map((c, idx) => {
+                          const st = metricsByEmail[c.consultant_email];
+                          const m = st?.data;
+                          const zebra = idx % 2 === 1 ? 'bg-gray-50 dark:bg-gray-800/40' : 'bg-white dark:bg-transparent';
+                          return (
+                            <tr key={c.consultant_email} className={`${zebra} border-t border-gray-100 dark:border-gray-700/60`}>
+                              <td className="px-3 py-2 text-gray-800 dark:text-gray-100 font-medium">
+                                {c.consultant_name}
+                                <span className="block text-[10px] text-gray-400 truncate max-w-[160px]">{c.consultant_email}</span>
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums text-rose-600 dark:text-rose-400">{brl(c.ads)}</td>
+                              {m ? (
+                                <>
+                                  <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-200">{int(m.cadastros)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums text-gray-800 dark:text-gray-100">{brl(m.faturamento)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{brl(m.ltv)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-indigo-600 dark:text-indigo-400">{ltvPctStr(m.faturamento, m.ltv)}</td>
+                                </>
+                              ) : (
+                                <td colSpan={4} className="px-3 py-2 text-right text-[11px] text-gray-400">
+                                  {st?.loading ? (
+                                    <span className="inline-flex items-center gap-1 justify-end">
+                                      <Loader2 className="w-3 h-3 animate-spin" /> carregando…
+                                    </span>
+                                  ) : st?.error ? (
+                                    st.error
+                                  ) : (
+                                    '—'
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )
               ) : data.consultants.length === 0 ? (
                 <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor no período.</p>
               ) : (
-                <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-white dark:bg-[#2a2a2a]">
-                      <tr className="text-left text-[11px] text-gray-500 dark:text-gray-400 uppercase border-b border-gray-100 dark:border-gray-700">
+                <div className="overflow-x-auto max-h-[420px] overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
+                  <table className="w-full text-sm border-collapse">
+                    <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-800">
+                      <tr className="text-left text-[11px] text-gray-600 dark:text-gray-300 uppercase">
                         <th className="px-3 py-2 font-bold">Consultor</th>
-                        <th className="px-3 py-2 font-bold text-right"><Megaphone className="w-3.5 h-3.5 inline" /> ADS</th>
-                        <th className="px-3 py-2 font-bold text-right"><Wallet className="w-3.5 h-3.5 inline" /> Faturamento</th>
-                        <th className="px-3 py-2 font-bold text-right"><TrendingUp className="w-3.5 h-3.5 inline" /> LTV</th>
+                        <th className="px-3 py-2 font-bold text-right">ADS</th>
+                        <th className="px-3 py-2 font-bold text-right">Faturamento</th>
+                        <th className="px-3 py-2 font-bold text-right">LTV</th>
+                        <th className="px-3 py-2 font-bold text-right">LTV %</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.consultants.map((c) => (
-                        <tr key={c.consultant_email || c.consultant_name} className="border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
-                          <td className="px-3 py-2.5 text-gray-800 dark:text-gray-100 font-medium">
-                            {c.consultant_name}
-                            <span className="block text-[10px] text-gray-400">{c.players_that_deposited}/{c.players} jogadores</span>
-                          </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-rose-600 dark:text-rose-400">{brl(c.ads)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-gray-800 dark:text-gray-100">{brl(c.faturamento)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{brl(c.ltv)}</td>
-                        </tr>
-                      ))}
+                      {data.consultants.map((c, idx) => {
+                        const zebra = idx % 2 === 1 ? 'bg-gray-50 dark:bg-gray-800/40' : 'bg-white dark:bg-transparent';
+                        return (
+                          <tr key={c.consultant_email || c.consultant_name} className={`${zebra} border-t border-gray-100 dark:border-gray-700/60`}>
+                            <td className="px-3 py-2 text-gray-800 dark:text-gray-100 font-medium">
+                              {c.consultant_name}
+                              <span className="block text-[10px] text-gray-400">{c.players_that_deposited}/{c.players} jogadores</span>
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-rose-600 dark:text-rose-400">{brl(c.ads)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-800 dark:text-gray-100">{brl(c.faturamento)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{brl(c.ltv)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold text-indigo-600 dark:text-indigo-400">{ltvPctStr(c.faturamento, c.ltv)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
