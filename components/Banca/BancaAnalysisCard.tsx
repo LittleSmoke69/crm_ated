@@ -34,12 +34,29 @@ interface ConsultantRow {
   players_that_deposited: number;
 }
 
+interface AdsConsultantRow {
+  consultant_email: string;
+  consultant_name: string;
+  ads: number;
+}
+
+interface ConsultantMetrics {
+  cadastros: number;
+  faturamento: number;
+  total_deposits_count: number;
+  players_that_deposited: number;
+  ltv: number;
+  players_with_ltv: number;
+  ltv_avg: number;
+}
+
 interface Analysis {
   ads_active: boolean;
   ads_spend: number;
   faturamento: number;
   ltv: number;
   ltv_pct: number;
+  custo_por_lead: number;
   total_depositos: number;
   depositos_recorrentes: number;
   total_cadastros: number;
@@ -66,6 +83,7 @@ interface Analysis {
     total_prizes: number;
   } | null;
   consultants: ConsultantRow[];
+  ads_consultants: AdsConsultantRow[];
 }
 
 function brl(v: number): string {
@@ -171,8 +189,57 @@ export default function BancaAnalysisCard({
   const [showConsultors, setShowConsultors] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [openStatId, setOpenStatId] = useState<string | null>(null);
+  const [consultorTab, setConsultorTab] = useState<'ads' | 'geral'>('ads');
+  const [metricsByEmail, setMetricsByEmail] = useState<Record<string, { loading: boolean; data: ConsultantMetrics | null; error?: string }>>({});
+  const metricsRef = useRef(metricsByEmail);
+  metricsRef.current = metricsByEmail;
   const rootRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(!lazy);
+
+  const loadConsultantMetrics = useCallback(
+    async (email: string) => {
+      if (!email || metricsRef.current[email]) return; // já carregado/carregando
+      setMetricsByEmail((prev) => ({ ...prev, [email]: { loading: true, data: null } }));
+      try {
+        const params = new URLSearchParams();
+        if (bancaId) params.set('banca_id', bancaId);
+        params.set('consultant', email);
+        if (dateFrom) params.set('date_from', dateFrom);
+        if (dateTo) params.set('date_to', dateTo);
+        const res = await fetch(`/api/banca-analysis/consultant-metrics?${params.toString()}`, {
+          headers: authHeaders(userId),
+        });
+        const json = await res.json();
+        if (res.ok && json.success) {
+          setMetricsByEmail((prev) => ({ ...prev, [email]: { loading: false, data: (json.data?.metrics ?? null) as ConsultantMetrics | null } }));
+        } else {
+          setMetricsByEmail((prev) => ({ ...prev, [email]: { loading: false, data: null, error: json.error || 'Erro ao carregar' } }));
+        }
+      } catch {
+        setMetricsByEmail((prev) => ({ ...prev, [email]: { loading: false, data: null, error: 'Falha ao carregar' } }));
+      }
+    },
+    [bancaId, dateFrom, dateTo, userId]
+  );
+
+  // Pré-carrega as métricas (cohort) dos consultores ADS quando a aba/painel abre — 2 por vez.
+  useEffect(() => {
+    if (!showConsultors || consultorTab !== 'ads' || !data?.ads_consultants?.length) return;
+    let cancelled = false;
+    const emails = data.ads_consultants.map((c) => c.consultant_email).filter(Boolean);
+    (async () => {
+      // Endpoint leve (cohort-real-players-metrics) → dá pra paralelizar mais.
+      const CONCURRENCY = 4;
+      for (let i = 0; i < emails.length; i += CONCURRENCY) {
+        if (cancelled) return;
+        await Promise.all(emails.slice(i, i + CONCURRENCY).map((e) => loadConsultantMetrics(e)));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showConsultors, consultorTab, data?.ads_consultants, loadConsultantMetrics]);
 
   const load = useCallback(
     async (controller: AbortController) => {
@@ -300,6 +367,7 @@ export default function BancaAnalysisCard({
                 <Stat label="Total Gerados (lucro)" value={brl(data.total_gerados)} hint="Lucro bruto da banca no período: Faturamento total menos o total de prêmios pagos aos jogadores." />
                 <Stat label="Total de Prêmio" value={brl(data.total_premio)} hint="Soma total de prêmios pagos aos jogadores no período (saídas de caixa da banca)." />
                 <Stat label="Total de Cadastro" value={int(data.total_cadastros)} hint="Número de jogadores reais cadastrados no período. É a base do cohort usada para calcular o LTV médio." />
+                <Stat label="Custo por lead" value={brl(data.custo_por_lead)} hint="Quanto custou, em média, cada cadastro: Gasto de ADS ÷ Total de Cadastro no período." />
               </div>
 
               {(data.cohort || data.first_deposit) ? (
@@ -316,7 +384,7 @@ export default function BancaAnalysisCard({
                 <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-3">
                   <p className="text-xs font-bold text-gray-700 dark:text-gray-200 mb-2">Submétricas</p>
                   <div className={metricGrid}>
-                    <Stat label="Faturamento bruto" value={brl(data.cohort.total_deposited_in_window)} hint="Todos os depósitos, incluindo o 1º." />
+                    <Stat label="Faturamento bruto" value={brl(data.cohort.total_deposited_in_window)} hint="Todos os depósitos dos jogadores no período, incluindo o 1º (total_deposited_in_window). É o mesmo valor do Faturamento." />
                     <Stat label="Qtd. depósitos" value={int(data.cohort.total_deposits_count_in_window)} />
                     <Stat label="Depositaram ≥1x" value={int(data.cohort.players_that_deposited)} />
                     <Stat label="LTV médio" value={brl(data.cohort.ltv_avg)} hint="LTV ÷ jogadores da safra." />
@@ -346,12 +414,66 @@ export default function BancaAnalysisCard({
               ) : null}
             </div>
 
-            {/* Painel 2: por consultor */}
+            {/* Painel 2: por consultor — abas ADS x Geral */}
             <div className="w-1/2 shrink-0 pl-1">
-              <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
-                <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> Consultores ({data.consultants.length})
-              </p>
-              {data.consultants.length === 0 ? (
+              <div className="flex items-center gap-2 mb-3">
+                {(['ads', 'geral'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setConsultorTab(tab)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      consultorTab === tab
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    {tab === 'ads' ? `Consultores ADS (${data.ads_consultants.length})` : `Geral (${data.consultants.length})`}
+                  </button>
+                ))}
+              </div>
+
+              {consultorTab === 'ads' ? (
+                data.ads_consultants.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor atribuído às campanhas.</p>
+                ) : (
+                  <div className="max-h-[420px] overflow-y-auto space-y-1.5 pr-1">
+                    {data.ads_consultants.map((c) => {
+                      const st = metricsByEmail[c.consultant_email];
+                      const m = st?.data;
+                      return (
+                        <div key={c.consultant_email} className="rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{c.consultant_name}</p>
+                              <p className="text-[10px] text-gray-400 truncate">{c.consultant_email}</p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-xs tabular-nums text-rose-600 dark:text-rose-400" title="Gasto de ADS">{brl(c.ads)}</span>
+                              {st?.loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" /> : null}
+                            </div>
+                          </div>
+                          {m ? (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
+                              <Stat label="Cadastros" value={int(m.cadastros)} />
+                              <Stat label="Faturamento" value={brl(m.faturamento)} />
+                              <Stat label="LTV" value={brl(m.ltv)} />
+                              <Stat label="Nº depósitos" value={int(m.total_deposits_count)} />
+                              <Stat label="Depositaram" value={int(m.players_that_deposited)} />
+                              <Stat label="LTV médio" value={brl(m.ltv_avg)} />
+                            </div>
+                          ) : st?.error ? (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">{st.error}</p>
+                          ) : !st ? (
+                            <p className="text-[11px] text-gray-400 mt-1">Aguardando…</p>
+                          ) : st.loading ? null : (
+                            <p className="text-[11px] text-gray-400 mt-1">Sem dados no período.</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              ) : data.consultants.length === 0 ? (
                 <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor no período.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[420px] overflow-y-auto">

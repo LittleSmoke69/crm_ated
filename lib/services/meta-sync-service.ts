@@ -669,15 +669,28 @@ export function summarizeMetaBillingSnapshots(
  * Quando não vazio, a sincronização deve usar só estes IDs — não misturar com outras contas do token
  * (senão a 2ª integração na mesma banca caía na primeira conta retornada pelo token).
  */
-function parseConfiguredAdAccountIds(raw: string | null | undefined): string[] {
+function parseConfiguredAdAccountIds(
+  raw: string | null | undefined,
+  /** act_ ids bloqueados a excluir (vírgula). Não usados no sync/spend. */
+  blockedRaw?: string | null
+): string[] {
   if (raw == null || String(raw).trim() === '') return [];
+  const normalize = (p: string) => (p.startsWith('act_') ? p : `act_${p}`);
+  const blocked = new Set(
+    String(blockedRaw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(normalize)
+  );
   const parts = String(raw)
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   const out: string[] = [];
   for (const p of parts) {
-    const id = p.startsWith('act_') ? p : `act_${p}`;
+    const id = normalize(p);
+    if (blocked.has(id)) continue; // conta bloqueada → ignorada
     if (!out.includes(id)) out.push(id);
   }
   return out;
@@ -810,6 +823,8 @@ export interface MetaConfigInput {
   base_url?: string;
   access_token?: string;
   ad_account_id?: string;
+  /** Contas de anúncio bloqueadas (act_ ids, vírgula) — ignoradas no sync/spend. */
+  blocked_ad_account_ids?: string;
   pixel_id?: string;
   default_campaign_id?: string;
   is_active?: boolean;
@@ -824,6 +839,7 @@ export interface MetaIntegrationRow {
   access_token_encrypted: string | null;
   token_last4: string | null;
   ad_account_id: string | null;
+  blocked_ad_account_ids: string | null;
   pixel_id: string | null;
   default_campaign_id: string | null;
   is_active: boolean;
@@ -939,15 +955,17 @@ export async function getDecryptedTokenByIntegrationId(
 async function resolveMetaApiContextByIntegrationId(integrationId: string): Promise<{
   baseUrl: string;
   adAccountId: string | null;
+  blockedAdAccountIds: string | null;
 }> {
   const { data } = await supabaseServiceRole
     .from('meta_integration_configs')
-    .select('base_url, ad_account_id')
+    .select('base_url, ad_account_id, blocked_ad_account_ids')
     .eq('id', integrationId)
     .maybeSingle();
   return {
     baseUrl: (data?.base_url as string) || DEFAULT_BASE_URL,
     adAccountId: (data?.ad_account_id as string) || null,
+    blockedAdAccountIds: (data?.blocked_ad_account_ids as string | null) ?? null,
   };
 }
 
@@ -990,7 +1008,7 @@ async function getLegacyMetaIntegrationByBanca(bancaId: string): Promise<MetaInt
   const { data, error } = await supabaseServiceRole
     .from('meta_integrations')
     .select(
-      'id, banca_id, base_url, access_token_encrypted, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset'
+      'id, banca_id, base_url, access_token_encrypted, token_last4, ad_account_id, blocked_ad_account_ids, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset'
     )
     .eq('banca_id', bancaId)
     .maybeSingle();
@@ -1003,6 +1021,7 @@ async function getLegacyMetaIntegrationByBanca(bancaId: string): Promise<MetaInt
     access_token_encrypted: (d.access_token_encrypted as string | null) ?? null,
     token_last4: (d.token_last4 as string | null) ?? null,
     ad_account_id: (d.ad_account_id as string | null) ?? null,
+    blocked_ad_account_ids: (d.blocked_ad_account_ids as string | null) ?? null,
     pixel_id: (d.pixel_id as string | null) ?? null,
     default_campaign_id: (d.default_campaign_id as string | null) ?? null,
     is_active: d.is_active !== false,
@@ -1018,6 +1037,7 @@ async function getLegacyMetaIntegrationByBanca(bancaId: string): Promise<MetaInt
 async function resolveMetaApiContext(bancaId: string): Promise<{
   baseUrl: string;
   adAccountId: string | null;
+  blockedAdAccountIds: string | null;
 }> {
   const ids = await listIntegrationIdsByBanca(bancaId);
   if (ids.length > 0) {
@@ -1025,12 +1045,13 @@ async function resolveMetaApiContext(bancaId: string): Promise<{
   }
   const { data: leg } = await supabaseServiceRole
     .from('meta_integrations')
-    .select('base_url, ad_account_id')
+    .select('base_url, ad_account_id, blocked_ad_account_ids')
     .eq('banca_id', bancaId)
     .maybeSingle();
   return {
     baseUrl: (leg?.base_url as string) || DEFAULT_BASE_URL,
     adAccountId: (leg?.ad_account_id as string) || null,
+    blockedAdAccountIds: (leg?.blocked_ad_account_ids as string | null) ?? null,
   };
 }
 
@@ -1040,7 +1061,7 @@ export async function listMetaIntegrationsForBanca(bancaId: string): Promise<Met
     const { data, error } = await supabaseServiceRole
       .from('meta_integration_configs')
       .select(
-        'id, base_url, token_last4, ad_account_id, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset, access_token_encrypted'
+        'id, base_url, token_last4, ad_account_id, blocked_ad_account_ids, pixel_id, default_campaign_id, is_active, currency, last_sync_at, last_sync_error, last_sync_date_preset, access_token_encrypted'
       )
       .eq('id', integrationId)
       .maybeSingle();
@@ -1163,6 +1184,10 @@ export async function upsertMetaConfig(
 
   if (input.ad_account_id !== undefined) {
     updatePayload.ad_account_id = input.ad_account_id?.trim() || null;
+  }
+
+  if (input.blocked_ad_account_ids !== undefined) {
+    updatePayload.blocked_ad_account_ids = input.blocked_ad_account_ids?.trim() || null;
   }
 
   if (input.access_token?.trim()) {
@@ -1538,10 +1563,10 @@ export async function loadCampaigns(
     return { success: false, error: 'Token não configurado.' };
   }
 
-  const { baseUrl, adAccountId: adAccountIdRaw } = integrationId
+  const { baseUrl, adAccountId: adAccountIdRaw, blockedAdAccountIds } = integrationId
     ? await resolveMetaApiContextByIntegrationId(integrationId)
     : await resolveMetaApiContext(bancaId);
-  const configuredActs = parseConfiguredAdAccountIds(adAccountIdRaw ?? undefined);
+  const configuredActs = parseConfiguredAdAccountIds(adAccountIdRaw ?? undefined, blockedAdAccountIds);
   const adAccountId = configuredActs[0];
   if (!adAccountId) {
     return { success: false, error: 'Ad Account ID não configurado.' };
@@ -2629,12 +2654,12 @@ async function processAdminMetaLiveJob(
     return { traces, rows: campaignRows, billingSnapshots, spendBrlByDay };
   }
 
-  const { baseUrl, adAccountId: configuredAdAccountIdRaw } =
+  const { baseUrl, adAccountId: configuredAdAccountIdRaw, blockedAdAccountIds: configuredBlockedRaw } =
     integrationId != null
       ? await resolveMetaApiContextByIntegrationId(integrationId)
       : await resolveMetaApiContext(rep);
 
-  const configuredIds = parseConfiguredAdAccountIds(configuredAdAccountIdRaw ?? undefined);
+  const configuredIds = parseConfiguredAdAccountIds(configuredAdAccountIdRaw ?? undefined, configuredBlockedRaw);
 
   let candidateAccountIds: string[] = [...configuredIds];
   if (candidateAccountIds.length === 0) {
@@ -3465,28 +3490,31 @@ async function runSyncSingle(
   let token: string | null = null;
   let baseUrl = DEFAULT_BASE_URL;
   let adAccountIdRaw: string | null = null;
+  let blockedAdAccountIdsRaw: string | null = null;
 
   if (integrationIdForConfig) {
     token = await getDecryptedTokenByIntegrationId(integrationIdForConfig);
     const ctx = await resolveMetaApiContextByIntegrationId(integrationIdForConfig);
     baseUrl = ctx.baseUrl;
     adAccountIdRaw = ctx.adAccountId;
+    blockedAdAccountIdsRaw = ctx.blockedAdAccountIds;
   } else {
     token = await getLegacyDecryptedToken(bancaId);
     const { data: leg } = await supabaseServiceRole
       .from('meta_integrations')
-      .select('base_url, ad_account_id')
+      .select('base_url, ad_account_id, blocked_ad_account_ids')
       .eq('banca_id', bancaId)
       .maybeSingle();
     baseUrl = (leg?.base_url as string) || DEFAULT_BASE_URL;
     adAccountIdRaw = (leg?.ad_account_id as string) || null;
+    blockedAdAccountIdsRaw = (leg?.blocked_ad_account_ids as string | null) ?? null;
   }
 
   if (!token) {
     return { success: false, error: 'Token não configurado.' };
   }
 
-  const configuredExplicit = parseConfiguredAdAccountIds(adAccountIdRaw ?? undefined);
+  const configuredExplicit = parseConfiguredAdAccountIds(adAccountIdRaw ?? undefined, blockedAdAccountIdsRaw);
 
   let campaignsCount = 0;
   let adsetsCount = 0;

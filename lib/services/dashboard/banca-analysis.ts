@@ -45,6 +45,13 @@ export interface BancaAnalysisConsultant {
   players_that_deposited: number;
 }
 
+/** Consultor atribuído às campanhas de ADS da banca (mesma atribuição do Ranking). */
+export interface BancaAnalysisAdsConsultant {
+  consultant_email: string;
+  consultant_name: string;
+  ads: number;
+}
+
 export interface BancaAnalysis {
   ads_active: boolean;
   // Métricas principais (mapeamento confirmado)
@@ -52,6 +59,7 @@ export interface BancaAnalysis {
   faturamento: number; // total_deposited_in_window
   ltv: number; // total_ltv_in_window
   ltv_pct: number; // ltv / faturamento * 100
+  custo_por_lead: number; // ads_spend / total_cadastros
   total_depositos: number; // total_deposits_count_in_window
   depositos_recorrentes: number; // players_with_ltv
   total_cadastros: number; // cohort_size
@@ -79,7 +87,10 @@ export interface BancaAnalysis {
     net_profit: number;
     total_prizes: number;
   } | null;
+  /** Consultores por cohort (geral). */
   consultants: BancaAnalysisConsultant[];
+  /** Consultores atribuídos às campanhas de ADS (fonte do Ranking). */
+  ads_consultants: BancaAnalysisAdsConsultant[];
 }
 
 function roundMoney(n: number): number {
@@ -173,6 +184,55 @@ async function buildConsultorAdsSpendMap(
   return spendByConsultor;
 }
 
+/**
+ * Consultores atribuídos às campanhas de ADS da banca (mesma atribuição do Ranking).
+ * O valor de ADS por consultor usa o GASTO DIÁRIO ESTIMADO definido pelo gestor na
+ * atribuição (daily_spend_estimate — mesmo do Ranking); se o consultor não tiver
+ * estimativa, cai para o gasto real sincronizado. Leve (não chama dashboard-metrics).
+ */
+async function buildAdsConsultants(
+  bancaId: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined
+): Promise<BancaAnalysisAdsConsultant[]> {
+  const spendByConsultor = await buildConsultorAdsSpendMap(bancaId, dateFrom, dateTo);
+  const profileIds = Array.from(spendByConsultor.keys());
+  if (profileIds.length === 0) return [];
+
+  // Gasto diário estimado por consultor (soma nas campanhas) — valor informado pelo gestor.
+  const estByConsultor = new Map<string, number>();
+  const { data: estRows } = await supabaseServiceRole
+    .from('meta_campaign_consultors')
+    .select('consultor_id, daily_spend_estimate')
+    .eq('banca_id', bancaId)
+    .in('consultor_id', profileIds);
+  for (const r of estRows ?? []) {
+    const id = String((r as any).consultor_id ?? '').trim();
+    if (!id) continue;
+    estByConsultor.set(id, (estByConsultor.get(id) || 0) + (Number((r as any).daily_spend_estimate) || 0));
+  }
+
+  const { data: profiles } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, email, full_name')
+    .in('id', profileIds);
+
+  const out: BancaAnalysisAdsConsultant[] = [];
+  for (const p of profiles ?? []) {
+    const id = String((p as any).id);
+    const email = String((p as any).email ?? '').trim();
+    if (!email) continue;
+    const est = estByConsultor.get(id) || 0;
+    out.push({
+      consultant_email: email,
+      consultant_name: (p as any).full_name || email,
+      // Prioriza a estimativa do gestor; sem estimativa, usa o gasto real.
+      ads: roundMoney(est > 0 ? est : spendByConsultor.get(id) || 0),
+    });
+  }
+  return out.sort((a, b) => b.ads - a.ads || a.consultant_name.localeCompare(b.consultant_name));
+}
+
 /** Agrega o cohort por consultor (faturamento + LTV) e cruza com o ADS por consultor. */
 async function buildConsultants(
   bancaId: string,
@@ -258,13 +318,18 @@ export async function getBancaAnalysis(params: {
     adsSpend > 0;
 
   const ct = cohortResult?.totals ?? null;
+  // Faturamento = total_deposited_in_window do endpoint /cohort-real-players.
   const faturamento = roundMoney(ct?.total_deposited_in_window ?? 0);
   const ltv = roundMoney(ct?.total_ltv_in_window ?? 0);
   const totalPremio = roundMoney(dmRaw?.total_prizes ?? 0);
+  const totalCadastros = ct?.cohort_size ?? 0;
+  // Custo por lead = gasto de ADS ÷ total de cadastro no período.
+  const custoPorLead = totalCadastros > 0 ? roundMoney(adsSpend / totalCadastros) : 0;
 
-  const consultants = cohortResult?.data?.length
-    ? await buildConsultants(bancaId, cohortResult.data, dateFrom, dateTo)
-    : [];
+  const [consultants, ads_consultants] = await Promise.all([
+    cohortResult?.data?.length ? buildConsultants(bancaId, cohortResult.data, dateFrom, dateTo) : Promise.resolve([]),
+    buildAdsConsultants(bancaId, dateFrom, dateTo),
+  ]);
 
   return {
     ads_active: adsActive,
@@ -272,9 +337,10 @@ export async function getBancaAnalysis(params: {
     faturamento,
     ltv,
     ltv_pct: faturamento > 0 ? roundMoney((ltv / faturamento) * 100) : 0,
+    custo_por_lead: custoPorLead,
     total_depositos: ct?.total_deposits_count_in_window ?? 0,
     depositos_recorrentes: ct?.players_with_ltv ?? 0,
-    total_cadastros: ct?.cohort_size ?? 0,
+    total_cadastros: totalCadastros,
     total_premio: totalPremio,
     total_gerados: roundMoney(faturamento - totalPremio),
     cohort: ct
@@ -302,5 +368,6 @@ export async function getBancaAnalysis(params: {
         }
       : null,
     consultants,
+    ads_consultants,
   };
 }

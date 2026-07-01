@@ -69,6 +69,7 @@ export async function GET(req: NextRequest) {
         base_url: c.base_url,
         token_last4: c.token_last4 ? `••••${c.token_last4}` : null,
         ad_account_id: c.ad_account_id,
+        blocked_ad_account_ids: c.blocked_ad_account_ids,
         pixel_id: c.pixel_id,
         default_campaign_id: c.default_campaign_id,
         is_active: c.is_active,
@@ -79,6 +80,7 @@ export async function GET(req: NextRequest) {
       base_url: primary.base_url,
       token_last4: primary.token_last4 ? `••••${primary.token_last4}` : null,
       ad_account_id: primary.ad_account_id,
+      blocked_ad_account_ids: primary.blocked_ad_account_ids,
       pixel_id: primary.pixel_id,
       default_campaign_id: primary.default_campaign_id,
       is_active: primary.is_active,
@@ -136,6 +138,7 @@ export async function PUT(req: NextRequest) {
 
     const payload: Record<string, unknown> = {
       ad_account_id: body.ad_account_id,
+      blocked_ad_account_ids: body.blocked_ad_account_ids,
       pixel_id: body.pixel_id,
       default_campaign_id: body.default_campaign_id,
       is_active: body.is_active ?? true,

@@ -1220,7 +1220,9 @@ export async function fetchCohortRealPlayers(
   cleanBancaUrl: string,
   dateFrom: string | null | undefined,
   dateTo: string | null | undefined,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Email do consultor — traz só o cohort dele (omitir = banca toda). */
+  consultant?: string | null
 ): Promise<CohortRealPlayersResult | null> {
   throwIfAborted(signal);
   const perPage = 1000;
@@ -1240,6 +1242,7 @@ export async function fetchCohortRealPlayers(
       apiUrl.searchParams.set('cohort_to', dateTo);
       apiUrl.searchParams.set('deposit_to', dateTo);
     }
+    if (consultant && consultant.trim()) apiUrl.searchParams.set('consultant', consultant.trim());
     apiUrl.searchParams.set('per_page', String(perPage));
     apiUrl.searchParams.set('page', String(page));
     const requestUrl = apiUrl.toString();
@@ -1315,6 +1318,76 @@ export async function fetchCohortRealPlayers(
   }
 
   return { totals, data: allData };
+}
+
+/**
+ * Apenas os TOTAIS do cohort (endpoint leve `/api/crm/cohort-real-players-metrics`),
+ * sem a lista de jogadores — usado para métricas por consultor (rápido).
+ * Aceita `consultant` (email → só o cohort dele; omitir = banca toda).
+ */
+export async function fetchCohortRealPlayersMetrics(
+  cleanBancaUrl: string,
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  consultant?: string | null,
+  signal?: AbortSignal
+): Promise<CohortTotals | null> {
+  throwIfAborted(signal);
+  const apiKey = process.env.CRM_API_KEY;
+  const apiUrl = new URL(`${cleanBancaUrl}/api/crm/cohort-real-players-metrics`);
+  if (dateFrom) {
+    apiUrl.searchParams.set('cohort_from', dateFrom);
+    apiUrl.searchParams.set('deposit_from', dateFrom);
+  }
+  if (dateTo) {
+    apiUrl.searchParams.set('cohort_to', dateTo);
+    apiUrl.searchParams.set('deposit_to', dateTo);
+  }
+  if (consultant && consultant.trim()) apiUrl.searchParams.set('consultant', consultant.trim());
+  const requestUrl = apiUrl.toString();
+
+  let res: Response;
+  let attempt = 0;
+  while (true) {
+    await crmThrottleGate(signal);
+    res = await fetch(requestUrl, {
+      method: 'GET',
+      headers: { Accept: 'application/json', ...(apiKey && { 'X-API-KEY': apiKey }) },
+      signal: getCrmFetchSignal(signal, COHORT_FETCH_TIMEOUT_MS),
+    });
+    if (res.status !== 429 || attempt >= COHORT_429_MAX_RETRIES) break;
+    attempt++;
+    await sleep(parseRetryAfterMs(res) ?? Math.min(10000, randomDelayMs(1500, 3000) * attempt));
+  }
+
+  if (!res.ok) {
+    await logCrmFetchFailure('cohort-real-players-metrics', res, {
+      url: requestUrl,
+      hasApiKey: Boolean(apiKey),
+      durationMs: 0,
+      extra: { consultant: consultant ? `${consultant.slice(0, 5)}***` : null, ...(attempt > 0 ? { retries: attempt } : {}) },
+    });
+    return null;
+  }
+  const json = await res.json().catch(() => null);
+  const t = json?.totals;
+  if (!t || typeof t !== 'object') return null;
+  const b = t.deposit_buckets ?? {};
+  return {
+    cohort_size: num(t.cohort_size),
+    total_deposited_in_window: num(t.total_deposited_in_window),
+    total_deposits_count_in_window: num(t.total_deposits_count_in_window),
+    players_that_deposited: num(t.players_that_deposited),
+    total_ltv_in_window: num(t.total_ltv_in_window),
+    players_with_ltv: num(t.players_with_ltv),
+    ltv_avg: num(t.ltv_avg),
+    deposit_buckets: {
+      dep_1x: num(b.dep_1x),
+      dep_2x: num(b.dep_2x),
+      dep_3x: num(b.dep_3x),
+      dep_4x_plus: num(b.dep_4x_plus),
+    },
+  };
 }
 
 export async function getDonoBancaDashboardData({

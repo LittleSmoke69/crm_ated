@@ -36,7 +36,9 @@ import {
   Hash,
   ExternalLink,
   Loader2,
-  Building2
+  Building2,
+  Ban,
+  Unlock
 } from 'lucide-react';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
@@ -88,11 +90,40 @@ function adAccountIdsFieldWithoutIndexGestor(raw: string, index: number): string
   return ids.join(', ');
 }
 
+function normalizeActIdGestor(act: string): string {
+  const t = String(act ?? '').trim();
+  return t.startsWith('act_') ? t : `act_${t}`;
+}
+
+function parseBlockedAdAccountIdsGestor(raw: string | null | undefined): string[] {
+  return parseAdAccountIdsFieldGestor(raw).map(normalizeActIdGestor);
+}
+
+function isAdAccountBlockedGestor(act: string, blockedRaw: string | null | undefined): boolean {
+  const norm = normalizeActIdGestor(act);
+  return parseBlockedAdAccountIdsGestor(blockedRaw).includes(norm);
+}
+
+function toggleAdAccountBlockedFieldGestor(blockedRaw: string, act: string, block: boolean): string {
+  const norm = normalizeActIdGestor(act);
+  const ids = parseBlockedAdAccountIdsGestor(blockedRaw).filter((id) => id !== norm);
+  if (block) ids.push(norm);
+  return ids.join(', ');
+}
+
+function blockedAdAccountIdsWithoutActGestor(blockedRaw: string, act: string): string {
+  const norm = normalizeActIdGestor(act);
+  return parseBlockedAdAccountIdsGestor(blockedRaw)
+    .filter((id) => id !== norm)
+    .join(', ');
+}
+
 type GestorMetaIntegrationRow = {
   integration_id: string;
   base_url: string;
   token_last4: string | null;
   ad_account_id: string | null;
+  blocked_ad_account_ids: string | null;
   pixel_id: string | null;
   default_campaign_id: string | null;
 };
@@ -530,6 +561,7 @@ export default function GestorTrafegoClient({
     base_url: 'https://graph.facebook.com/v25.0',
     access_token: '',
     ad_account_id: '',
+    blocked_ad_account_ids: '',
     pixel_id: '',
     default_campaign_id: '',
   });
@@ -577,6 +609,8 @@ export default function GestorTrafegoClient({
   const [consultorModalOpen, setConsultorModalOpen] = useState(false);
   const [consultorModalCampaignKey, setConsultorModalCampaignKey] = useState<string>('');
   const [consultorModalSearch, setConsultorModalSearch] = useState('');
+  /** Valor total do gasto diário para ratear igualmente entre os consultores selecionados. */
+  const [dailySpendTotalInput, setDailySpendTotalInput] = useState('');
   const [consultorModalGroupMode, setConsultorModalGroupMode] = useState<Record<string, 'shared' | 'individual'>>({});
   const [consultorModalSharedGroups, setConsultorModalSharedGroups] = useState<
     Record<string, SharedWhatsappGroupDraft[]>
@@ -1182,6 +1216,10 @@ export default function GestorTrafegoClient({
             ...f,
             base_url: (row?.base_url || d.base_url) || f.base_url,
             ad_account_id: row?.ad_account_id != null ? String(row.ad_account_id) : d.ad_account_id || '',
+            blocked_ad_account_ids:
+              row?.blocked_ad_account_ids != null
+                ? String(row.blocked_ad_account_ids)
+                : (d.blocked_ad_account_ids as string) || '',
             pixel_id: row?.pixel_id != null ? String(row.pixel_id) : d.pixel_id || '',
             default_campaign_id:
               row?.default_campaign_id != null
@@ -1211,6 +1249,7 @@ export default function GestorTrafegoClient({
           base_url: metaConfigForm.base_url,
           access_token: metaConfigForm.access_token || undefined,
           ad_account_id: metaConfigForm.ad_account_id,
+          blocked_ad_account_ids: metaConfigForm.blocked_ad_account_ids,
           pixel_id: metaConfigForm.pixel_id,
           default_campaign_id: metaConfigForm.default_campaign_id || null,
           is_active: true,
@@ -1257,6 +1296,10 @@ export default function GestorTrafegoClient({
               ...f,
               base_url: (row?.base_url || d.base_url) || f.base_url,
               ad_account_id: row?.ad_account_id != null ? String(row.ad_account_id) : d.ad_account_id || '',
+              blocked_ad_account_ids:
+                row?.blocked_ad_account_ids != null
+                  ? String(row.blocked_ad_account_ids)
+                  : (d.blocked_ad_account_ids as string) || '',
               pixel_id: row?.pixel_id != null ? String(row.pixel_id) : d.pixel_id || '',
               default_campaign_id:
                 row?.default_campaign_id != null
@@ -1551,6 +1594,32 @@ export default function GestorTrafegoClient({
     });
   };
 
+  /**
+   * Rateia um gasto diário TOTAL igualmente entre os consultores distintos da campanha:
+   * cada consultor recebe total ÷ nº de consultores. Entradas extras do mesmo consultor
+   * (grupos individuais) ficam zeradas para não duplicar o valor.
+   */
+  const distributeDailySpendInDraft = (campaignKey: string, totalStr: string) => {
+    const total = parseDailySpendDraftValue(totalStr);
+    if (total == null || total <= 0) return;
+    setMetaCampaignConsultorDraft((prev) => {
+      const current = [...(prev[campaignKey] ?? [])];
+      const distinctIds = Array.from(new Set(current.map((e) => String(e.consultor_id))));
+      if (distinctIds.length === 0) return prev;
+      const perStr = formatDailySpendDraftValue(total / distinctIds.length);
+      const seen = new Set<string>();
+      const next = current.map((entry) => {
+        const id = String(entry.consultor_id);
+        if (!seen.has(id)) {
+          seen.add(id);
+          return { ...entry, daily_spend_estimate: perStr };
+        }
+        return { ...entry, daily_spend_estimate: '' };
+      });
+      return { ...prev, [campaignKey]: next };
+    });
+  };
+
   const addIndividualGroupForConsultor = (campaignKey: string, consultorId: string) => {
     const id = String(consultorId);
     setMetaCampaignConsultorDraft((prev) => {
@@ -1735,6 +1804,7 @@ export default function GestorTrafegoClient({
         ...prev,
         [consultorModalCampaignKey]: buildSharedGroupsFromEntries(entries),
       }));
+      setDailySpendTotalInput('');
     }
     consultorModalWasOpenRef.current = consultorModalOpen;
   }, [consultorModalOpen, consultorModalCampaignKey, metaCampaignConsultorDraft]);
@@ -2139,47 +2209,6 @@ export default function GestorTrafegoClient({
                   </p>
                 </div>
               </div>
-              {/* ROI: Gasto Meta Ads vs Retorno em Depósitos dos Consultores */}
-              {(metaFunnel != null || metaCampaignsData.length > 0) && (
-                (() => {
-                  const spend = metaFunnel?.spend ?? 0;
-                  const consultorDeposited = metaCampaignsData.reduce((sum, r) => sum + (Number(r.consultor_total_deposited) || 0), 0);
-                  const hasConsultorData = metaCampaignsData.some((r) => (r.assigned_consultors?.length ?? 0) > 0);
-                  const delta = consultorDeposited - spend;
-                  const isPositive = delta >= 0;
-                  return (
-                    <div className="mt-4 p-4 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/60 dark:bg-gray-800/40">
-                      <div className="flex items-center gap-2 mb-3">
-                        <TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                        <p className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wide">Gasto Meta Ads vs Retorno em Depósitos</p>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="bg-white dark:bg-gray-700/50 p-3 rounded-lg border border-gray-100 dark:border-gray-600">
-                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Gasto Meta (período)</p>
-                          <p className="text-lg font-bold text-gray-800 dark:text-gray-100 min-h-[1.75rem] flex items-center">
-                            {loadingMeta ? <MetaMetricSkeleton /> : formatMetaSpend(spend, metaFunnel?.currency)}
-                          </p>
-                        </div>
-                        <div className="bg-white dark:bg-gray-700/50 p-3 rounded-lg border border-gray-100 dark:border-gray-600">
-                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">
-                            Depósitos via Meta
-                            {!hasConsultorData && !loadingMeta && <span className="ml-1 normal-case font-normal text-amber-500 dark:text-amber-400">(atribua consultores às campanhas)</span>}
-                          </p>
-                          <p className="text-lg font-bold text-gray-800 dark:text-gray-100 min-h-[1.75rem] flex items-center">
-                            {loadingMeta ? <MetaMetricSkeleton /> : formatMetaSpend(consultorDeposited, metaFunnel?.currency)}
-                          </p>
-                        </div>
-                        <div className={`p-3 rounded-lg border ${isPositive ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700'}`}>
-                          <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">{isPositive ? 'Excedente' : 'Faltando retorno'}</p>
-                          <p className={`text-lg font-bold min-h-[1.75rem] flex items-center ${isPositive ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                            {loadingMeta ? <MetaMetricSkeleton /> : `${isPositive ? '+' : ''}${formatMetaSpend(delta, metaFunnel?.currency)}`}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()
-              )}
               {!loadingMeta && !metaFunnel && metaCampaignsData.length > 0 && (
                 <p className="text-xs text-amber-800 dark:text-amber-200 mt-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 leading-relaxed">
                   <strong>Sem agregado de funil para este período:</strong> a lista de campanhas veio do banco/sync, mas não há insights agregados em{' '}
@@ -2236,9 +2265,9 @@ export default function GestorTrafegoClient({
                               const selected = getDraftEntries(key);
                               const isRowSaving = metaCampaignConsultorSavingKey === key;
                               return (
-                                <div className="flex flex-col gap-1 min-w-[200px]">
+                                <div className="flex flex-col gap-1 min-w-[220px] max-w-[320px]">
                                   {selected.length > 0 ? (
-                                    <div className="space-y-1 mb-1">
+                                    <div className="space-y-1 mb-1 max-h-[200px] overflow-y-auto pr-1">
                                       {(() => {
                                         const displayItems = selected.map((entry) => {
                                           const c = metaConsultorOptions.find((o) => String(o.id) === String(entry.consultor_id));
@@ -2359,12 +2388,21 @@ export default function GestorTrafegoClient({
             </div>
           </div>
           
+          {/* Análise da Banca — acima do Resumo Geral (admin/super: todas; gestor: bancas vinculadas) */}
+          <div className="mb-6">
+            <BancaAnalysisGrid
+              userId={userId ?? null}
+              dateFrom={getDateRange().dateFrom}
+              dateTo={getDateRange().dateTo}
+            />
+          </div>
+
           <div className="relative">
             {/* Resumo Geral: skeleton nos valores enquanto carrega (evita confundir com zero real) */}
             <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
-                <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'}</h2>
+                <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-3 gap-4">
                 <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
@@ -2473,15 +2511,6 @@ export default function GestorTrafegoClient({
           </div>
         </div>
 
-        {/* Análise da Banca — admin/super: todas; gestor: bancas vinculadas (escopo no servidor) */}
-        <div className="mb-6">
-          <BancaAnalysisGrid
-            userId={userId ?? null}
-            dateFrom={getDateRange().dateFrom}
-            dateTo={getDateRange().dateTo}
-          />
-        </div>
-
         {/* Rodadas de Investimento — gestor define meta de gasto por consultor e acompanha LTV do período */}
         {bancasGestor.length > 0 && (
           <div className="mb-6">
@@ -2550,6 +2579,7 @@ export default function GestorTrafegoClient({
                           setMetaConfigForm((f) => ({
                             ...f,
                             ad_account_id: '',
+                            blocked_ad_account_ids: '',
                             pixel_id: '',
                             default_campaign_id: '',
                             access_token: '',
@@ -2569,6 +2599,7 @@ export default function GestorTrafegoClient({
                             ...f,
                             base_url: row.base_url || f.base_url,
                             ad_account_id: row.ad_account_id || '',
+                            blocked_ad_account_ids: row.blocked_ad_account_ids || '',
                             pixel_id: row.pixel_id || '',
                             default_campaign_id: row.default_campaign_id || '',
                             access_token: '',
@@ -2629,30 +2660,74 @@ export default function GestorTrafegoClient({
                       placeholder="act_123, act_456 ou vírgula entre IDs"
                       className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
                     />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Várias contas: separe por vírgula. Use o × em cada chip para remover antes de salvar.</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Várias contas: separe por vírgula. Bloqueie contas banidas pela Meta e adicione uma de contingência. Use × para remover antes de salvar.
+                    </p>
                     {parseAdAccountIdsFieldGestor(metaConfigForm.ad_account_id).length > 0 ? (
                       <div className="mt-2 flex flex-wrap gap-2" aria-label="Contas de anúncio configuradas">
-                        {parseAdAccountIdsFieldGestor(metaConfigForm.ad_account_id).map((act, idx) => (
-                          <span
-                            key={`${act}-${idx}`}
-                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/80 px-2 py-1 text-xs font-mono text-gray-800 dark:text-gray-100"
-                          >
-                            <span title={act}>{formatActShortGestor(act)}</span>
-                            <button
-                              type="button"
-                              aria-label={`Remover conta ${act}`}
-                              onClick={() =>
-                                setMetaConfigForm((f) => ({
-                                  ...f,
-                                  ad_account_id: adAccountIdsFieldWithoutIndexGestor(f.ad_account_id, idx),
-                                }))
-                              }
-                              className="rounded p-0.5 text-gray-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+                        {parseAdAccountIdsFieldGestor(metaConfigForm.ad_account_id).map((act, idx) => {
+                          const isBlocked = isAdAccountBlockedGestor(act, metaConfigForm.blocked_ad_account_ids);
+                          return (
+                            <span
+                              key={`${act}-${idx}`}
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-mono ${
+                                isBlocked
+                                  ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/25 text-amber-950 dark:text-amber-100'
+                                  : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/80 text-gray-800 dark:text-gray-100'
+                              }`}
                             >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </span>
-                        ))}
+                              <span title={act}>{formatActShortGestor(act)}</span>
+                              {isBlocked ? (
+                                <span className="rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-sans font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-800/60 dark:text-amber-100">
+                                  bloqueada
+                                </span>
+                              ) : null}
+                              <button
+                                type="button"
+                                aria-label={isBlocked ? `Desbloquear conta ${act}` : `Bloquear conta ${act}`}
+                                title={
+                                  isBlocked
+                                    ? 'Desbloquear — voltar a usar no sync'
+                                    : 'Bloquear — ignorar no sync (use conta de contingência)'
+                                }
+                                onClick={() =>
+                                  setMetaConfigForm((f) => ({
+                                    ...f,
+                                    blocked_ad_account_ids: toggleAdAccountBlockedFieldGestor(
+                                      f.blocked_ad_account_ids,
+                                      act,
+                                      !isBlocked
+                                    ),
+                                  }))
+                                }
+                                className={`rounded p-0.5 ${
+                                  isBlocked
+                                    ? 'text-amber-700 hover:bg-amber-200/80 dark:text-amber-300 dark:hover:bg-amber-800/50'
+                                    : 'text-gray-500 hover:bg-amber-100 hover:text-amber-800 dark:hover:bg-amber-900/40 dark:hover:text-amber-200'
+                                }`}
+                              >
+                                {isBlocked ? <Unlock className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Remover conta ${act}`}
+                                onClick={() =>
+                                  setMetaConfigForm((f) => ({
+                                    ...f,
+                                    ad_account_id: adAccountIdsFieldWithoutIndexGestor(f.ad_account_id, idx),
+                                    blocked_ad_account_ids: blockedAdAccountIdsWithoutActGestor(
+                                      f.blocked_ad_account_ids,
+                                      act
+                                    ),
+                                  }))
+                                }
+                                className="rounded p-0.5 text-gray-500 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </span>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </div>
@@ -2824,7 +2899,7 @@ export default function GestorTrafegoClient({
                   metaFunnel?.clicks ?? 0,
                   metaFunnel?.leads ?? 0,
                   externalMetrics?.total_leads ?? 0,
-                  externalMetrics?.total_depositos_count ?? externalMetrics?.awarded_clients_count ?? 0,
+                  externalMetrics?.total_deposited ?? 0,
                   externalMetrics?.active_leads ?? 0,
                 ],
               }}
@@ -3455,6 +3530,40 @@ export default function GestorTrafegoClient({
                     Limpar seleção
                   </button>
                 </div>
+
+                {uniqueSelectedConsultors.length > 0 && (
+                  <div className="flex flex-wrap items-end gap-2 p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-700/40 bg-emerald-50/40 dark:bg-emerald-900/10">
+                    <div className="flex-1 min-w-[150px]">
+                      <label className="block text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                        Gasto diário total (R$)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={dailySpendTotalInput}
+                          onChange={(e) => setDailySpendTotalInput(e.target.value)}
+                          placeholder="Ex.: 100,00"
+                          className="w-full pl-9 pr-3 py-2 border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] tabular-nums"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => distributeDailySpendInDraft(consultorModalCampaignKey, dailySpendTotalInput)}
+                      disabled={!parseDailySpendDraftValue(dailySpendTotalInput)}
+                      className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Dividir entre {uniqueSelectedConsultors.length} consultor(es)
+                    </button>
+                    {parseDailySpendDraftValue(dailySpendTotalInput) ? (
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400 w-full sm:w-auto">
+                        = {formatMetaSpend((parseDailySpendDraftValue(dailySpendTotalInput) || 0) / uniqueSelectedConsultors.length, metaFunnel?.currency)}/consultor
+                      </span>
+                    ) : null}
+                  </div>
+                )}
               </div>
 
               <div className="px-5 pt-2 pb-2 overflow-y-auto flex-1 space-y-4">

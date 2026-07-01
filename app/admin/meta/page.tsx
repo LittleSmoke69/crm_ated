@@ -999,6 +999,11 @@ export default function AdminMetaPage() {
     }
   }, [metaInsightsPeriod, metaInsightsCustomFrom, metaInsightsCustomTo]);
 
+  /** Período personalizado aguardando o usuário escolher De/Até — não puxa dados até selecionar. */
+  const metaDatesPending =
+    metaInsightsPeriod === 'custom' &&
+    (!adminMetaInsightsDateRange.dateFrom || !adminMetaInsightsDateRange.dateTo);
+
   /** Carrega as bancas com campanha ativa no período (LIVE, = Ranking) para filtrar os cards "Análise da Banca". */
   useEffect(() => {
     if (!userId) return;
@@ -3428,8 +3433,12 @@ export default function AdminMetaPage() {
           </div>
         ) : null}
 
-        {/* Card Análise da Banca — segue o filtro "Banca Meta". Sem filtro: todas as bancas com Ads ativo (igual ao Ranking). */}
-        {overviewFilterBancaId ? (
+        {/* Card Análise da Banca (prioridade de carregamento — fica no topo). Segue o filtro "Banca Meta". */}
+        {metaDatesPending ? (
+          <div className={`${metaCard} p-4 text-sm text-gray-500 dark:text-gray-400`}>
+            Selecione o período (<strong>De</strong> e <strong>Até</strong>) para carregar a Análise da Banca.
+          </div>
+        ) : overviewFilterBancaId ? (
           <BancaAnalysisCard
             bancaId={overviewFilterBancaId}
             userId={userId}
@@ -3458,11 +3467,13 @@ export default function AdminMetaPage() {
           </div>
         )}
 
+        {metaDatesPending ? null : (
         <BancaXAdsRanking
           dateFrom={adminMetaInsightsDateRange.dateFrom}
           dateTo={adminMetaInsightsDateRange.dateTo}
           refreshKey={rankingRefreshKey}
         />
+        )}
 
         <InvestmentRoundsPanel bancas={bancas} userId={userId} />
 
