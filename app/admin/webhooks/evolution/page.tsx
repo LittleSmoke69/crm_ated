@@ -378,7 +378,7 @@ export default function WebhooksEvolutionPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -391,7 +391,7 @@ export default function WebhooksEvolutionPage() {
           <h1 className="text-3xl font-bold text-gray-900">Webhooks Evolution</h1>
           <button
             onClick={() => { loadStatus(); loadEvents(); }}
-            className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition"
+            className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
           >
             <RefreshCw className="w-4 h-4" />
             Atualizar
@@ -475,7 +475,7 @@ export default function WebhooksEvolutionPage() {
           {!waiterId ? (
             <button
               onClick={createWaiter}
-              className="px-6 py-3 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium"
+              className="px-6 py-3 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium"
             >
               Aguardar evento (TESTE)
             </button>
@@ -559,7 +559,7 @@ export default function WebhooksEvolutionPage() {
           
           {eventsConfigLoading ? (
             <div className="p-8 text-center">
-              <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto" />
+              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto" />
             </div>
           ) : (
             <div className="space-y-4">
@@ -574,7 +574,7 @@ export default function WebhooksEvolutionPage() {
                         type="checkbox"
                         checked={event.enabled}
                         onChange={() => toggleEvent(event.name)}
-                        className="w-4 h-4 text-[#8CD955] border-gray-300 rounded focus:ring-[#8CD955]"
+                        className="w-4 h-4 text-[#E86A24] border-gray-300 rounded focus:ring-[#E86A24]"
                       />
                       <span className="text-sm font-mono text-gray-700">{event.name}</span>
                     </label>
@@ -584,7 +584,7 @@ export default function WebhooksEvolutionPage() {
               <button
                 onClick={saveEventsConfig}
                 disabled={savingEventsConfig}
-                className="px-6 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {savingEventsConfig ? (
                   <>
@@ -644,7 +644,7 @@ export default function WebhooksEvolutionPage() {
           {/* Tabela */}
           {eventsLoading ? (
             <div className="p-8 text-center">
-              <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto" />
+              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto" />
             </div>
           ) : events.length === 0 ? (
             <div className="p-8 text-center text-gray-500">Nenhum evento encontrado</div>
@@ -685,7 +685,7 @@ export default function WebhooksEvolutionPage() {
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <button
                             onClick={() => setSelectedEvent(event)}
-                            className="text-[#8CD955] hover:text-[#7CC845] flex items-center gap-1"
+                            className="text-[#E86A24] hover:text-[#7CC845] flex items-center gap-1"
                           >
                             <Eye className="w-4 h-4" />
                             Ver payload

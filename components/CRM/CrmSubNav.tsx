@@ -1,19 +1,26 @@
 'use client';
 
+import { Suspense } from 'react';
 import Link from '@/components/WhitelabelLink';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { Kanban, ArrowRightLeft, UserPlus } from 'lucide-react';
+import { Kanban } from 'lucide-react';
 
 const CRM_TABS = [
   { path: '/crm/kanban', hrefBase: '/crm/kanban', label: 'Kanban', Icon: Kanban },
-  { path: '/crm/transferido', hrefBase: '/crm/transferido', label: 'Transferido', Icon: ArrowRightLeft },
-  { path: '/crm/avulsos', hrefBase: '/crm/avulsos', label: 'Avulsos', Icon: UserPlus },
 ] as const;
 
 /**
  * Atalhos entre visões do CRM; preserva ?userId= quando o gerente/admin abre o pipeline de outro usuário.
  */
 export default function CrmSubNav() {
+  return (
+    <Suspense fallback={<nav className="mb-4 h-9" aria-hidden />}>
+      <CrmSubNavInner />
+    </Suspense>
+  );
+}
+
+function CrmSubNavInner() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const uid = searchParams.get('userId');
@@ -34,8 +41,8 @@ export default function CrmSubNav() {
             className={`
               inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all
               ${active
-                ? 'bg-[#8CD955] text-white shadow-md'
-                : 'border border-gray-200 bg-white text-gray-600 hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]'
+                ? 'bg-[#E86A24] text-white shadow-md'
+                : 'border border-gray-200 bg-white text-gray-600 hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]'
               }
             `}
           >

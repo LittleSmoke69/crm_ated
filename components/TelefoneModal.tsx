@@ -70,8 +70,8 @@ const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }
       <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-md w-full p-6 relative animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
         {/* Header - sem botão fechar: preenchimento obrigatório */}
         <div className="flex items-center gap-3 mb-6">
-          <div className="p-3 bg-[#8CD955] dark:bg-[#00ff00] bg-opacity-10 dark:bg-opacity-20 rounded-xl">
-            <Phone className="w-6 h-6 text-[#8CD955] dark:text-[#00ff00]" />
+          <div className="p-3 bg-[#E86A24] dark:bg-[#00ff00] bg-opacity-10 dark:bg-opacity-20 rounded-xl">
+            <Phone className="w-6 h-6 text-[#E86A24] dark:text-[#00ff00]" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Cadastre seu telefone</h2>
@@ -105,7 +105,7 @@ const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }
               value={telefone}
               onChange={handlePhoneChange}
               placeholder="8195124779"
-              className="w-full px-4 py-3 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-transparent outline-none transition-all placeholder:text-gray-400 dark:placeholder:text-[#888] text-gray-900 dark:text-white dark:bg-[#333]"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-transparent outline-none transition-all placeholder:text-gray-400 dark:placeholder:text-[#888] text-gray-900 dark:text-white dark:bg-[#333]"
               autoFocus
               disabled={loading}
               inputMode="numeric"
@@ -127,7 +127,7 @@ const TelefoneModal: React.FC<TelefoneModalProps> = ({ isOpen, onClose, onSave }
             <button
               type="submit"
               disabled={loading || !telefone.trim() || telefone.length < 10}
-              className="w-full px-4 py-3 bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC844] dark:hover:bg-[#00e600] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-3 bg-[#E86A24] dark:bg-[#00ff00] hover:bg-[#7BC844] dark:hover:bg-[#00e600] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Salvando...' : 'Continuar'}
             </button>

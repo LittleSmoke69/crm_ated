@@ -3,11 +3,8 @@ import "./globals.css";
 import { Providers } from "@/components/Providers";
 
 export const metadata = {
-  title: "Zaploto",
-  description: "Sistema interno premium de automação via WhatsApp",
-  icons: {
-    icon: "/logo_zaploto.png",
-  },
+  title: "crmTR",
+  description: "CRM de atendimento",
 };
 
 export default function RootLayout({

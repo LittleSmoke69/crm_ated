@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
 
     const remoteJid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
 
-    let messageTemplate = 'Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe.';
+    let messageTemplate = 'Seu código de recuperação de senha crm-atendimento é: *{{Código}}*. Válido por 15 minutos. Não compartilhe.';
     const { data: msgRow } = await supabaseServiceRole
       .from('system_settings')
       .select('value')

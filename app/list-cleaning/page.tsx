@@ -537,7 +537,7 @@ export default function ListCleaningPage() {
     return (
       <Layout>
         <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 p-4">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
           <p className="text-gray-600">Redirecionando para login...</p>
         </div>
       </Layout>
@@ -558,7 +558,7 @@ export default function ListCleaningPage() {
                 setAccessChecked(false);
                 setAccessCheckRetry((r) => r + 1);
               }}
-              className="px-4 py-2 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium"
+              className="px-4 py-2 rounded-lg bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium"
             >
               Tentar novamente
             </button>
@@ -579,7 +579,7 @@ export default function ListCleaningPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[40vh]">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -590,7 +590,7 @@ export default function ListCleaningPage() {
       <div className="-m-4 sm:-m-6 lg:-m-8 p-4 sm:p-6 lg:p-8 min-h-screen bg-[#1a1a1a]">
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center gap-2">
-          <Trash2 className="w-6 h-6 text-[#8CD955]" />
+          <Trash2 className="w-6 h-6 text-[#E86A24]" />
           <h1 className="text-2xl font-semibold text-gray-100">Limpeza de Lista</h1>
         </div>
 
@@ -625,7 +625,7 @@ export default function ListCleaningPage() {
             {job.validated_count > 0 && (
               <button
                 onClick={() => handleDownload(Math.min(job.validated_count, 1000))}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium transition shrink-0"
+                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium transition shrink-0"
               >
                 <Download className="w-5 h-5" />
                 Baixar CSV com números validados
@@ -767,11 +767,11 @@ export default function ListCleaningPage() {
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
                   className={`cursor-pointer flex flex-col items-center justify-center gap-2 px-4 py-5 bg-[#1a1a1a] border-2 border-dashed rounded-lg transition text-center ${
-                    isDragging ? 'border-[#8CD955] bg-[#8CD95520]' : 'border-[#404040] hover:border-[#8CD95560] hover:bg-[#8CD95510]'
+                    isDragging ? 'border-[#E86A24] bg-[#E86A2420]' : 'border-[#404040] hover:border-[#E86A2460] hover:bg-[#E86A2410]'
                   }`}
                 >
-                  <Upload className="w-6 h-6 text-[#8CD955]" />
-                  <span className="text-sm text-[#8CD955] font-medium">Clique ou arraste arquivo</span>
+                  <Upload className="w-6 h-6 text-[#E86A24]" />
+                  <span className="text-sm text-[#E86A24] font-medium">Clique ou arraste arquivo</span>
                   <span className="text-xs text-gray-500">CSV/TXT, coluna phone, até 1000 números</span>
                   {fileName && <span className="text-xs text-gray-400 truncate max-w-full">Arquivo: {fileName}</span>}
                 </div>
@@ -791,7 +791,7 @@ export default function ListCleaningPage() {
                     type="checkbox"
                     checked={onlyBrazilCountryCode55}
                     onChange={(e) => setOnlyBrazilCountryCode55(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-[#404040] bg-[#1a1a1a] text-[#8CD955] focus:ring-[#8CD955]"
+                    className="mt-0.5 h-4 w-4 rounded border-[#404040] bg-[#1a1a1a] text-[#E86A24] focus:ring-[#E86A24]"
                   />
                   <span className="text-sm text-gray-400 leading-snug">
                     Remover números sem DDI <span className="font-mono text-gray-300">55</span> (só dígitos; mantém apenas linhas que começam com 55)
@@ -807,7 +807,7 @@ export default function ListCleaningPage() {
               <div className="rounded-2xl border border-[#404040] bg-[#2a2a2a] p-4 shadow-sm space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-[#8CD955]">Etapa 1</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#E86A24]">Etapa 1</p>
                     <p className="text-lg font-semibold text-gray-200">Preparar lista</p>
                     <p className="text-sm text-gray-500">Envie um CSV/TXT ou cole os números e remova duplicidades antes da validação.</p>
                   </div>
@@ -822,7 +822,7 @@ export default function ListCleaningPage() {
                 <button
                   onClick={handleDeduplicate}
                   disabled={loading || !rawText.trim() || phonesCount === 0}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#8CD955] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#7BC84A] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E86A24] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#D95E1B] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                   Deduplicar agora
@@ -1155,7 +1155,7 @@ export default function ListCleaningPage() {
           <div className="overflow-x-auto">
             {jobsListLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
               </div>
             ) : jobsList.length === 0 ? (
               <p className="px-4 py-8 text-sm text-gray-500 text-center">Nenhuma limpeza ainda. Deduplique uma lista para começar.</p>
@@ -1182,7 +1182,7 @@ export default function ListCleaningPage() {
                     return (
                       <tr
                         key={j.id}
-                        className={`hover:bg-[#404040]/50 ${isCurrent ? 'bg-[#8CD955]/20' : ''}`}
+                        className={`hover:bg-[#404040]/50 ${isCurrent ? 'bg-[#E86A24]/20' : ''}`}
                       >
                         <td className="px-3 py-2 whitespace-nowrap">
                           {new Date(j.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
@@ -1238,7 +1238,7 @@ export default function ListCleaningPage() {
                               <button
                                 type="button"
                                 onClick={() => openJob(j.id)}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#8CD955] text-white text-xs font-medium hover:bg-[#7BC84A] transition"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#E86A24] text-white text-xs font-medium hover:bg-[#D95E1B] transition"
                               >
                                 <RotateCw className="w-3.5 h-3.5" />
                                 Continuar

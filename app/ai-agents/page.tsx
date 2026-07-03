@@ -535,7 +535,7 @@ export default function AIAgentsPage() {
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -550,7 +550,7 @@ export default function AIAgentsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
           </div>
         ) : agents.length === 0 && flows.length === 0 ? (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-md dark:border dark:border-[#404040] p-8 text-center text-gray-500 dark:text-gray-400">
@@ -579,7 +579,7 @@ export default function AIAgentsPage() {
                           }
                         }}
                         disabled={instances.length === 0}
-                        className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                       >
                         <Plus className="w-4 h-4" />
                         Adicionar Automação
@@ -593,7 +593,7 @@ export default function AIAgentsPage() {
                         }
                       }}
                       disabled={instances.length === 0 || flows.length === 0}
-                      className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                      className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                     >
                       <Plus className="w-4 h-4" />
                       Adicionar Automação
@@ -657,7 +657,7 @@ export default function AIAgentsPage() {
                                         <div className="flex items-center gap-2 flex-wrap">
                                           <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                                             inst.is_active
-                                              ? 'bg-green-100 dark:bg-[#8CD955]/20 text-green-700 dark:text-[#8CD955]'
+                                              ? 'bg-green-100 dark:bg-[#E86A24]/20 text-green-700 dark:text-[#E86A24]'
                                               : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-400'
                                           }`}>
                                             {inst.is_active ? 'Ativo' : 'Inativo'}
@@ -680,7 +680,7 @@ export default function AIAgentsPage() {
                                         disabled={saving}
                                         className={`p-1.5 rounded-lg transition ${
                                           inst.is_active
-                                            ? 'bg-green-100 dark:bg-[#8CD955]/20 text-green-700 dark:text-[#8CD955] hover:bg-green-200 dark:hover:bg-[#8CD955]/30'
+                                            ? 'bg-green-100 dark:bg-[#E86A24]/20 text-green-700 dark:text-[#E86A24] hover:bg-green-200 dark:hover:bg-[#E86A24]/30'
                                             : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#404040]'
                                         }`}
                                         title={inst.is_active ? 'Desativar' : 'Ativar'}
@@ -693,7 +693,7 @@ export default function AIAgentsPage() {
                                       </button>
                                       <button
                                         onClick={() => handleEditFlowInstance(inst)}
-                                        className="p-1.5 text-[#8CD955] hover:text-[#7BC84A] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 rounded-lg transition"
+                                        className="p-1.5 text-[#E86A24] hover:text-[#D95E1B] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/20 rounded-lg transition"
                                         title="Editar"
                                       >
                                         <Settings className="w-4 h-4" />
@@ -769,7 +769,7 @@ export default function AIAgentsPage() {
                                         onClick={() => setAutomationsCurrentPage(page)}
                                         className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
                                           automationsCurrentPage === page
-                                            ? 'z-10 bg-[#8CD955] text-white focus:z-20'
+                                            ? 'z-10 bg-[#E86A24] text-white focus:z-20'
                                             : 'text-gray-900 dark:text-gray-300 ring-1 ring-inset ring-gray-300 dark:ring-[#555] hover:bg-gray-50 dark:hover:bg-[#404040] focus:z-20'
                                         }`}
                                       >
@@ -810,7 +810,7 @@ export default function AIAgentsPage() {
                     <div key={agent.id} className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-md border border-gray-200 dark:border-[#404040] p-6 hover:shadow-lg transition-shadow">
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-3 flex-1">
-                          <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-[#8CD955] to-[#7CC845] flex items-center justify-center shadow-sm flex-shrink-0">
+                          <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-[#E86A24] to-[#7CC845] flex items-center justify-center shadow-sm flex-shrink-0">
                             <Bot className="w-6 h-6 text-white" />
                           </div>
                           <div className="flex-1 min-w-0">
@@ -839,7 +839,7 @@ export default function AIAgentsPage() {
                                       disabled={saving}
                                       className={`p-1.5 rounded transition ${
                                         config.is_active
-                                          ? 'bg-green-100 dark:bg-[#8CD955]/20 text-green-700 dark:text-[#8CD955]'
+                                          ? 'bg-green-100 dark:bg-[#E86A24]/20 text-green-700 dark:text-[#E86A24]'
                                           : 'bg-gray-200 dark:bg-[#404040] text-gray-500 dark:text-gray-400'
                                       }`}
                                     >
@@ -878,7 +878,7 @@ export default function AIAgentsPage() {
 
                       <button
                         onClick={() => handleConfigure(agent)}
-                        className="w-full px-4 py-2.5 bg-gradient-to-r from-[#8CD955] to-[#7CC845] text-white rounded-lg hover:from-[#7CC845] hover:to-[#6CB835] transition font-medium flex items-center justify-center gap-2 shadow-sm hover:shadow-md"
+                        className="w-full px-4 py-2.5 bg-gradient-to-r from-[#E86A24] to-[#7CC845] text-white rounded-lg hover:from-[#7CC845] hover:to-[#6CB835] transition font-medium flex items-center justify-center gap-2 shadow-sm hover:shadow-md"
                       >
                         <Settings className="w-4 h-4" />
                         {agent.user_configs && agent.user_configs.length > 0 ? 'Adicionar Configuração' : 'Configurar'}
@@ -920,7 +920,7 @@ export default function AIAgentsPage() {
                 <select
                   value={configForm.instance_id}
                   onChange={(e) => handleInstanceChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-600 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-600 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                 >
                   <option value="" className="text-gray-400">Selecione uma instância</option>
                   {instances.map((inst) => (
@@ -937,13 +937,13 @@ export default function AIAgentsPage() {
                 </label>
                 {loadingGroups ? (
                   <div className="flex items-center justify-center p-4">
-                    <Loader2 className="w-5 h-5 animate-spin text-[#8CD955]" />
+                    <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
                   </div>
                 ) : (
                   <select
                     value={configForm.group_jid}
                     onChange={(e) => setConfigForm({ ...configForm, group_jid: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-600 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:bg-gray-100 dark:disabled:bg-[#333] disabled:text-gray-400 dark:disabled:text-gray-500"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-600 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:bg-gray-100 dark:disabled:bg-[#333] disabled:text-gray-400 dark:disabled:text-gray-500"
                     disabled={!configForm.instance_id || availableGroups.length === 0}
                   >
                     <option value="" className="text-gray-400">
@@ -968,7 +968,7 @@ export default function AIAgentsPage() {
                   id="is_active"
                   checked={configForm.is_active}
                   onChange={(e) => setConfigForm({ ...configForm, is_active: e.target.checked })}
-                  className="w-4 h-4 text-[#8CD955] border-gray-300 dark:border-[#555] rounded"
+                  className="w-4 h-4 text-[#E86A24] border-gray-300 dark:border-[#555] rounded"
                 />
                 <label htmlFor="is_active" className="text-sm text-gray-700 dark:text-gray-300">
                   Ativar agente neste grupo
@@ -986,7 +986,7 @@ export default function AIAgentsPage() {
               <button
                 onClick={handleSaveConfig}
                 disabled={saving || !configForm.instance_id || !configForm.group_jid}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {saving ? (
                   <>

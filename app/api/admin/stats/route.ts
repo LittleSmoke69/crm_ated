@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { requireAdmin } from '@/lib/middleware/permissions';
-import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
-import { rateLimitService } from '@/lib/services/rate-limit-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 type EvolutionInstanceRow = {
   id: string;
@@ -43,23 +43,64 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const { data: allInstancesRaw, error: allInstancesError } = await supabaseServiceRole
-      .from('evolution_instances')
-      .select('id, user_id, zaploto_id, status, is_active');
-    if (allInstancesError) {
-      console.error('[admin/stats] Falha ao buscar evolution_instances:', allInstancesError.message);
-    }
-    const allInstances = (allInstancesRaw || []) as EvolutionInstanceRow[];
-    const tenantUserIdsSet = new Set(tenantUserIds);
-    const tenantInstances = allInstances.filter((row) => {
-      if (row.zaploto_id === zaplotoId) return true;
-      return !row.zaploto_id && !!row.user_id && tenantUserIdsSet.has(row.user_id);
-    });
-    const totalInstances = tenantInstances.length;
-    // Card de conectadas: regra simples e fixa no banco
-    const connectedInstances = tenantInstances.filter((row) => row.status === 'ok').length;
+    const evolutionEnabled = isEvolutionStackEnabled();
+    let totalInstances = 0;
+    let connectedInstances = 0;
 
-    // Busca todas as estatísticas (filtradas por tenant)
+    if (evolutionEnabled) {
+      const { data: allInstancesRaw, error: allInstancesError } = await supabaseServiceRole
+        .from('evolution_instances')
+        .select('id, user_id, zaploto_id, status, is_active');
+      if (allInstancesError) {
+        console.error('[admin/stats] Falha ao buscar evolution_instances:', allInstancesError.message);
+      }
+      const allInstances = (allInstancesRaw || []) as EvolutionInstanceRow[];
+      const tenantUserIdsSet = new Set(tenantUserIds);
+      const tenantInstances = allInstances.filter((row) => {
+        if (row.zaploto_id === zaplotoId) return true;
+        return !row.zaploto_id && !!row.user_id && tenantUserIdsSet.has(row.user_id);
+      });
+      totalInstances = tenantInstances.length;
+      connectedInstances = tenantInstances.filter((row) => row.status === 'ok').length;
+    }
+
+    const usersResultPromise = supabaseServiceRole
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+
+    const evolutionQueries = evolutionEnabled
+      ? [
+          supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+          supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+          supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
+          supabaseServiceRole
+            .from('campaigns')
+            .select('status, processed_contacts, failed_contacts, total_contacts')
+            .in('user_id', tenantUserIds),
+          supabaseServiceRole.from('campaign_contacts').select('status'),
+          supabaseServiceRole
+            .from('message_schedules')
+            .select('id', { count: 'exact', head: true })
+            .eq('status', 'sent')
+            .gte('sent_at', startOfTodayUtc.toISOString())
+            .lt('sent_at', endOfTodayUtc.toISOString()),
+          supabaseServiceRole
+            .from('message_schedules')
+            .select('id', { count: 'exact', head: true })
+            .in('status', ['scheduled', 'processing'])
+            .gt('next_run_utc', now.toISOString()),
+          supabaseServiceRole
+            .from('message_schedules')
+            .select('id', { count: 'exact', head: true })
+            .eq('status', 'failed'),
+          supabaseServiceRole
+            .from('message_schedules')
+            .select('id', { count: 'exact', head: true })
+            .eq('status', 'sent'),
+        ]
+      : [];
+
     const [
       usersResult,
       campaignsResult,
@@ -71,38 +112,7 @@ export async function GET(req: NextRequest) {
       nextExecutionsResult,
       dispatchesFailedResult,
       dispatchesSuccessTotalResult,
-    ] = await Promise.all([
-      supabaseServiceRole.from('profiles').select('id', { count: 'exact', head: true }).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`),
-      supabaseServiceRole.from('campaigns').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
-      supabaseServiceRole.from('searches').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
-      supabaseServiceRole.from('whatsapp_groups').select('id', { count: 'exact', head: true }).in('user_id', tenantUserIds),
-      supabaseServiceRole
-        .from('campaigns')
-        .select('status, processed_contacts, failed_contacts, total_contacts')
-        .in('user_id', tenantUserIds),
-      supabaseServiceRole
-        .from('campaign_contacts')
-        .select('status'),
-      supabaseServiceRole
-        .from('message_schedules')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'sent')
-        .gte('sent_at', startOfTodayUtc.toISOString())
-        .lt('sent_at', endOfTodayUtc.toISOString()),
-      supabaseServiceRole
-        .from('message_schedules')
-        .select('id', { count: 'exact', head: true })
-        .in('status', ['scheduled', 'processing'])
-        .gt('next_run_utc', now.toISOString()),
-      supabaseServiceRole
-        .from('message_schedules')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'failed'),
-      supabaseServiceRole
-        .from('message_schedules')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'sent'),
-    ]);
+    ] = await Promise.all([usersResultPromise, ...evolutionQueries]);
 
     const totalUsers = usersResult?.count || 0;
     const totalCampaigns = campaignsResult?.count || 0;
@@ -132,11 +142,13 @@ export async function GET(req: NextRequest) {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const { data: historicalCampaigns } = await supabaseServiceRole
-      .from('campaigns')
-      .select('created_at, processed_contacts, failed_contacts, total_contacts')
-      .gte('created_at', sevenDaysAgo.toISOString())
-      .order('created_at', { ascending: true });
+    const { data: historicalCampaigns } = evolutionEnabled
+      ? await supabaseServiceRole
+          .from('campaigns')
+          .select('created_at, processed_contacts, failed_contacts, total_contacts')
+          .gte('created_at', sevenDaysAgo.toISOString())
+          .order('created_at', { ascending: true })
+      : { data: [] as { created_at: string; processed_contacts: number | null; failed_contacts: number | null; total_contacts: number | null }[] };
 
     // Agrupa por dia
     const chartData: { date: string; adicionados: number; falhas: number }[] = [];

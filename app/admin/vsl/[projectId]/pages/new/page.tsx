@@ -68,7 +68,7 @@ export default function NewVslPagePage() {
     );
   }
 
-  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none';
+  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none';
 
   return (
     <Layout>
@@ -155,7 +155,7 @@ export default function NewVslPagePage() {
             <button
               type="submit"
               disabled={saving}
-              className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 flex items-center gap-2 transition"
+              className="px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 flex items-center gap-2 transition"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               Criar página

@@ -356,7 +356,7 @@ const CampaignsTable: React.FC<CampaignsTableProps> = ({
       running: { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-300', label: 'Ativa' },
       paused: { bg: 'bg-yellow-100 dark:bg-yellow-900/40', text: 'text-yellow-700 dark:text-yellow-300', label: 'Pausada' },
       pending: { bg: 'bg-gray-100 dark:bg-[#404040]', text: 'text-gray-700 dark:text-gray-300', label: 'Iniciando...' },
-      completed: { bg: 'bg-green-100 dark:bg-[#8CD955]/20', text: 'text-green-700 dark:text-[#8CD955]', label: 'Concluída' },
+      completed: { bg: 'bg-green-100 dark:bg-[#E86A24]/20', text: 'text-green-700 dark:text-[#E86A24]', label: 'Concluída' },
       failed: { bg: 'bg-red-100 dark:bg-red-900/40', text: 'text-red-700 dark:text-red-300', label: 'Falhou' },
     };
 
@@ -423,7 +423,7 @@ const CampaignsTable: React.FC<CampaignsTableProps> = ({
                       <button
                         onClick={() => handleToggleCampaign(campaign)}
                         disabled={campaign.status === 'completed'}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[#E86A24] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                           campaign.status === 'running'
                             ? 'bg-blue-500'
                             : 'bg-gray-300'
@@ -486,7 +486,7 @@ const CampaignsTable: React.FC<CampaignsTableProps> = ({
                   </td>
                   <td className="px-4 py-3">
                     <div className="text-xs text-gray-700 dark:text-gray-300">
-                      <div>Adicionados: <span className="font-semibold text-green-600 dark:text-[#8CD955]">{Number(campaign.processed_contacts ?? 0)}</span></div>
+                      <div>Adicionados: <span className="font-semibold text-green-600 dark:text-[#E86A24]">{Number(campaign.processed_contacts ?? 0)}</span></div>
                       <div>Falhas: <span className="font-semibold text-red-600">{Number(campaign.failed_contacts ?? 0)}</span></div>
                     </div>
                   </td>

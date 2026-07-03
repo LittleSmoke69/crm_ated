@@ -5,6 +5,11 @@ import { getUserProfile, UserProfile, canAccessUser } from '@/lib/middleware/per
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
+/** Logs de diagnóstico do CRM Bancas: silenciosos por padrão. Ative com LOG_CRM_BANCAS=1. */
+const crmLog = (...args: unknown[]): void => {
+  if (process.env.LOG_CRM_BANCAS === '1') console.log(...args);
+};
+
 export type { BancaRow };
 export { getBancasDoUsuario };
 
@@ -229,8 +234,8 @@ async function filtrarBancasComLeadDoConsultor(
       const params = new URLSearchParams({ consultant: email, per_page: '1' });
       if (transferredFilter) params.set('transferred_filter', transferredFilter);
       const url = `${base}/api/crm/get-indicateds-by-consultant?${params.toString()}`;
-      console.log('[CRM Bancas] Modelo de curl utilizado em todas as bancas para filtrar:');
-      console.log('[CRM Bancas] ', buildCurlExample('GET', url, apiKey));
+      crmLog('[CRM Bancas] Modelo de curl utilizado em todas as bancas para filtrar:');
+      crmLog('[CRM Bancas] ', buildCurlExample('GET', url, apiKey));
     }
   }
   const resultados = await mapWithConcurrency(
@@ -239,9 +244,9 @@ async function filtrarBancasComLeadDoConsultor(
     async (banca) => ((await bancaTemLeadDoConsultor(banca.url, email, apiKey, transferredFilter)) ? banca : null)
   );
   const bancasQuePassaram = resultados.filter((b): b is BancaRow => b !== null);
-  console.log('[CRM Bancas] Bancas que passaram pelo filtro:', bancasQuePassaram.length);
+  crmLog('[CRM Bancas] Bancas que passaram pelo filtro:', bancasQuePassaram.length);
   bancasQuePassaram.forEach((b, i) => {
-    console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url}`);
+    crmLog(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url}`);
   });
   return bancasQuePassaram;
 }
@@ -267,14 +272,14 @@ export async function getBancasVisiveis(
 ): Promise<BancaRow[]> {
   const transferredFilter = options?.transferredFilter;
   const forceSearchAllBancas = options?.forceSearchAllBancas === true;
-  console.log('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a', '| transferred_filter:', transferredFilter ?? 'não informado', '| forceSearchAllBancas:', forceSearchAllBancas);
+  crmLog('[CRM Bancas] getBancasVisiveis chamado | userId:', userId, '| perfil:', profile?.status ?? 'null', '| email:', profile?.email ? `${profile.email.slice(0, 3)}***` : 'n/a', '| transferred_filter:', transferredFilter ?? 'não informado', '| forceSearchAllBancas:', forceSearchAllBancas);
   const { data: todasBancas, error } = await supabaseServiceRole
     .from('crm_bancas')
     .select('id, name, url')
     .order('name', { ascending: true });
 
   if (error || !todasBancas?.length) {
-    console.log('[CRM Bancas] Nenhuma banca em crm_bancas ou erro:', error?.message ?? 'sem dados');
+    crmLog('[CRM Bancas] Nenhuma banca em crm_bancas ou erro:', error?.message ?? 'sem dados');
     return [];
   }
   const bancas = excluirBancaPorNome(todasBancas as BancaRow[], NOME_BANCA_EXCLUIDA_BUSCA);
@@ -283,10 +288,10 @@ export async function getBancasVisiveis(
   if (profile?.status === 'gerente' && !forceSearchAllBancas) {
     const bancasDoUsuario = await getBancasDoUsuario(userId);
     if (bancasDoUsuario.length > 0) {
-      console.log('[CRM Bancas] Gerente: usando user_bancas (', bancasDoUsuario.length, ' bancas)');
+      crmLog('[CRM Bancas] Gerente: usando user_bancas (', bancasDoUsuario.length, ' bancas)');
       return bancasDoUsuario;
     }
-    console.log('[CRM Bancas] Gerente: user_bancas vazio; fallback para todas as bancas (total:', bancas.length, ')');
+    crmLog('[CRM Bancas] Gerente: user_bancas vazio; fallback para todas as bancas (total:', bancas.length, ')');
     return bancas;
   }
 
@@ -294,7 +299,7 @@ export async function getBancasVisiveis(
   if (profile?.status === 'consultor' && !forceSearchAllBancas) {
     const bancasDoUsuario = await getBancasDoUsuario(userId);
     if (bancasDoUsuario.length > 0) {
-      console.log('[CRM Bancas] Consultor: usando user_bancas (', bancasDoUsuario.length, ' bancas) — sem filtro por API');
+      crmLog('[CRM Bancas] Consultor: usando user_bancas (', bancasDoUsuario.length, ' bancas) — sem filtro por API');
       return bancasDoUsuario;
     }
   }
@@ -307,39 +312,39 @@ export async function getBancasVisiveis(
   // O curl de cada requisição é exibido no terminal.
   if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
     const ctxPerfil = forceSearchAllBancas ? ' [página /perfil — botão Carregar bancas]' : '';
-    console.log('[CRM Bancas] Busca em TODAS as bancas (filtro total-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
+    crmLog('[CRM Bancas] Busca em TODAS as bancas (filtro total-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
     const bancasVisiveis: BancaRow[] = [];
     for (let i = 0; i < bancas.length; i++) {
       const b = bancas[i];
       const base = normalizarUrlBanca(b.url);
       if (!base) {
-        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} — URL inválida, ignorada`);
+        crmLog(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} — URL inválida, ignorada`);
         continue;
       }
       const params = new URLSearchParams({ consultant: email });
       const urlExterna = `${base}/api/crm/total-indicateds-by-consultant?${params.toString()}`;
-      console.log('[CRM Bancas]' + (forceSearchAllBancas ? ' /perfil Carregar bancas —' : '') + ' curl da requisição:', buildCurlExample('GET', urlExterna, apiKey));
+      crmLog('[CRM Bancas]' + (forceSearchAllBancas ? ' /perfil Carregar bancas —' : '') + ' curl da requisição:', buildCurlExample('GET', urlExterna, apiKey));
       const { status, body } = await fetchGetIndicatedsResponse(urlExterna, apiKey);
       if (status === 200) {
         bancasVisiveis.push(b);
-        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ✅ 200 cadastrado (registrar em user_bancas)`);
+        crmLog(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ✅ 200 cadastrado (registrar em user_bancas)`);
       } else if (status === 404) {
-        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ❌ 404 não cadastrado`);
+        crmLog(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — ❌ 404 não cadastrado`);
         if (forceSearchAllBancas) {
-          console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
-          console.log('[CRM Bancas]     Body:', body);
+          crmLog('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
+          crmLog('[CRM Bancas]     Body:', body);
         }
       } else if (status === 500) {
         const bancaNome = (b.name ?? b.id) || b.url;
         console.error('[CRM Bancas]   Banca retornou 500:', bancaNome, '| url:', urlExterna, '| body:', body);
         throw new Error(`A banca "${bancaNome}" retornou erro 500 ao verificar indicados. Tente novamente mais tarde.`);
       } else {
-        console.log(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — status ${status}`);
-        console.log('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
-        console.log('[CRM Bancas]     Body:', body);
+        crmLog(`[CRM Bancas]   ${i + 1}/${bancas.length}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — status ${status}`);
+        crmLog('[CRM Bancas]     Curl:', buildCurlExample('GET', urlExterna, apiKey));
+        crmLog('[CRM Bancas]     Body:', body);
       }
     }
-    console.log('[CRM Bancas] Busca concluída. Bancas aptas (200) para user_bancas:', bancasVisiveis.length, 'de', bancas.length);
+    crmLog('[CRM Bancas] Busca concluída. Bancas aptas (200) para user_bancas:', bancasVisiveis.length, 'de', bancas.length);
     if (bancasVisiveis.length > 0) return bancasVisiveis;
     const fallback = await getBancasDoUsuario(userId);
     return fallback.length > 0 ? fallback : bancas;
@@ -347,7 +352,7 @@ export async function getBancasVisiveis(
 
   if (profile?.status === 'consultor' || profile?.status === 'gerente') {
     if (forceSearchAllBancas && (!apiKey || !email)) {
-      console.log('[CRM Bancas] Carregar bancas (' + profile?.status + '): CRM_API_KEY ou email ausente — curl não será exibido. Fallback: user_bancas ou todas.');
+      crmLog('[CRM Bancas] Carregar bancas (' + profile?.status + '): CRM_API_KEY ou email ausente — curl não será exibido. Fallback: user_bancas ou todas.');
     }
     const fallback = await getBancasDoUsuario(userId);
     return fallback.length > 0 ? fallback : bancas;
@@ -382,7 +387,7 @@ export async function GET(req: NextRequest) {
       }
       effectiveUserId = targetUserIdParam;
       profile = targetProfile;
-      console.log('[CRM Bancas] GET /api/crm/bancas | modo "visualizar como" | targetUserId:', targetUserIdParam);
+      crmLog('[CRM Bancas] GET /api/crm/bancas | modo "visualizar como" | targetUserId:', targetUserIdParam);
     }
 
     const transferredFilterParam = req.nextUrl.searchParams.get('transferred_filter')?.trim().toLowerCase();
@@ -390,10 +395,10 @@ export async function GET(req: NextRequest) {
     const cacheKey = `bancas:${effectiveUserId}:${profile?.status ?? ''}:${profile?.email ?? ''}:${transferredFilter ?? 'any'}`;
     const cached = getCachedBancas(cacheKey);
     if (cached !== null) {
-      console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache HIT');
-      console.log('[CRM Bancas] Bancas que passaram pelo filtro (última consulta):', cached.length);
+      crmLog('[CRM Bancas] GET /api/crm/bancas solicitado | Cache HIT');
+      crmLog('[CRM Bancas] Bancas que passaram pelo filtro (última consulta):', cached.length);
       cached.forEach((b: BancaRow, i: number) => {
-        console.log(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — passou no filtro`);
+        crmLog(`[CRM Bancas]   ${i + 1}. ${(b.name ?? b.id) || b.id} (id: ${b.id}) | ${b.url} — passou no filtro`);
       });
       const res = successResponse(cached);
       res.headers.set('Cache-Control', 'private, max-age=60');
@@ -409,7 +414,7 @@ export async function GET(req: NextRequest) {
       bancasInFlight.set(cacheKey, promise);
     }
 
-    console.log('[CRM Bancas] GET /api/crm/bancas solicitado | Cache MISS — recalculando bancas visíveis');
+    crmLog('[CRM Bancas] GET /api/crm/bancas solicitado | Cache MISS — recalculando bancas visíveis');
     const ignoreFilter = req.nextUrl.searchParams.get('ignoreFilter') === 'true';
     const bancas = ignoreFilter
       ? await (async () => {

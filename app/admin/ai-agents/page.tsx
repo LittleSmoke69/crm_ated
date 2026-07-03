@@ -257,7 +257,7 @@ export default function AdminAIAgentsPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -270,7 +270,7 @@ export default function AdminAIAgentsPage() {
           <h1 className="text-3xl font-bold text-gray-900">Agentes IA</h1>
           <button
             onClick={handleCreate}
-            className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition"
+            className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
           >
             <Plus className="w-5 h-5" />
             Criar Agente
@@ -279,7 +279,7 @@ export default function AdminAIAgentsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
           </div>
         ) : agents.length === 0 ? (
           <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
@@ -291,7 +291,7 @@ export default function AdminAIAgentsPage() {
               <div key={agent.id} className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6 border border-gray-100">
                 {/* Header com ícone e nome */}
                 <div className="flex items-start gap-4 mb-5">
-                  <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#8CD955] to-[#7CC845] flex items-center justify-center shadow-lg flex-shrink-0">
+                  <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#E86A24] to-[#7CC845] flex items-center justify-center shadow-lg flex-shrink-0">
                     <Bot className="w-8 h-8 text-white" />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -329,7 +329,7 @@ export default function AdminAIAgentsPage() {
                 <div className="flex gap-2 pt-4 border-t border-gray-100">
                   <button
                     onClick={() => handleEdit(agent)}
-                    className="flex-1 px-4 py-2.5 bg-[#8CD955] hover:bg-[#7CC845] text-white rounded-lg font-semibold text-sm transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
+                    className="flex-1 px-4 py-2.5 bg-[#E86A24] hover:bg-[#7CC845] text-white rounded-lg font-semibold text-sm transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
                   >
                     <Edit className="w-4 h-4" />
                     Editar
@@ -355,11 +355,11 @@ export default function AdminAIAgentsPage() {
 
           {loadingFlows ? (
             <div className="flex items-center justify-center p-8">
-              <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
             </div>
           ) : flows.length === 0 ? (
             <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
-              Nenhuma automação criada. Crie uma automação em <Link href="/admin/flows" className="text-[#8CD955] underline">Flows</Link> primeiro.
+              Nenhuma automação criada. Crie uma automação em <Link href="/admin/flows" className="text-[#E86A24] underline">Flows</Link> primeiro.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -530,7 +530,7 @@ export default function AdminAIAgentsPage() {
                   id="is_active"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                  className="w-4 h-4 text-[#8CD955] border-gray-300 rounded"
+                  className="w-4 h-4 text-[#E86A24] border-gray-300 rounded"
                 />
                 <label htmlFor="is_active" className="text-sm text-gray-700">
                   Agente ativo (disponível para usuários)
@@ -548,7 +548,7 @@ export default function AdminAIAgentsPage() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (
                   <>

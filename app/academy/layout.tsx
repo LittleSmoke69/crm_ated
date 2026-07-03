@@ -30,7 +30,7 @@ export default function AcademyLayout({ children }: { children: React.ReactNode 
   const { checking, userId } = useRequireAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const logoSrc = tenant.logo_url || '/logo_zaploto.png';
-  const brandLabel = tenant.app_title || 'ZapLoto';
+  const brandLabel = tenant.app_title || 'crm-atendimento';
 
   return (
     <div className="relative min-h-screen bg-[#030803] text-[var(--foreground)] flex flex-col">

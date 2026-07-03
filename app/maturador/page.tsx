@@ -961,7 +961,7 @@ export default function MaturadorPage() {
   function getStatusIcon(status: string) {
     switch (status) {
       case 'running':
-        return <Play className="w-4 h-4 text-[#8CD955]" />;
+        return <Play className="w-4 h-4 text-[#E86A24]" />;
       case 'finished':
         return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'failed':
@@ -976,7 +976,7 @@ export default function MaturadorPage() {
 
   function getStatusBadge(status: string) {
     const styles: Record<string, string> = {
-      running: 'bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#8CD955] dark:text-[#8CD955]',
+      running: 'bg-[#E86A24]/20 dark:bg-[#E86A24]/30 text-[#E86A24] dark:text-[#E86A24]',
       finished: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
       failed: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400',
       aborted: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400',
@@ -1353,7 +1353,7 @@ export default function MaturadorPage() {
               {masterInstances.length} instância(s) na lista · {maturationInstancesConnectedCount} conectada(s)
             </span>
             <span className="text-slate-400 dark:text-[#666]">·</span>
-            <span className="font-semibold text-[#8CD955] dark:text-[#8CD955]">
+            <span className="font-semibold text-[#E86A24] dark:text-[#E86A24]">
               {preferredEvolutionInstanceIdsForAutoStart.length > 0
                 ? `Start: até ${preferredEvolutionInstanceIdsForAutoStart.length} instância(ns) (suas primeiro)`
                 : 'Nenhuma instância elegível para o Start'}
@@ -1555,7 +1555,7 @@ export default function MaturadorPage() {
                 <button
                   type="button"
                   onClick={openCreatePlanModal}
-                  className="text-xs font-medium text-[#8CD955] hover:text-[#7BC84A] dark:hover:text-[#9ae066] hover:underline"
+                  className="text-xs font-medium text-[#E86A24] hover:text-[#D95E1B] dark:hover:text-[#9ae066] hover:underline"
                   title="Criar ou editar plano de conversas"
                 >
                   Configurar plano
@@ -1604,7 +1604,7 @@ export default function MaturadorPage() {
                         !canResolveStartWithoutPicker ||
                         preferredEvolutionInstanceIdsForAutoStart.length === 0
                       }
-                      className="w-full sm:w-auto px-5 py-2.5 rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2 bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed shrink-0 sm:min-h-[42px]"
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2 bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed shrink-0 sm:min-h-[42px]"
                       title={
                         mounted
                           ? !canResolveStartWithoutPicker
@@ -1645,7 +1645,7 @@ export default function MaturadorPage() {
                 <button
                   type="button"
                   onClick={openCreatePlanModal}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A]"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B]"
                 >
                   <Plus className="w-4 h-4" /> Novo plano
                 </button>
@@ -1684,7 +1684,7 @@ export default function MaturadorPage() {
                                   </button>
                                   {canEdit && (
                                     <div className="flex items-center gap-1 shrink-0">
-                                      <button type="button" onClick={() => openEditPlanModal(plan)} className="p-1.5 text-slate-500 hover:text-[#8CD955] rounded" title="Editar">
+                                      <button type="button" onClick={() => openEditPlanModal(plan)} className="p-1.5 text-slate-500 hover:text-[#E86A24] rounded" title="Editar">
                                         <Edit className="w-4 h-4" />
                                       </button>
                                       <button type="button" onClick={() => handleDeletePlan(plan.id)} className="p-1.5 text-slate-500 hover:text-red-500 rounded" title="Excluir">
@@ -1786,10 +1786,10 @@ export default function MaturadorPage() {
                         {activeMaturationSession.hasRunning ? (
                           <>
                             <span className="relative flex h-2.5 w-2.5">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#8CD955] opacity-75" />
-                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#8CD955]" />
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E86A24] opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#E86A24]" />
                             </span>
-                            <span className="text-sm font-medium text-[#8CD955]">
+                            <span className="text-sm font-medium text-[#E86A24]">
                               Ativo
                               {activeMaturationSession.hasPaused ? ' (com jobs pausados)' : ''}
                             </span>
@@ -1859,10 +1859,10 @@ export default function MaturadorPage() {
               </div>
               {activeMaturationSession?.nextAt && (
                 <div className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/80 dark:bg-[#333]/60 px-3 py-2 flex items-center gap-2 flex-wrap">
-                  <Clock className="w-4 h-4 text-[#8CD955] shrink-0" />
+                  <Clock className="w-4 h-4 text-[#E86A24] shrink-0" />
                   <span className="text-sm text-slate-700 dark:text-slate-200">
                     Próxima mensagem em:{' '}
-                    <strong className="font-mono text-[#8CD955] tabular-nums">
+                    <strong className="font-mono text-[#E86A24] tabular-nums">
                       {getNextSendCountdown(activeMaturationSession.nextAt) ?? '—'}
                     </strong>
                   </span>
@@ -1891,7 +1891,7 @@ export default function MaturadorPage() {
             <button
               type="button"
               onClick={() => setShowJobsHistory((v) => !v)}
-              className="text-xs font-medium text-slate-500 dark:text-[#888] hover:text-[#8CD955] hover:underline w-full text-left"
+              className="text-xs font-medium text-slate-500 dark:text-[#888] hover:text-[#E86A24] hover:underline w-full text-left"
             >
               {showJobsHistory ? 'Ocultar histórico técnico (planos / jobs)' : 'Mostrar histórico técnico (planos / jobs) — opcional'}
             </button>
@@ -1910,7 +1910,7 @@ export default function MaturadorPage() {
                   onClick={() => setStatusFilter(f.value)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                     statusFilter === f.value
-                      ? 'bg-[#8CD955] text-white hover:bg-[#7BC84A]'
+                      ? 'bg-[#E86A24] text-white hover:bg-[#D95E1B]'
                       : 'bg-slate-100 dark:bg-[#333] text-slate-600 dark:text-[#aaa] hover:bg-slate-200 dark:hover:bg-[#404040]'
                   }`}
                 >
@@ -2009,7 +2009,7 @@ export default function MaturadorPage() {
                               </div>
                               <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
                                 <div
-                                  className="bg-[#8CD955] h-1.5 rounded-full transition-all duration-300"
+                                  className="bg-[#E86A24] h-1.5 rounded-full transition-all duration-300"
                                   style={{ width: `${agg.progress_percent}%` }}
                                 />
                               </div>
@@ -2039,7 +2039,7 @@ export default function MaturadorPage() {
                                   <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-[#aaa]">
                                     <Clock className="w-3.5 h-3.5" />
                                     Próximo envio (campanha):{' '}
-                                    <strong className="font-mono text-[#8CD955] tabular-nums">
+                                    <strong className="font-mono text-[#E86A24] tabular-nums">
                                       {getNextSendCountdown(agg.next_scheduled_at) ?? '—'}
                                     </strong>
                                   </span>
@@ -2050,7 +2050,7 @@ export default function MaturadorPage() {
                                 onClick={() =>
                                   setExpandedMeshCampaignId(expanded ? null : item.campaign_id)
                                 }
-                                className="mt-2 text-xs font-medium text-[#8CD955] hover:underline"
+                                className="mt-2 text-xs font-medium text-[#E86A24] hover:underline"
                               >
                                 {expanded ? 'Ocultar remetentes' : 'Ver progresso por instância'}
                               </button>
@@ -2100,7 +2100,7 @@ export default function MaturadorPage() {
                                   <button
                                     type="button"
                                     onClick={() => handleResumeCampaign(item.jobs)}
-                                    className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg"
+                                    className="p-2 text-[#E86A24] hover:bg-[#E86A24]/20 dark:hover:bg-[#E86A24]/30 rounded-lg"
                                     title="Retomar campanha"
                                   >
                                     <Play className="w-5 h-5" />
@@ -2186,7 +2186,7 @@ export default function MaturadorPage() {
                                     : st === 'processing'
                                       ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 border border-amber-300/60'
                                       : isNextToSend
-                                        ? 'bg-[#8CD955]/25 dark:bg-[#8CD955]/35 text-[#8CD955] border border-[#8CD955]/50'
+                                        ? 'bg-[#E86A24]/25 dark:bg-[#E86A24]/35 text-[#E86A24] border border-[#E86A24]/50'
                                         : 'bg-slate-100 dark:bg-[#404040] text-slate-400 dark:text-[#888]';
                               const title =
                                 st === 'sent'
@@ -2240,7 +2240,7 @@ export default function MaturadorPage() {
                           )}
                           <div className="mt-2 w-full bg-slate-200 dark:bg-[#404040] rounded-full h-1.5">
                             <div
-                              className="bg-[#8CD955] h-1.5 rounded-full transition-all duration-300"
+                              className="bg-[#E86A24] h-1.5 rounded-full transition-all duration-300"
                               style={{ width: `${job.progress_percent}%` }}
                             />
                           </div>
@@ -2249,7 +2249,7 @@ export default function MaturadorPage() {
                               {job.next_scheduled_at != null && (
                                 <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-[#aaa]">
                                   <Clock className="w-3.5 h-3.5" />
-                                  Próximo envio em: <strong className="font-mono text-[#8CD955] tabular-nums">{getNextSendCountdown(job.next_scheduled_at) ?? '—'}</strong>
+                                  Próximo envio em: <strong className="font-mono text-[#E86A24] tabular-nums">{getNextSendCountdown(job.next_scheduled_at) ?? '—'}</strong>
                                 </span>
                               )}
                               {!jobReadonly && isNextStepOverdue(job.next_scheduled_at) && pendingCount > 0 && (
@@ -2295,7 +2295,7 @@ export default function MaturadorPage() {
                               </button>
                             )}
                             {job.status === 'paused' && (
-                              <button onClick={() => handleResumeJob(job.id)} className="p-2 text-[#8CD955] hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 rounded-lg" title="Retomar">
+                              <button onClick={() => handleResumeJob(job.id)} className="p-2 text-[#E86A24] hover:bg-[#E86A24]/20 dark:hover:bg-[#E86A24]/30 rounded-lg" title="Retomar">
                                 <Play className="w-5 h-5" />
                               </button>
                             )}
@@ -2374,7 +2374,7 @@ export default function MaturadorPage() {
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               <div className="rounded-lg border border-slate-200 dark:border-[#404040] bg-slate-50/80 dark:bg-[#333]/80 p-3 flex gap-2.5">
-                <Info className="w-5 h-5 text-[#8CD955] shrink-0 mt-0.5" aria-hidden />
+                <Info className="w-5 h-5 text-[#E86A24] shrink-0 mt-0.5" aria-hidden />
                 <div className="text-sm text-slate-600 dark:text-[#bbb] space-y-1.5">
                   <p className="font-medium text-slate-800 dark:text-[#e8e8e8]">O que é um plano de maturação?</p>
                   <p>
@@ -2397,7 +2397,7 @@ export default function MaturadorPage() {
                   value={planFormName}
                   onChange={(e) => setPlanFormName(e.target.value)}
                   placeholder="Ex.: Boas-vindas em 3 mensagens"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955]"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#E86A24]"
                 />
               </div>
               <div>
@@ -2407,7 +2407,7 @@ export default function MaturadorPage() {
                   onChange={(e) => setPlanFormDescription(e.target.value)}
                   placeholder="Opcional — anote para você o objetivo deste plano"
                   rows={2}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] resize-none focus:ring-2 focus:ring-[#8CD955]"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-[#555] rounded-lg text-slate-800 dark:text-white bg-white dark:bg-[#333] resize-none focus:ring-2 focus:ring-[#E86A24]"
                 />
               </div>
               <div>
@@ -2418,7 +2418,7 @@ export default function MaturadorPage() {
                       Ordene do primeiro ao último envio. Use &quot;Adicionar passo&quot; para mais mensagens na mesma sequência.
                     </p>
                   </div>
-                  <button type="button" onClick={addPlanStep} className="text-sm text-[#8CD955] hover:underline flex items-center gap-1 shrink-0">
+                  <button type="button" onClick={addPlanStep} className="text-sm text-[#E86A24] hover:underline flex items-center gap-1 shrink-0">
                     <Plus className="w-4 h-4" /> Adicionar passo
                   </button>
                 </div>
@@ -2504,7 +2504,7 @@ export default function MaturadorPage() {
               <button type="button" onClick={() => setShowPlanModal(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-[#555] text-slate-700 dark:text-[#aaa] hover:bg-slate-50 dark:hover:bg-[#333]">
                 Cancelar
               </button>
-              <button type="button" onClick={handleSavePlan} disabled={planSaving} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+              <button type="button" onClick={handleSavePlan} disabled={planSaving} className="px-4 py-2 rounded-lg bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2">
                 {planSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 {planSaving ? 'Salvando...' : 'Salvar'}
               </button>

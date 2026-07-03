@@ -207,7 +207,7 @@ export const FlowCanvas: React.FC<FlowCanvasProps> = ({
           <Panel position="top-right">
             <button
               onClick={handleSave}
-              className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium shadow-md"
+              className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium shadow-md"
             >
               Salvar Flow
             </button>

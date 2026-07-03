@@ -52,7 +52,7 @@ const InstanceList: React.FC<InstanceListProps> = ({ instances, onViewAll }) => 
         {connectedInstances.length > 5 && (
           <button
             onClick={onViewAll}
-            className="text-sm font-medium text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] transition-colors"
+            className="text-sm font-medium text-[#E86A24] dark:text-[#00ff00] hover:text-[#D95E1B] dark:hover:text-[#00e600] transition-colors"
           >
             Ver todas
           </button>
@@ -65,7 +65,7 @@ const InstanceList: React.FC<InstanceListProps> = ({ instances, onViewAll }) => 
           displayInstances.map((instance, index) => (
             <div
               key={instance.id || index}
-              className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#333] rounded-lg hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] border border-transparent dark:border-[#404040] transition-all duration-200 cursor-pointer"
+              className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#333] rounded-lg hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] hover:border-[#E86A2440] dark:hover:border-[#00ff0040] border border-transparent dark:border-[#404040] transition-all duration-200 cursor-pointer"
             >
               <MessageSquare className={`w-5 h-5 ${getStatusColor(instance.status)}`} style={getStatusStyle(instance.status)} />
               <div className="flex-1">

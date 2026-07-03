@@ -1,5 +1,6 @@
 import React from 'react';
 import { LucideIcon } from 'lucide-react';
+import { zapStatCard, zapStatCardAccent } from '@/lib/zap-card-styles';
 
 interface CRMStatCardProps {
   label: string;
@@ -8,30 +9,31 @@ interface CRMStatCardProps {
   iconColor: string;
   iconBg: string;
   valueColor?: string;
-  dark?: boolean;
+  accent?: boolean;
 }
 
-const CRMStatCard: React.FC<CRMStatCardProps> = ({ 
-  label, 
-  value, 
-  icon: Icon, 
-  iconColor, 
+const CRMStatCard: React.FC<CRMStatCardProps> = ({
+  label,
+  value,
+  icon: Icon,
+  iconColor,
   iconBg,
-  valueColor = "text-white",
-  dark = true
+  valueColor = 'text-white',
+  accent = false,
 }) => {
   return (
-    <div className={`${dark ? 'bg-[#1a1f2e] dark:bg-[#2a2a2a]' : 'bg-white dark:bg-[#2a2a2a]'} p-5 rounded-2xl shadow-sm border ${dark ? 'border-gray-800 dark:border-[#404040]' : 'border-gray-100 dark:border-[#404040]'} flex items-center gap-4 transition-all hover:scale-[1.02]`}>
-      <div className={`w-12 h-12 ${iconBg} rounded-xl flex items-center justify-center`}>
-        <Icon className={`w-6 h-6 ${iconColor}`} />
+    <div
+      className={`${accent ? zapStatCardAccent : zapStatCard} flex items-center gap-4 transition-all hover:border-[#E86A24]/40`}
+    >
+      <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${iconBg}`}>
+        <Icon className={`h-6 w-6 ${iconColor}`} />
       </div>
       <div>
-        <p className={`text-[10px] font-bold ${dark ? 'text-gray-400 dark:text-[#aaa]' : 'text-gray-500 dark:text-[#aaa]'} uppercase tracking-wider`}>{label}</p>
-        <p className={`text-xl md:text-2xl font-black ${valueColor} leading-tight mt-0.5`}>{value}</p>
+        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</p>
+        <p className={`mt-0.5 text-xl font-black leading-tight md:text-2xl ${valueColor}`}>{value}</p>
       </div>
     </div>
   );
 };
 
 export default CRMStatCard;
-

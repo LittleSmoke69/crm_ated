@@ -22,12 +22,12 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({
   kpiFailedAdds,
 }) => {
   const kpis = [
-    { label: 'Mensagens Enviadas', value: kpiSent, icon: MessageSquare, gradient: 'from-[#A8E677] to-[#8CD955]' },
-    { label: 'Adicionados ao Grupo', value: kpiAdded, icon: UserPlus, gradient: 'from-[#A8E677] to-[#8CD955]' },
-    { label: 'Pendentes', value: kpiPending, icon: Clock, gradient: 'from-[#A8E677] to-[#8CD955]' },
-    { label: 'Instâncias Conectadas', value: kpiConnected, icon: Wifi, gradient: 'from-[#A8E677] to-[#8CD955]' },
-    { label: 'Disparos com Falha', value: kpiFailedSends, icon: XCircle, gradient: 'from-[#A8E677] to-[#8CD955]' },
-    { label: 'Falhas ao Adicionar', value: kpiFailedAdds, icon: AlertCircle, gradient: 'from-[#A8E677] to-[#8CD955]' },
+    { label: 'Mensagens Enviadas', value: kpiSent, icon: MessageSquare, gradient: 'from-[#EF9057] to-[#E86A24]' },
+    { label: 'Adicionados ao Grupo', value: kpiAdded, icon: UserPlus, gradient: 'from-[#EF9057] to-[#E86A24]' },
+    { label: 'Pendentes', value: kpiPending, icon: Clock, gradient: 'from-[#EF9057] to-[#E86A24]' },
+    { label: 'Instâncias Conectadas', value: kpiConnected, icon: Wifi, gradient: 'from-[#EF9057] to-[#E86A24]' },
+    { label: 'Disparos com Falha', value: kpiFailedSends, icon: XCircle, gradient: 'from-[#EF9057] to-[#E86A24]' },
+    { label: 'Falhas ao Adicionar', value: kpiFailedAdds, icon: AlertCircle, gradient: 'from-[#EF9057] to-[#E86A24]' },
   ];
 
   return (

@@ -575,7 +575,7 @@ export default function AdminRedirectPage() {
   }
 
   const inputClass =
-    'w-full border border-gray-300 dark:border-[#555] rounded-xl px-4 py-2.5 bg-white dark:bg-[#333] text-gray-800 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none';
+    'w-full border border-gray-300 dark:border-[#555] rounded-xl px-4 py-2.5 bg-white dark:bg-[#333] text-gray-800 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none';
 
   return (
     <Layout>
@@ -654,7 +654,7 @@ export default function AdminRedirectPage() {
                 <span>{totalClicks.toLocaleString('pt-BR')} registro{totalClicks !== 1 ? 's' : ''}</span>
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
-                <div className={`rounded-xl border px-3 py-2 ${projectBanca ? 'border-[#8CD955]/30 bg-[#8CD955]/10 dark:bg-[#8CD955]/10' : 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30'}`}>
+                <div className={`rounded-xl border px-3 py-2 ${projectBanca ? 'border-[#E86A24]/30 bg-[#E86A24]/10 dark:bg-[#E86A24]/10' : 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30'}`}>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-[#aaa]">Banca do gasto Ads</p>
                   <p className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={projectBanca?.url ?? ''}>
                     {projectBanca ? (projectBanca.name || projectBanca.url || projectBanca.id) : 'Sem banca vinculada'}
@@ -726,20 +726,20 @@ export default function AdminRedirectPage() {
                 onClick={copyLink}
                 className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#333] text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-[#404040] transition"
               >
-                <Copy className="w-4 h-4 text-[#8CD955]" />
+                <Copy className="w-4 h-4 text-[#E86A24]" />
                 {copyDone ? 'Copiado!' : 'Copiar link'}
               </button>
               <button
                 type="button"
                 onClick={() => document.getElementById('grupos-cadastrados')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-[#8CD955]/60 bg-[#8CD955]/10 text-[#5f9f34] dark:text-[#8CD955] hover:bg-[#8CD955]/20 transition"
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border border-[#E86A24]/60 bg-[#E86A24]/10 text-[#5f9f34] dark:text-[#E86A24] hover:bg-[#E86A24]/20 transition"
               >
                 Ver grupos cadastrados
               </button>
               <button
                 type="button"
                 onClick={() => setModalAdd(true)}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#8CD955] text-white text-sm font-semibold rounded-xl hover:opacity-90 transition shadow-sm"
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#E86A24] text-white text-sm font-semibold rounded-xl hover:opacity-90 transition shadow-sm"
               >
                 <Plus className="w-4 h-4" />
                 Adicionar grupo
@@ -790,7 +790,7 @@ export default function AdminRedirectPage() {
                 <button
                   type="submit"
                   disabled={savingPixel}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 transition disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 transition disabled:opacity-50"
                 >
                   {savingPixel ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Salvar pixel
@@ -810,7 +810,7 @@ export default function AdminRedirectPage() {
                       type="checkbox"
                       checked={redirectTimerSeconds === 0}
                       onChange={(e) => setRedirectTimerSeconds(e.target.checked ? 0 : 3)}
-                      className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#8CD955] focus:ring-[#8CD955]"
+                      className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#E86A24] focus:ring-[#E86A24]"
                     />
                     <span className="text-sm font-medium text-gray-700 dark:text-[#ccc]">Instantâneo (0 seg)</span>
                   </label>
@@ -823,7 +823,7 @@ export default function AdminRedirectPage() {
                       max={300}
                       value={redirectTimerSeconds}
                       onChange={(e) => setRedirectTimerSeconds(Math.max(1, Math.min(300, Number(e.target.value) || 1)))}
-                      className="w-24 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-xl px-3 py-2 text-gray-800 dark:text-white text-center font-semibold focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none"
+                      className="w-24 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-xl px-3 py-2 text-gray-800 dark:text-white text-center font-semibold focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none"
                     />
                     <span className="text-sm text-gray-600 dark:text-[#aaa]">segundo{redirectTimerSeconds !== 1 ? 's' : ''}</span>
                   </div>
@@ -887,7 +887,7 @@ export default function AdminRedirectPage() {
                                 href={href}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 text-sm font-medium text-[#8CD955] hover:underline w-fit"
+                                className="inline-flex items-center gap-1.5 text-sm font-medium text-[#E86A24] hover:underline w-fit"
                               >
                                 <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden />
                                 Abrir link do grupo
@@ -913,7 +913,7 @@ export default function AdminRedirectPage() {
                             checked={g.is_active}
                             onChange={() => toggleActive(g)}
                             disabled={togglingId === g.id}
-                            className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#8CD955] focus:ring-[#8CD955]"
+                            className="w-4 h-4 rounded border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-[#E86A24] focus:ring-[#E86A24]"
                           />
                           <span
                             className={
@@ -1206,7 +1206,7 @@ export default function AdminRedirectPage() {
                   <button
                     type="submit"
                     disabled={savingProjectEdit}
-                    className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
+                    className="px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl disabled:opacity-50 transition"
                   >
                     {savingProjectEdit ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null}
                     Salvar
@@ -1262,7 +1262,7 @@ export default function AdminRedirectPage() {
                   />
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
+                  <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
                   <button type="button" onClick={() => { setModalEdit(false); setEditForm(null); }} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
@@ -1323,7 +1323,7 @@ export default function AdminRedirectPage() {
                   />
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition">
+                  <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl disabled:opacity-50 transition">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null} Salvar
                   </button>
                   <button type="button" onClick={() => setModalAdd(false)} className="px-5 py-2.5 bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white font-medium rounded-xl hover:bg-gray-300 dark:hover:bg-[#505050] transition">
@@ -1384,7 +1384,7 @@ export default function AdminRedirectPage() {
                             inputMode="numeric"
                             value={weights[g.id] ?? 0}
                             onChange={(e) => setWeights((w) => ({ ...w, [g.id]: Number(e.target.value) || 0 }))}
-                            className="w-[4.5rem] border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg px-2 py-2 text-right text-sm tabular-nums text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955]/50 outline-none"
+                            className="w-[4.5rem] border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg px-2 py-2 text-right text-sm tabular-nums text-gray-800 dark:text-white focus:ring-2 focus:ring-[#E86A24]/50 outline-none"
                           />
                           <span className="text-gray-700 dark:text-[#ccc] font-medium text-sm w-4">%</span>
                         </div>
@@ -1429,7 +1429,7 @@ export default function AdminRedirectPage() {
                     type="button"
                     onClick={saveWeights}
                     disabled={saving || Math.abs(weightsSum - 100) > 0.01}
-                    className="flex-1 min-w-[8rem] flex items-center justify-center px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl disabled:opacity-50 transition"
+                    className="flex-1 min-w-[8rem] flex items-center justify-center px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl disabled:opacity-50 transition"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin inline mr-1" /> : null}
                     Salvar

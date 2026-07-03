@@ -240,7 +240,7 @@ const GroupsPage = () => {
               <select
                 value={selectedInstance}
                 onChange={(e) => setSelectedInstance(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
                 disabled={loading}
               >
                 <option value="">Selecione uma instância</option>
@@ -267,7 +267,7 @@ const GroupsPage = () => {
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
                 placeholder="Ex: Grupo de Vendas"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-700 placeholder:text-gray-400 bg-white"
                 disabled={loading}
               />
             </div>
@@ -282,7 +282,7 @@ const GroupsPage = () => {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Descrição do grupo..."
                 rows={3}
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none resize-none text-gray-700 placeholder:text-gray-400 bg-white"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none resize-none text-gray-700 placeholder:text-gray-400 bg-white"
                 disabled={loading}
               />
             </div>
@@ -297,7 +297,7 @@ const GroupsPage = () => {
                   type="button"
                   onClick={handleAddRandomContact}
                   disabled={loading || !contacts || contacts.length === 0}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[#8CD95515] text-[#6AB83D] border border-[#8CD95540] rounded-lg hover:bg-[#8CD95525] transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[#E86A2415] text-[#C9531A] border border-[#E86A2440] rounded-lg hover:bg-[#E86A2425] transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
                   <UserPlus className="w-4 h-4" />
                   + Adicionar Contato Aleatório
@@ -335,7 +335,7 @@ const GroupsPage = () => {
               <button
                 onClick={handleCreateGroup}
                 disabled={loading || !isFormValid}
-                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <>

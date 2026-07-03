@@ -77,10 +77,10 @@ function mergeCachedTenant(p: Partial<ZaplotoTenantInfo>): ZaplotoTenantInfo {
         });
   return {
     id: p.id ?? null,
-    name: p.name ?? 'ZapLoto',
+    name: p.name ?? 'crmTR',
     slug: p.slug ?? 'zaploto',
-    app_title: p.app_title ?? 'ZapLoto',
-    primary_color: p.primary_color ?? '#8CD955',
+    app_title: p.app_title ?? 'crmTR',
+    primary_color: p.primary_color ?? '#E86A24',
     secondary_color: p.secondary_color ?? null,
     logo_url: p.logo_url ?? null,
     favicon_url: p.favicon_url ?? null,
@@ -94,10 +94,10 @@ const defaultPalettes = resolveTenantPalettes({});
 
 const defaultTenant: ZaplotoTenantInfo = {
   id: null,
-  name: 'ZapLoto',
+  name: 'crmTR',
   slug: 'zaploto',
-  app_title: 'ZapLoto',
-  primary_color: '#8CD955',
+  app_title: 'crmTR',
+  primary_color: '#E86A24',
   secondary_color: null,
   logo_url: null,
   favicon_url: null,
@@ -193,10 +193,10 @@ export function ZaplotoTenantProvider({ children }: { children: React.ReactNode 
               });
         const next: ZaplotoTenantInfo = {
           id: d.id,
-          name: d.name || 'ZapLoto',
+          name: d.name || 'crmTR',
           slug: d.slug || 'zaploto',
-          app_title: d.app_title || 'ZapLoto',
-          primary_color: d.primary_color || '#8CD955',
+          app_title: d.app_title || 'crmTR',
+          primary_color: d.primary_color || '#E86A24',
           secondary_color: d.secondary_color || null,
           logo_url: d.logo_url || null,
           favicon_url: d.favicon_url || null,

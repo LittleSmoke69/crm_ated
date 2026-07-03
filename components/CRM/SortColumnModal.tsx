@@ -127,11 +127,11 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
 
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden z-10 animate-in fade-in zoom-in duration-200 my-auto">
-        <div className="p-6 bg-gradient-to-r from-[#8CD955]/10 to-[#8CD955]/5 border-b border-gray-100 shrink-0">
+        <div className="p-6 bg-gradient-to-r from-[#E86A24]/10 to-[#E86A24]/5 border-b border-gray-100 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-[#8CD955]/20 rounded-xl">
-                <ArrowUpDown className="w-5 h-5 text-[#8CD955]" />
+              <div className="p-2.5 bg-[#E86A24]/20 rounded-xl">
+                <ArrowUpDown className="w-5 h-5 text-[#E86A24]" />
               </div>
               <div>
                 <h3 className="text-lg font-black text-gray-800">Ordenar Coluna</h3>
@@ -158,7 +158,7 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
                   const v = e.target.value as SortField | '';
                   onSortChange(v || null, sortDirection);
                 }}
-                className="w-full appearance-none bg-white border-2 border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm font-medium text-gray-800 focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 outline-none transition-all"
+                className="w-full appearance-none bg-white border-2 border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm font-medium text-gray-800 focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/20 outline-none transition-all"
               >
                 <option value="">Selecione o critério</option>
                 {SORT_OPTIONS.map((opt) => (
@@ -182,7 +182,7 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
                 onClick={() => onSortChange(sortField, 'asc')}
                 className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all border-2 ${
                   sortDirection === 'asc'
-                    ? 'bg-[#8CD955] text-white border-[#8CD955] shadow-md'
+                    ? 'bg-[#E86A24] text-white border-[#E86A24] shadow-md'
                     : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                 }`}
               >
@@ -193,7 +193,7 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
                 onClick={() => onSortChange(sortField, 'desc')}
                 className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all border-2 ${
                   sortDirection === 'desc'
-                    ? 'bg-[#8CD955] text-white border-[#8CD955] shadow-md'
+                    ? 'bg-[#E86A24] text-white border-[#E86A24] shadow-md'
                     : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                 }`}
               >
@@ -207,7 +207,7 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
           </div>
 
           {/* Exemplo dinâmico */}
-          <div className="bg-[#8CD955]/10 rounded-xl px-4 py-3 border border-[#8CD955]/30">
+          <div className="bg-[#E86A24]/10 rounded-xl px-4 py-3 border border-[#E86A24]/30">
             <p className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">Como ficará</p>
             <p className="text-sm text-gray-800">{example}</p>
           </div>
@@ -216,7 +216,7 @@ const SortColumnModal: React.FC<SortColumnModalProps> = ({
           <div className="pt-2">
             <button
               onClick={onApply}
-              className="w-full py-3.5 px-6 bg-[#8CD955] text-white font-bold rounded-xl hover:bg-[#7BC844] transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+              className="w-full py-3.5 px-6 bg-[#E86A24] text-white font-bold rounded-xl hover:bg-[#7BC844] transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
             >
               <ArrowUpDown className="w-5 h-5" />
               Ordenar

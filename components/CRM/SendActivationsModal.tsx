@@ -599,7 +599,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                   value={instanceSearchQuery}
                   onChange={(e) => setInstanceSearchQuery(e.target.value)}
                   placeholder="Pesquisar instâncias..."
-                  className="w-full bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-xl pl-10 pr-4 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  className="w-full bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-xl pl-10 pr-4 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] placeholder:text-gray-500 dark:placeholder:text-gray-400"
                   aria-label="Pesquisar instâncias"
                 />
               </div>
@@ -616,7 +616,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                     >
                       <input
                         type="checkbox"
-                        className="rounded border-gray-400 text-[#8CD955] focus:ring-[#8CD955]"
+                        className="rounded border-gray-400 text-[#E86A24] focus:ring-[#E86A24]"
                         checked={selectedInstanceNames.has(inst.instance_name)}
                         onChange={() => toggleInstanceName(inst.instance_name)}
                       />
@@ -637,7 +637,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               <button 
                 onClick={fetchEvolutionGroups}
                 disabled={fetchingAll || selectedInstanceNames.size === 0}
-                className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-[#E86A24] hover:text-[#D95E1B] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {fetchingAll ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -666,7 +666,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
               placeholder="Pesquisar grupos..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl pl-10 pr-4 py-2.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 dark:placeholder:text-gray-400"
+              className="w-full bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl pl-10 pr-4 py-2.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] placeholder:text-gray-500 dark:placeholder:text-gray-400"
             />
           </div>
 
@@ -678,14 +678,14 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             >
               <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all flex-shrink-0 ${
                 allFilteredSelected
-                  ? 'bg-[#8CD955] border-[#8CD955] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
-                  : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#8CD955]'
+                  ? 'bg-[#E86A24] border-[#E86A24] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
+                  : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#E86A24]'
               }`}>
                 {allFilteredSelected && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
               </div>
               <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Selecione todos os grupos</span>
             </button>
-            <span className="text-[#8CD955] font-bold text-sm">Total: {filteredGroupIds.length}</span>
+            <span className="text-[#E86A24] font-bold text-sm">Total: {filteredGroupIds.length}</span>
           </div>
         </div>
 
@@ -693,7 +693,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2 custom-scrollbar">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3 min-h-[10rem]">
-              <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />
+              <Loader2 className="w-8 h-8 text-[#E86A24] animate-spin" />
               <span className="text-gray-500 dark:text-gray-400 text-sm inline-flex items-center">
                 Isso pode demorar um pouco
                 <span className="inline-flex ml-1 gap-0">
@@ -715,17 +715,17 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                   type="button"
                   onClick={() => toggleGroup(group.id)}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all group text-left ${
-                    selectedGroups.has(group.id) ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 border border-[#8CD955]/40 dark:border-[#8CD955]/50' : 'hover:bg-[#8CD955]/5 dark:hover:bg-[#8CD955]/10 border border-transparent hover:border-[#8CD955]/20 dark:hover:border-[#8CD955]/30'
+                    selectedGroups.has(group.id) ? 'bg-[#E86A24]/10 dark:bg-[#E86A24]/20 border border-[#E86A24]/40 dark:border-[#E86A24]/50' : 'hover:bg-[#E86A24]/5 dark:hover:bg-[#E86A24]/10 border border-transparent hover:border-[#E86A24]/20 dark:hover:border-[#E86A24]/30'
                   }`}
                 >
                   <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all flex-shrink-0 mt-0.5 ${
                     selectedGroups.has(group.id) 
-                      ? 'bg-[#8CD955] border-[#8CD955] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
-                      : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#8CD955]'
+                      ? 'bg-[#E86A24] border-[#E86A24] shadow-[0_0_10px_rgba(140,217,85,0.3)]' 
+                      : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555] group-hover:border-[#E86A24]'
                   }`}>
                     {selectedGroups.has(group.id) && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
                   </div>
-                  <span className={`text-sm font-medium text-left break-words line-clamp-2 ${selectedGroups.has(group.id) ? 'text-[#6AB83D]' : 'text-gray-700 dark:text-gray-300 group-hover:text-[#8CD955]'}`} title={group.subject}>
+                  <span className={`text-sm font-medium text-left break-words line-clamp-2 ${selectedGroups.has(group.id) ? 'text-[#C9531A]' : 'text-gray-700 dark:text-gray-300 group-hover:text-[#E86A24]'}`} title={group.subject}>
                     {group.subject}
                   </span>
                 </button>
@@ -758,12 +758,12 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
                       : 0
                   );
                 }}
-                className="w-24 bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-lg px-2 py-1.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955]"
+                className="w-24 bg-white dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-lg px-2 py-1.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#E86A24]"
               />
               <button
                 type="button"
                 onClick={pickRandomInterGroupDelay}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#8CD955]/60 bg-[#8CD955]/10 px-2.5 py-1.5 text-xs font-semibold text-[#6AB83D] dark:text-[#8CD955] hover:bg-[#8CD955]/20 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E86A24]/60 bg-[#E86A24]/10 px-2.5 py-1.5 text-xs font-semibold text-[#C9531A] dark:text-[#E86A24] hover:bg-[#E86A24]/20 transition-colors"
               >
                 <Shuffle className="w-3.5 h-3.5" />
                 Aleatório 1–985s
@@ -788,7 +788,7 @@ const SendActivationsModal: React.FC<SendActivationsModalProps> = ({
             type="button"
             onClick={handleSend}
             disabled={sending || selectedGroups.size === 0 || selectedInstanceNames.size === 0}
-            className="flex-1 px-4 py-3 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:hover:bg-[#8CD955] text-white font-bold rounded-xl transition-all shadow-lg shadow-[#8CD955]/20 flex items-center justify-center gap-2"
+            className="flex-1 px-4 py-3 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:hover:bg-[#E86A24] text-white font-bold rounded-xl transition-all shadow-lg shadow-[#E86A24]/20 flex items-center justify-center gap-2"
           >
             {sending ? (
               <Loader2 className="w-5 h-5 animate-spin" />

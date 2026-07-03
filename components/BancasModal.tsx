@@ -140,8 +140,8 @@ const BancasModal: React.FC<BancasModalProps> = ({
         {/* Header - mesmo padrão do TelefoneModal */}
         <div className="p-6 pb-0 flex-shrink-0">
           <div className="flex items-center gap-3 mb-2">
-            <div className="p-3 bg-[#8CD955] dark:bg-[#00ff00] bg-opacity-10 dark:bg-opacity-20 rounded-xl">
-              <Building2 className="w-6 h-6 text-[#8CD955] dark:text-[#00ff00]" />
+            <div className="p-3 bg-[#E86A24] dark:bg-[#00ff00] bg-opacity-10 dark:bg-opacity-20 rounded-xl">
+              <Building2 className="w-6 h-6 text-[#E86A24] dark:text-[#00ff00]" />
             </div>
             <div>
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">{title}</h2>
@@ -181,7 +181,7 @@ const BancasModal: React.FC<BancasModalProps> = ({
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       placeholder="Pesquisar banca por nome ou URL..."
-                      className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-50 dark:bg-[#333] focus:bg-white dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
+                      className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-50 dark:bg-[#333] focus:bg-white dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
                       aria-label="Pesquisar banca"
                     />
                   </div>
@@ -201,13 +201,13 @@ const BancasModal: React.FC<BancasModalProps> = ({
                               type="checkbox"
                               checked={selectedSet.has(b.id)}
                               onChange={() => handleToggle(b.id)}
-                              className="w-5 h-5 rounded border-gray-300 dark:border-[#555] text-[#8CD955] dark:text-[#00ff00] focus:ring-[#8CD955] dark:focus:ring-[#00ff00]"
+                              className="w-5 h-5 rounded border-gray-300 dark:border-[#555] text-[#E86A24] dark:text-[#00ff00] focus:ring-[#E86A24] dark:focus:ring-[#00ff00]"
                             />
                             <span className="flex-1 font-medium text-gray-900 dark:text-white">
                               {b.name || b.url || b.id}
                             </span>
                             {selectedSet.has(b.id) && (
-                              <Check className="w-5 h-5 text-[#8CD955] dark:text-[#00ff00]" />
+                              <Check className="w-5 h-5 text-[#E86A24] dark:text-[#00ff00]" />
                             )}
                           </label>
                         </li>
@@ -228,7 +228,7 @@ const BancasModal: React.FC<BancasModalProps> = ({
                         return (
                           <li
                             key={id}
-                            className="flex items-center gap-2 p-3 rounded-xl border border-[#8CD955]/30 dark:border-[#00ff00]/30 bg-[#8CD955]/5 dark:bg-[#00ff00]/10"
+                            className="flex items-center gap-2 p-3 rounded-xl border border-[#E86A24]/30 dark:border-[#00ff00]/30 bg-[#E86A24]/5 dark:bg-[#00ff00]/10"
                           >
                             <span className="text-sm font-medium text-gray-500 dark:text-[#aaa] w-6">
                               {index + 1}º
@@ -276,7 +276,7 @@ const BancasModal: React.FC<BancasModalProps> = ({
             <button
               type="submit"
               disabled={loading || loadingBancas || bancas.length === 0 || selectedOrder.length === 0}
-              className="w-full px-4 py-3 bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC844] dark:hover:bg-[#00e600] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-3 bg-[#E86A24] dark:bg-[#00ff00] hover:bg-[#7BC844] dark:hover:bg-[#00e600] text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Salvando...' : 'Continuar'}
             </button>

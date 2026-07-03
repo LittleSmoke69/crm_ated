@@ -87,7 +87,7 @@ export default function AdminZaplotoPage() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [showCreateTenant, setShowCreateTenant] = useState(false);
   const [showCreateRole, setShowCreateRole] = useState(false);
-  const [newTenant, setNewTenant] = useState({ name: '', slug: '', primary_color: '#8CD955', app_title: '' });
+  const [newTenant, setNewTenant] = useState({ name: '', slug: '', primary_color: '#E86A24', app_title: '' });
   const [newRole, setNewRole] = useState({ code: '', label: '', zaploto_id: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -367,7 +367,7 @@ export default function AdminZaplotoPage() {
       if (json.success) {
         setTenants((t) => [...t, json.data]);
         setShowCreateTenant(false);
-        setNewTenant({ name: '', slug: '', primary_color: '#8CD955', app_title: '' });
+        setNewTenant({ name: '', slug: '', primary_color: '#E86A24', app_title: '' });
         setCreatedTenant(json.data);
       } else {
         setError(json.error || 'Erro ao criar tenant');
@@ -456,7 +456,7 @@ export default function AdminZaplotoPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -483,7 +483,7 @@ export default function AdminZaplotoPage() {
             onClick={() => setTab('tenants')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
               tab === 'tenants'
-                ? 'bg-[#8CD955] text-white'
+                ? 'bg-[#E86A24] text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
             }`}
           >
@@ -494,7 +494,7 @@ export default function AdminZaplotoPage() {
             onClick={() => setTab('roles')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
               tab === 'roles'
-                ? 'bg-[#8CD955] text-white'
+                ? 'bg-[#E86A24] text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
             }`}
           >
@@ -505,7 +505,7 @@ export default function AdminZaplotoPage() {
             onClick={() => setTab('modules')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
               tab === 'modules'
-                ? 'bg-[#8CD955] text-white'
+                ? 'bg-[#E86A24] text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
             }`}
           >
@@ -517,7 +517,7 @@ export default function AdminZaplotoPage() {
               onClick={() => setTab('push')}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
                 tab === 'push'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
               }`}
             >
@@ -539,7 +539,7 @@ export default function AdminZaplotoPage() {
               <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Instâncias White Label</h2>
               <button
                 onClick={() => setShowCreateTenant(true)}
-                className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d]"
+                className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d]"
               >
                 <Plus className="w-4 h-4" />
                 Novo Tenant
@@ -558,7 +558,7 @@ export default function AdminZaplotoPage() {
                   <button
                     type="button"
                     onClick={() => handleCopyTenantUrl(createdTenant)}
-                    className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium"
+                    className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium"
                   >
                     {copiedTenantId === createdTenant.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     {copiedTenantId === createdTenant.id ? 'Copiado!' : 'Copiar URL'}
@@ -582,27 +582,27 @@ export default function AdminZaplotoPage() {
                   placeholder="Nome"
                   value={newTenant.name}
                   onChange={(e) => setNewTenant((t) => ({ ...t, name: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                 />
                 <input
                   type="text"
                   placeholder="Slug (ex: minha-banca)"
                   value={newTenant.slug}
                   onChange={(e) => setNewTenant((t) => ({ ...t, slug: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                 />
                 <input
                   type="text"
                   placeholder="Título do app"
                   value={newTenant.app_title}
                   onChange={(e) => setNewTenant((t) => ({ ...t, app_title: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={handleCreateTenant}
                     disabled={saving}
-                    className="px-4 py-2 bg-[#8CD955] text-white rounded-lg disabled:opacity-50 hover:bg-[#7bc84d]"
+                    className="px-4 py-2 bg-[#E86A24] text-white rounded-lg disabled:opacity-50 hover:bg-[#7bc84d]"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Criar'}
                   </button>
@@ -670,7 +670,7 @@ export default function AdminZaplotoPage() {
               <select
                 value={selectedTenantId || ''}
                 onChange={(e) => syncTenantSelection(e.target.value || null)}
-                className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] min-w-[200px]"
+                className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] min-w-[200px]"
               >
                 <option value="">Selecione um tenant</option>
                 {tenants.map((t) => (
@@ -683,7 +683,7 @@ export default function AdminZaplotoPage() {
                     setShowCreateRole(true);
                     setNewRole((r) => ({ ...r, zaploto_id: selectedTenantId }));
                   }}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] font-medium"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] font-medium"
                 >
                   <Plus className="w-4 h-4" />
                   Novo Cargo
@@ -700,21 +700,21 @@ export default function AdminZaplotoPage() {
                     placeholder="Código (ex: novo_cargo)"
                     value={newRole.code}
                     onChange={(e) => setNewRole((r) => ({ ...r, code: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="Label (ex: Novo Cargo)"
                     value={newRole.label}
                     onChange={(e) => setNewRole((r) => ({ ...r, label: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleCreateRole}
                     disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Criar'}
                   </button>
@@ -732,14 +732,14 @@ export default function AdminZaplotoPage() {
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Cargos disponíveis</h3>
               {loadingRoles ? (
                 <div className="flex justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : (
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {roles.map((r) => (
                     <div
                       key={r.id}
-                      className="group flex flex-col p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 hover:shadow-md dark:hover:shadow-gray-900/20 transition-all"
+                      className="group flex flex-col p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-[#E86A24]/50 dark:hover:border-[#E86A24]/50 hover:shadow-md dark:hover:shadow-gray-900/20 transition-all"
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="flex-1 min-w-0">
@@ -761,7 +761,7 @@ export default function AdminZaplotoPage() {
                       <div className="mt-auto pt-3 flex gap-2">
                         <button
                           onClick={() => setPermissionsRole(r)}
-                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#8CD955]/10 dark:bg-[#8CD955]/20 text-[#8CD955] rounded-lg hover:bg-[#8CD955]/20 dark:hover:bg-[#8CD955]/30 font-medium text-sm transition"
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#E86A24]/10 dark:bg-[#E86A24]/20 text-[#E86A24] rounded-lg hover:bg-[#E86A24]/20 dark:hover:bg-[#E86A24]/30 font-medium text-sm transition"
                         >
                           <ListTree className="w-4 h-4" />
                           Permissões
@@ -799,7 +799,7 @@ export default function AdminZaplotoPage() {
                 <select
                   value={pushTargetId || ''}
                   onChange={(e) => setPushTargetId(e.target.value || null)}
-                  className="w-full max-w-md px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                  className="w-full max-w-md px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                 >
                   <option value="">Selecione o tenant</option>
                   {tenants.filter((t) => !t.is_central).map((t) => (
@@ -822,7 +822,7 @@ export default function AdminZaplotoPage() {
                         type="checkbox"
                         checked={!!pushTypes[key]}
                         onChange={(e) => setPushTypes((p) => ({ ...p, [key]: e.target.checked }))}
-                        className="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-[#8CD955] focus:ring-[#8CD955]"
+                        className="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-[#E86A24] focus:ring-[#E86A24]"
                       />
                       <span className="text-sm text-gray-700 dark:text-gray-300">{label}</span>
                     </label>
@@ -844,7 +844,7 @@ export default function AdminZaplotoPage() {
               <button
                 onClick={handlePushData}
                 disabled={pushing}
-                className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
               >
                 {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Transferir dados para o white label
@@ -860,7 +860,7 @@ export default function AdminZaplotoPage() {
               <select
                 value={selectedTenantId || ''}
                 onChange={(e) => syncTenantSelection(e.target.value || null)}
-                className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] min-w-[200px]"
+                className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] min-w-[200px]"
               >
                 <option value="">Selecione um tenant</option>
                 {tenants.map((t) => (
@@ -870,7 +870,7 @@ export default function AdminZaplotoPage() {
               {selectedTenantId && (
                 <button
                   onClick={() => setShowCreateModule(true)}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] font-medium"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] font-medium"
                 >
                   <Plus className="w-4 h-4" />
                   Novo Módulo
@@ -887,33 +887,33 @@ export default function AdminZaplotoPage() {
                     placeholder="Código (ex: novo_modulo)"
                     value={newModule.code}
                     onChange={(e) => setNewModule((m) => ({ ...m, code: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="Label (ex: Novo Módulo)"
                     value={newModule.label}
                     onChange={(e) => setNewModule((m) => ({ ...m, label: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="URL (ex: /novo-modulo)"
                     value={newModule.href}
                     onChange={(e) => setNewModule((m) => ({ ...m, href: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="Módulo pai (code do pai ou vazio)"
                     value={newModule.parent_code}
                     onChange={(e) => setNewModule((m) => ({ ...m, parent_code: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <select
                     value={newModule.icon_name}
                     onChange={(e) => setNewModule((m) => ({ ...m, icon_name: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   >
                     {['LayoutDashboard', 'MessageSquare', 'Rocket', 'Users', 'Shield', 'Webhook', 'Workflow', 'Bot', 'Layout', 'Kanban', 'Activity', 'BarChart3', 'Briefcase', 'Settings', 'FlaskConical', 'User', 'ListOrdered', 'ClipboardList', 'ExternalLink', 'ArrowRightLeft'].map((icon) => (
                       <option key={icon} value={icon}>{icon}</option>
@@ -924,7 +924,7 @@ export default function AdminZaplotoPage() {
                   <button
                     onClick={handleCreateModule}
                     disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Criar'}
                   </button>
@@ -939,7 +939,7 @@ export default function AdminZaplotoPage() {
             )}
 
             {editingModule && (
-              <div ref={editFormRef} className="p-5 bg-amber-50/80 dark:bg-gray-800 rounded-xl border-2 border-[#8CD955] dark:border-[#8CD955] space-y-4">
+              <div ref={editFormRef} className="p-5 bg-amber-50/80 dark:bg-gray-800 rounded-xl border-2 border-[#E86A24] dark:border-[#E86A24] space-y-4">
                 <h3 className="font-semibold text-gray-800 dark:text-gray-200">Editar módulo: {editingModule.label}</h3>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <input
@@ -947,33 +947,33 @@ export default function AdminZaplotoPage() {
                     placeholder="Código (ex: novo_modulo)"
                     value={editingModule.code}
                     onChange={(e) => setEditingModule((prev) => prev ? { ...prev, code: e.target.value } : null)}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="Label (ex: Novo Módulo)"
                     value={editingModule.label}
                     onChange={(e) => setEditingModule((prev) => prev ? { ...prev, label: e.target.value } : null)}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="URL (ex: /novo-modulo)"
                     value={editingModule.href || ''}
                     onChange={(e) => setEditingModule((prev) => prev ? { ...prev, href: e.target.value } : null)}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <input
                     type="text"
                     placeholder="Módulo pai (code do pai ou vazio)"
                     value={editingModule.parent_code || ''}
                     onChange={(e) => setEditingModule((prev) => prev ? { ...prev, parent_code: e.target.value } : null)}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   />
                   <select
                     value={editingModule.icon_name || 'LayoutDashboard'}
                     onChange={(e) => setEditingModule((prev) => prev ? { ...prev, icon_name: e.target.value } : null)}
-                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                    className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                   >
                     {['LayoutDashboard', 'MessageSquare', 'Rocket', 'Users', 'Shield', 'Webhook', 'Workflow', 'Bot', 'Layout', 'Kanban', 'Activity', 'BarChart3', 'Briefcase', 'Settings', 'FlaskConical', 'User', 'ListOrdered', 'ClipboardList', 'ExternalLink', 'ArrowRightLeft'].map((icon) => (
                       <option key={icon} value={icon}>{icon}</option>
@@ -985,7 +985,7 @@ export default function AdminZaplotoPage() {
                     type="button"
                     onClick={handleUpdateModule}
                     disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
                   >
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Salvar'}
                   </button>
@@ -1004,14 +1004,14 @@ export default function AdminZaplotoPage() {
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Módulos disponíveis (itens da sidebar)</h3>
               {loadingModules ? (
                 <div className="flex justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : (
                 <div className="space-y-2">
                   {modules.map((m) => (
                     <div
                       key={m.id}
-                      className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50"
+                      className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-[#E86A24]/50 dark:hover:border-[#E86A24]/50"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-gray-900 dark:text-gray-100">{m.label}</div>
@@ -1034,7 +1034,7 @@ export default function AdminZaplotoPage() {
                           setEditingModule({ ...m });
                         }}
                         title="Editar módulo"
-                        className="p-2 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 rounded-lg"
+                        className="p-2 text-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/20 rounded-lg"
                       >
                         <Edit className="w-4 h-4" />
                       </button>

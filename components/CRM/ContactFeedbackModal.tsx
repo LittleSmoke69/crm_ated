@@ -130,8 +130,8 @@ const ContactFeedbackModal: React.FC<ContactFeedbackModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-[#8CD955]/10 rounded-lg">
-              <MessageSquare className="w-5 h-5 text-[#8CD955]" />
+            <div className="p-2 bg-[#E86A24]/10 rounded-lg">
+              <MessageSquare className="w-5 h-5 text-[#E86A24]" />
             </div>
             <div>
               <h2 className="text-xl font-bold text-gray-800">Feedback do Contato</h2>
@@ -165,7 +165,7 @@ const ContactFeedbackModal: React.FC<ContactFeedbackModalProps> = ({
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder="Ex: Cliente interessado em apostas esportivas. Demonstrou interesse em bônus de depósito..."
-                className="w-full h-32 p-4 border-2 border-gray-700 rounded-xl focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 outline-none transition-all resize-none text-sm text-gray-700"
+                className="w-full h-32 p-4 border-2 border-gray-700 rounded-xl focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/20 outline-none transition-all resize-none text-sm text-gray-700"
                 disabled={saving}
               />
             </div>
@@ -184,7 +184,7 @@ const ContactFeedbackModal: React.FC<ContactFeedbackModalProps> = ({
           <button
             onClick={handleSave}
             disabled={saving || !feedback.trim()}
-            className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-[#8CD955]/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-6 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white text-sm font-bold rounded-xl transition-all shadow-md shadow-[#E86A24]/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {saving ? (
               <>

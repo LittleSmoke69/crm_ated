@@ -37,6 +37,7 @@ import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
 import SpendVsDepositChart from '@/components/Meta/SpendVsDepositChart';
 import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
 import BancaAnalysisCard from '@/components/Banca/BancaAnalysisCard';
+import { isMetaAdsMetricsOnly } from '@/lib/app-scope';
 
 function formatBRL(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -394,6 +395,7 @@ const CARD_CHARGE_TAX_CUSTOM_OPTION = '__custom__';
 export default function AdminMetaPage() {
   const { checking, userId } = useRequireAuth();
   const router = useTenantRouter();
+  const metricsOnly = isMetaAdsMetricsOnly();
   const [bancas, setBancas] = useState<Banca[]>([]);
   /** Bancas vinculadas à integração em edição (multiseleção). */
   const [selectedBancaIds, setSelectedBancaIds] = useState<string[]>([]);
@@ -831,6 +833,13 @@ export default function AdminMetaPage() {
     };
     fetchBancas();
   }, [userId]);
+
+  /** Modelagem: vínculo interno com crm_bancas sem expor seletor de banca na UI. */
+  useEffect(() => {
+    if (!metricsOnly || bancas.length === 0 || selectedBancaIds.length > 0) return;
+    setSelectedBancaIds([bancas[0].id]);
+    setSelectedIntegrationContextBancaId(bancas[0].id);
+  }, [metricsOnly, bancas, selectedBancaIds.length]);
 
   useEffect(() => {
     if (selectedBancaIds.length === 0) {
@@ -2299,7 +2308,7 @@ export default function AdminMetaPage() {
   }, [userId, loadAllCampaigns]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || metricsOnly) return;
     const bancaIds = Array.from(new Set((allCampaignsRows || []).map((row: any) => String(row.banca_id)).filter(Boolean)));
     if (!bancaIds.length) return;
     void (async () => {
@@ -2319,7 +2328,7 @@ export default function AdminMetaPage() {
       );
       setConsultorsByBanca((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
     })();
-  }, [userId, allCampaignsRows]);
+  }, [userId, allCampaignsRows, metricsOnly]);
 
   // Complementary fetch: loads consultors for live-stream banca_ids not already covered by the allCampaignsRows page.
   // allCampaignsRows is paginated, so the live stream may show campaigns from bancas not on the current DB page.
@@ -2335,7 +2344,7 @@ export default function AdminMetaPage() {
     .sort()
     .join(',');
   useEffect(() => {
-    if (!userId || !liveCampaignBancaKey) return;
+    if (!userId || metricsOnly || !liveCampaignBancaKey) return;
     const dbBancaSet = new Set(dbCampaignBancaKey.split(',').filter(Boolean));
     const missingBancaIds = [...new Set(liveCampaignBancaKey.split(',').filter(Boolean))].filter(
       (id) => !dbBancaSet.has(id)
@@ -2358,10 +2367,10 @@ export default function AdminMetaPage() {
       );
       setConsultorsByBanca((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
     })();
-  }, [userId, liveCampaignBancaKey, dbCampaignBancaKey]);
+  }, [userId, liveCampaignBancaKey, dbCampaignBancaKey, metricsOnly]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || metricsOnly) return;
     const ownerIds = new Set<string>();
     for (const row of allCampaignsRows || []) {
       const g = (row as { gestor_user_ids?: unknown }).gestor_user_ids;
@@ -2396,7 +2405,7 @@ export default function AdminMetaPage() {
       );
       setRedirectSlugOptionsByOwner(Object.fromEntries(entries));
     })();
-  }, [userId, allCampaignsRows]);
+  }, [userId, allCampaignsRows, metricsOnly]);
 
   const handleCreateIntegration = async () => {
     if (!userId) return;
@@ -2480,17 +2489,43 @@ export default function AdminMetaPage() {
     .filter((row) => {
       const term = overviewSearch.trim().toLowerCase();
       if (!term) return true;
+      if (metricsOnly) {
+        const hay = [
+          row.ad_account_id,
+          row.base_url,
+          row.integration_id,
+          row.pixel_id,
+        ]
+          .map((x) => String(x ?? '').toLowerCase())
+          .join(' ');
+        return hay.includes(term);
+      }
       return row.banca_name.toLowerCase().includes(term) || row.banca_url.toLowerCase().includes(term);
     })
     .sort((a, b) => {
       const diff = overviewPriority(a) - overviewPriority(b);
       if (diff !== 0) return diff;
+      if (metricsOnly) {
+        return String(a.ad_account_id ?? '').localeCompare(String(b.ad_account_id ?? ''), 'pt-BR');
+      }
       return a.banca_name.localeCompare(b.banca_name, 'pt-BR');
     });
 
-  const overviewTotalPages = Math.max(1, Math.ceil(filteredOverviewRows.length / OVERVIEW_PAGE_SIZE));
+  /** Modelagem: uma linha por integração Meta (sem repetir por vínculo interno). */
+  const overviewRowsForTable = useMemo(() => {
+    if (!metricsOnly) return filteredOverviewRows;
+    const seen = new Set<string>();
+    return filteredOverviewRows.filter((row) => {
+      const key = row.integration_id ? String(row.integration_id) : `none:${row.banca_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [filteredOverviewRows, metricsOnly]);
+
+  const overviewTotalPages = Math.max(1, Math.ceil(overviewRowsForTable.length / OVERVIEW_PAGE_SIZE));
   const overviewPageSafe = Math.min(overviewPage, overviewTotalPages);
-  const pagedOverviewRows = filteredOverviewRows.slice(
+  const pagedOverviewRows = overviewRowsForTable.slice(
     (overviewPageSafe - 1) * OVERVIEW_PAGE_SIZE,
     overviewPageSafe * OVERVIEW_PAGE_SIZE
   );
@@ -3247,7 +3282,7 @@ export default function AdminMetaPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -3257,11 +3292,15 @@ export default function AdminMetaPage() {
     <Layout>
       <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6 text-gray-800 dark:text-gray-200">
         <div className="flex flex-wrap items-center gap-2">
-          <BarChart3 className="w-6 h-6 text-[#8CD955]" />
+          <BarChart3 className="w-6 h-6 text-[#E86A24]" />
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-50">Integração Meta Ads</h1>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <p className="text-gray-600 dark:text-gray-400">Gestão geral das integrações Meta Ads por banca.</p>
+          <p className="text-gray-600 dark:text-gray-400">
+            {metricsOnly
+              ? 'Métricas e gestão das integrações Meta Ads.'
+              : 'Gestão geral das integrações Meta Ads por banca.'}
+          </p>
           <div className="w-full sm:w-auto shrink-0 flex items-end gap-2 flex-wrap">
             <div>
               <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Período Meta</label>
@@ -3282,6 +3321,7 @@ export default function AdminMetaPage() {
                 <option value="all">Todo o período</option>
               </select>
             </div>
+            {!metricsOnly ? (
             <div>
               <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Banca Meta</label>
               <div className="relative w-full sm:min-w-[220px]" ref={overviewFilterBancaRef}>
@@ -3352,6 +3392,7 @@ export default function AdminMetaPage() {
                 ) : null}
               </div>
             </div>
+            ) : null}
             {metaInsightsPeriod === 'custom' && (
               <>
                 <div>
@@ -3389,7 +3430,7 @@ export default function AdminMetaPage() {
                   setOverviewPage(1);
                   setAllCampaignsPage(1);
                 }}
-                className="rounded border-gray-300 dark:border-gray-600 text-[#8CD955] focus:ring-[#8CD955] shrink-0 bg-white dark:bg-[#2a2a2a]"
+                className="rounded border-gray-300 dark:border-gray-600 text-[#E86A24] focus:ring-[#E86A24] shrink-0 bg-white dark:bg-[#2a2a2a]"
               />
               <span className="text-[11px] text-gray-700 dark:text-gray-300 leading-snug">
                 <span className="font-semibold text-gray-600 dark:text-gray-400">Padrão do painel:</span> apenas campanhas ativas
@@ -3400,9 +3441,11 @@ export default function AdminMetaPage() {
               type="button"
               onClick={() => {
                 setNewIntegrationError(null);
+                const defaultBancaIds =
+                  metricsOnly && bancas[0] ? [bancas[0].id] : [];
                 setNewIntegrationForm((f) => ({
                   ...f,
-                  banca_ids: [],
+                  banca_ids: defaultBancaIds,
                   base_url: 'https://graph.facebook.com/v25.0',
                   access_token: '',
                   ad_account_id: '',
@@ -3411,7 +3454,7 @@ export default function AdminMetaPage() {
                 }));
                 setNewIntegrationOpen(true);
               }}
-              className="px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium"
+              className="px-4 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium"
             >
               Nova integração
             </button>
@@ -3420,7 +3463,7 @@ export default function AdminMetaPage() {
 
         {liveAggregateStreamProgress && liveAggregateStreamProgress.total > 0 ? (
           <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8CD955] shrink-0" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#E86A24] shrink-0" />
             <span>
               Carregando integrações Meta em segundo plano: {liveAggregateStreamProgress.current}/
               {liveAggregateStreamProgress.total} — totais e tabela atualizam a cada lote.
@@ -3433,8 +3476,9 @@ export default function AdminMetaPage() {
           </div>
         ) : null}
 
-        {/* Card Análise da Banca (prioridade de carregamento — fica no topo). Segue o filtro "Banca Meta". */}
-        {metaDatesPending ? (
+        {/* Card Análise da Banca — oculto no escopo modelagem (métricas Meta puras) */}
+        {!metricsOnly && (
+          metaDatesPending ? (
           <div className={`${metaCard} p-4 text-sm text-gray-500 dark:text-gray-400`}>
             Selecione o período (<strong>De</strong> e <strong>Até</strong>) para carregar a Análise da Banca.
           </div>
@@ -3465,17 +3509,18 @@ export default function AdminMetaPage() {
           <div className={`${metaCard} p-4 text-sm text-gray-500 dark:text-gray-400`}>
             Nenhuma banca com Ads ativo no período. Selecione uma banca no filtro <strong>Banca Meta</strong> para ver a Análise da Banca.
           </div>
+        )
         )}
 
-        {metaDatesPending ? null : (
+        {!metricsOnly && !metaDatesPending ? (
         <BancaXAdsRanking
           dateFrom={adminMetaInsightsDateRange.dateFrom}
           dateTo={adminMetaInsightsDateRange.dateTo}
           refreshKey={rankingRefreshKey}
         />
-        )}
+        ) : null}
 
-        <InvestmentRoundsPanel bancas={bancas} userId={userId} />
+        {!metricsOnly ? <InvestmentRoundsPanel bancas={bancas} userId={userId} /> : null}
 
         <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-1 xl:grid-cols-3">
@@ -3487,7 +3532,7 @@ export default function AdminMetaPage() {
             </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : (
@@ -3495,7 +3540,7 @@ export default function AdminMetaPage() {
                 <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mt-2 tabular-nums tracking-tight">
                   {formatBRL(metaSummaryCards.spendAll)}
                 </p>
-                {metaSummaryCards.spendBolao > 0 && (
+                {!metricsOnly && metaSummaryCards.spendBolao > 0 && (
                   <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
                     Bolão:{' '}
                     <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
@@ -3503,7 +3548,7 @@ export default function AdminMetaPage() {
                     </span>
                   </p>
                 )}
-                {(metaSummaryCards.resultsNormal > 0 || metaSummaryCards.resultsBolao > 0) && (
+                {!metricsOnly && (metaSummaryCards.resultsNormal > 0 || metaSummaryCards.resultsBolao > 0) && (
                   <div className="mt-3 pt-3 border-t border-gray-100 dark:border-[#333] flex gap-5">
                     <div>
                       <p className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase">Resultados Normal</p>
@@ -3567,7 +3612,7 @@ export default function AdminMetaPage() {
                           commitCardChargeTaxInput();
                           setCardChargeTaxUiCustom(false);
                         }}
-                        className="text-[10px] font-medium text-[#5a9e38] dark:text-[#8CD955] hover:underline whitespace-nowrap"
+                        className="text-[10px] font-medium text-[#5a9e38] dark:text-[#E86A24] hover:underline whitespace-nowrap"
                         title="Voltar à lista (valores fora da lista aparecem como «Outro valor»)"
                       >
                         Lista
@@ -3624,7 +3669,7 @@ export default function AdminMetaPage() {
             ) : null}
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : usingLiveMetaCards && liveAggregate?.billing ? (
@@ -3723,7 +3768,9 @@ export default function AdminMetaPage() {
               </>
             ) : (
               <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-3 italic">
-                Disponível ao selecionar uma banca com dados ao vivo.
+                {metricsOnly
+                  ? 'Disponível quando houver dados ao vivo da Meta.'
+                  : 'Disponível ao selecionar uma banca com dados ao vivo.'}
               </p>
             )}
           </div>
@@ -3736,7 +3783,7 @@ export default function AdminMetaPage() {
             </p>
             {metaSummaryCardsLoading ? (
               <div className="mt-3 flex items-center gap-2 text-gray-600 dark:text-gray-400 min-h-[2rem]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] shrink-0" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24] shrink-0" />
                 <span className="text-sm">Carregando dados…</span>
               </div>
             ) : usingLiveMetaCards && liveAggregate?.billing ? (
@@ -3750,7 +3797,9 @@ export default function AdminMetaPage() {
               </>
             ) : (
               <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-3 italic">
-                Disponível ao selecionar uma banca com dados ao vivo.
+                {metricsOnly
+                  ? 'Disponível quando houver dados ao vivo da Meta.'
+                  : 'Disponível ao selecionar uma banca com dados ao vivo.'}
               </p>
             )}
           </div>
@@ -3759,7 +3808,7 @@ export default function AdminMetaPage() {
 
         <div
           id="dados-sincronizados-section"
-          className={`${metaCard} p-4 md:p-6 ring-1 ring-[#8CD955]/25 dark:ring-[#6AAE39]/35 shadow-md dark:shadow-black/30`}
+          className={`${metaCard} p-4 md:p-6 ring-1 ring-[#E86A24]/25 dark:ring-[#6AAE39]/35 shadow-md dark:shadow-black/30`}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
             <div className="min-w-0">
@@ -3767,14 +3816,18 @@ export default function AdminMetaPage() {
                 Métricas de Campanhas
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Campanhas de <span className="font-semibold text-gray-800 dark:text-gray-200">todas as integrações Meta</span>{' '}
-                {scopedMetaBancaFilter ? (
-                  <span className="text-gray-500 dark:text-gray-500">(banca filtrada no painel)</span>
+                Campanhas de <span className="font-semibold text-gray-800 dark:text-gray-200">todas as integrações Meta</span>
+                {!metricsOnly && scopedMetaBancaFilter ? (
+                  <span className="text-gray-500 dark:text-gray-500"> (banca filtrada no painel)</span>
                 ) : null}
-                . Métricas de alcance, cliques e spend estimado vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui; o cache local complementa tipo, consultores e vínculos.
-                {!scopedMetaBancaFilter ? (
+                . Métricas de alcance, cliques e spend estimado vêm da <span className="font-semibold text-emerald-700 dark:text-emerald-400">Meta em tempo real</span> quando o carregamento ao vivo conclui{metricsOnly ? '.' : '; o cache local complementa tipo, consultores e vínculos.'}
+                {!metricsOnly && !scopedMetaBancaFilter ? (
                   <span className="block sm:inline sm:before:content-[' '] mt-1 sm:mt-0 text-gray-500 dark:text-gray-500">
                     Cada ID de campanha Meta aparece no máximo uma vez: se houver duplicidade entre bancas no CRM, mantemos a linha com <span className="font-medium text-gray-600 dark:text-gray-400">atualização mais recente</span> (em empate, maior spend estimado no período).
+                  </span>
+                ) : metricsOnly ? (
+                  <span className="block sm:inline sm:before:content-[' '] mt-1 sm:mt-0 text-gray-500 dark:text-gray-500">
+                    Cada ID de campanha Meta aparece no máximo uma vez; em duplicidade, mantemos a linha com <span className="font-medium text-gray-600 dark:text-gray-400">atualização mais recente</span>.
                   </span>
                 ) : null}
               </p>
@@ -3788,7 +3841,7 @@ export default function AdminMetaPage() {
                 ) : null}
                 {!usingLiveMetaCards ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-[#333] px-2.5 py-0.5 text-[11px] font-semibold uppercase text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-[#404040]">
-                    Cache CRM / aguardando Meta
+                    {metricsOnly ? 'Cache local / aguardando Meta' : 'Cache CRM / aguardando Meta'}
                   </span>
                 ) : null}
                 {usingLiveMetaCards && liveAggregate?.billing ? (
@@ -3835,6 +3888,7 @@ export default function AdminMetaPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {!metricsOnly ? (
               <button
                 onClick={() => {
                   const first = (orderedDisplayMetricCampaignRows || [])[0] as
@@ -3851,6 +3905,7 @@ export default function AdminMetaPage() {
                 <Users className="w-4 h-4" />
                 Atribuir consultores
               </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void loadLiveAggregate()}
@@ -3863,7 +3918,7 @@ export default function AdminMetaPage() {
               <button
                 onClick={() => loadSyncedData()}
                 disabled={loadingData}
-                className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium flex items-center gap-1 disabled:opacity-50"
+                className="text-sm text-[#E86A24] hover:text-[#D95E1B] font-medium flex items-center gap-1 disabled:opacity-50"
               >
                 {loadingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Cache local
@@ -3872,23 +3927,24 @@ export default function AdminMetaPage() {
           </div>
 
           <div className="space-y-4">
-            {/* Card: Gasto de Ads × Depósito (sempre últimos 7 dias, auto-carregado, respeita o escopo de banca) */}
+            {!metricsOnly ? (
             <SpendVsDepositChart
               userId={userId ?? ''}
               scopeBancaIds={overviewFilterBancaId ? [overviewFilterBancaId] : []}
               enabled={Boolean(userId)}
             />
+            ) : null}
             {/* Erro silencioso de campaigns-all (ex.: migration pendente) */}
             {allCampaignsError && (
               <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span><strong>Erro ao carregar campanhas do banco:</strong> {allCampaignsError}</span>
+                <span><strong>Erro ao carregar campanhas:</strong> {allCampaignsError}</span>
               </div>
             )}
             {/* Tabela de campanhas — sempre visível, não depende de banca específica */}
             {crmCampaignsBlockLoading ? (
               <div className="py-8 flex justify-center">
-                <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
+                <Loader2 className="w-6 h-6 animate-spin text-[#E86A24]" />
               </div>
             ) : (
                   <div className="border-2 border-gray-200 dark:border-[#404040] rounded-xl overflow-hidden bg-white/50 dark:bg-[#1f1f1f]/50">
@@ -3898,7 +3954,7 @@ export default function AdminMetaPage() {
                     >
                       <span className="flex flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:gap-2 text-left">
                         <span className="flex items-center gap-2 font-bold text-base text-gray-900 dark:text-white">
-                          <Target className="w-5 h-5 text-[#8CD955] shrink-0" />
+                          <Target className="w-5 h-5 text-[#E86A24] shrink-0" />
                           Campanhas
                         </span>
                         <span className="text-xs font-normal text-gray-600 dark:text-gray-400 sm:pl-1">
@@ -3909,21 +3965,23 @@ export default function AdminMetaPage() {
                     </button>
                     {expandedTab === 'campaigns' && (
                       <div className="overflow-x-auto max-h-[min(72vh,920px)] overflow-y-auto">
-                        <table className="w-full text-xs sm:text-sm text-left min-w-[1720px] xl:min-w-[2600px] text-gray-800 dark:text-gray-200">
+                        <table className={`w-full text-xs sm:text-sm text-left text-gray-800 dark:text-gray-200 ${metricsOnly ? 'min-w-[960px]' : 'min-w-[1720px] xl:min-w-[2600px]'}`}>
                           <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200 sticky top-0 z-10 shadow-sm">
                             <tr>
                               <th className="px-4 py-2.5">Início</th>
+                              {!metricsOnly ? (
                               <th
                                 className="px-4 py-2 min-w-[200px]"
                                 title="Consultores do card Ads (Meu Desempenho): seleção manual; mais os do redirect quando a campanha tem projeto vinculado (grupos do redirect). Badges «Redirect» / «Manual». Sem seleção manual = regra automática de spend (vínculos + redirect)."
                               >
                                 Consultores · card Ads
                               </th>
-                              <th className="px-4 py-2.5">Gestor</th>
-                              <th className="px-4 py-2.5">Banca</th>
+                              ) : null}
+                              {!metricsOnly ? <th className="px-4 py-2.5">Gestor</th> : null}
+                              {!metricsOnly ? <th className="px-4 py-2.5">Banca</th> : null}
                               <th className="px-4 py-2.5 min-w-[220px]">Campanha</th>
                               <th className="px-4 py-2 text-right">Gasto na Campanha</th>
-                              <th className="px-4 py-2">Tipo</th>
+                              {!metricsOnly ? <th className="px-4 py-2">Tipo</th> : null}
                               <th
                                 className="px-4 py-2"
                                 title="Moeda da Ad Account na Meta. Valores em USD são convertidos para BRL na cotação atual para somar nos totais."
@@ -3935,15 +3993,17 @@ export default function AdminMetaPage() {
                               <th className="px-4 py-2 text-right">Cliques</th>
                               <th className="px-4 py-2 text-right">Leads</th>
                               <th className="px-4 py-2 text-right">Resultados</th>
-                              <th className="px-4 py-2 text-right">Leads consultores</th>
+                              {!metricsOnly ? <th className="px-4 py-2 text-right">Leads consultores</th> : null}
                               <th className="px-4 py-2 text-right">Orçamento diário</th>
+                              {!metricsOnly ? (
                               <th
                                 className="px-4 py-2"
                                 title="redirect_slugs dos projetos cujo owner_user_id é um dos gestores da banca (agregado por perfil gestor, não por banca)."
                               >
                                 Redirect
                               </th>
-                              <th className="px-4 py-2">Atribuir banca</th>
+                              ) : null}
+                              {!metricsOnly ? <th className="px-4 py-2">Atribuir banca</th> : null}
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
@@ -4062,6 +4122,41 @@ export default function AdminMetaPage() {
                                   : isActiveCampaign
                                     ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-l-2 border-l-emerald-400'
                                     : 'hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80';
+                              if (metricsOnly) {
+                                return (
+                                  <tr key={rowKey} className={rowClass}>
+                                    <td className="px-4 py-2 text-gray-700 dark:text-white">{c.start_time ? formatDate(c.start_time) : '-'}</td>
+                                    <td className="px-4 py-3 align-top">
+                                      <div className="flex flex-col gap-1.5 max-w-md">
+                                        {usingLiveMetaCards && isActiveCampaign ? (
+                                          <span className="inline-flex w-fit items-center rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                                            Ativa · tempo real
+                                          </span>
+                                        ) : isActiveCampaign ? (
+                                          <span className="inline-flex w-fit items-center rounded-full bg-emerald-100 dark:bg-emerald-900/50 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-800 dark:text-emerald-200">
+                                            Ativa
+                                          </span>
+                                        ) : null}
+                                        <span className="text-base font-semibold text-gray-900 dark:text-gray-50 leading-snug">
+                                          {c.name || c.campaign_id}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">
+                                      {formatMoneyByCurrency(m.spend, rowCurrency)}
+                                    </td>
+                                    <td className="px-4 py-2 align-top">
+                                      <span className="text-xs font-semibold text-gray-700 dark:text-gray-200">{rowCurrency}</span>
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.reach.toLocaleString('pt-BR')}</td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.impressions.toLocaleString('pt-BR')}</td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.clicks.toLocaleString('pt-BR')}</td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.leads.toLocaleString('pt-BR')}</td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white tabular-nums">{m.results.toLocaleString('pt-BR')}</td>
+                                    <td className="px-4 py-2 text-right text-gray-700 dark:text-white">{c.daily_budget != null ? `R$ ${Number(c.daily_budget).toFixed(2)}` : '-'}</td>
+                                  </tr>
+                                );
+                              }
                               const bancaKeyAds = String(c.banca_id ?? '');
                               const rawAdsConsultors = consultorsByBanca[bancaKeyAds] || [];
                               const adsPickKey = `${bancaKeyAds}:${String(c.campaign_id)}`;
@@ -4619,7 +4714,7 @@ export default function AdminMetaPage() {
                                               name: c.name,
                                             })
                                           }
-                                          className="px-3 py-1.5 rounded-lg border border-[#8CD955] text-[#6AAE39] hover:bg-[#F1FAE8] dark:text-[#8CD955] dark:hover:bg-[#1f2a18] dark:border-[#6AAE39] text-xs font-medium disabled:opacity-50"
+                                          className="px-3 py-1.5 rounded-lg border border-[#E86A24] text-[#6AAE39] hover:bg-[#F1FAE8] dark:text-[#E86A24] dark:hover:bg-[#1f2a18] dark:border-[#6AAE39] text-xs font-medium disabled:opacity-50"
                                         >
                                           {campaignOwnerSavingKey === ownerKey ? 'Salvando…' : 'Vincular banca'}
                                         </button>
@@ -4637,7 +4732,9 @@ export default function AdminMetaPage() {
                           <p className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
                             {usingLiveMetaCards
                               ? 'Nenhuma campanha com métrica no período (todas as integrações / contas) para o filtro atual.'
-                              : 'Nenhuma campanha com métricas no cache local para este período e filtro de banca.'}
+                              : metricsOnly
+                                ? 'Nenhuma campanha com métricas no cache local para este período.'
+                                : 'Nenhuma campanha com métricas no cache local para este período e filtro de banca.'}
                           </p>
                         )}
                         {!usingLiveMetaCards && (allCampaignsRows?.length ?? 0) > 0 && (
@@ -4686,7 +4783,7 @@ export default function AdminMetaPage() {
                         <table className="w-full text-sm text-left min-w-[700px] text-gray-800 dark:text-white">
                           <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-100 sticky top-0">
                             <tr>
-                              <th className="px-4 py-2">Banca</th>
+                              {!metricsOnly ? <th className="px-4 py-2">Banca</th> : null}
                               <th className="px-4 py-2">Nome</th>
                               <th className="px-4 py-2">Status</th>
                               <th className="px-4 py-2">Campanha ID</th>
@@ -4697,7 +4794,9 @@ export default function AdminMetaPage() {
                           <tbody className="divide-y divide-gray-100 dark:divide-[#383838]">
                             {pagedSyncedAdsetRows.map((a: any) => (
                               <tr key={a.id} className="hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80">
-                                <td className="px-4 py-2 text-xs text-gray-600 dark:text-white">{selectedBancaName}</td>
+                                {!metricsOnly ? (
+                                  <td className="px-4 py-2 text-xs text-gray-600 dark:text-white">{selectedBancaName}</td>
+                                ) : null}
                                 <td className="px-4 py-2 font-medium text-gray-800 dark:text-white">{a.name || a.adset_id}</td>
                                 <td className="px-4 py-2 text-gray-700 dark:text-white">{a.effective_status || a.status || '-'}</td>
                                 <td className="px-4 py-2 text-xs text-gray-700 dark:text-white">{a.campaign_id || '-'}</td>
@@ -4760,7 +4859,7 @@ export default function AdminMetaPage() {
                         <table className="w-full text-sm text-left min-w-[1080px] text-gray-800 dark:text-white">
                           <thead className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-100 sticky top-0">
                             <tr>
-                              <th className="px-4 py-2">Banca</th>
+                              {!metricsOnly ? <th className="px-4 py-2">Banca</th> : null}
                               <th className="px-4 py-2">Data</th>
                               <th className="px-4 py-2">Campanha</th>
                               <th className="px-4 py-2"><Eye className="w-4 h-4 inline" /> Alcance</th>
@@ -4786,7 +4885,9 @@ export default function AdminMetaPage() {
                               );
                               return (
                                 <tr key={i.id} className="hover:bg-gray-50 dark:hover:bg-[#2a2a2a]/80">
-                                  <td className="px-4 py-2 text-xs text-gray-600 dark:text-white">{selectedBancaName}</td>
+                                  {!metricsOnly ? (
+                                    <td className="px-4 py-2 text-xs text-gray-600 dark:text-white">{selectedBancaName}</td>
+                                  ) : null}
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{i.date}</td>
                                   <td className="px-4 py-2 font-medium text-gray-800 dark:text-white">{i.campaign_name || i.campaign_id}</td>
                                   <td className="px-4 py-2 text-gray-700 dark:text-white">{(i.reach ?? 0).toLocaleString('pt-BR')}</td>
@@ -4852,14 +4953,20 @@ export default function AdminMetaPage() {
         <div className={metaCardOverflow}>
           <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e] flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Visão geral de todas as bancas</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Acompanhe integração e métricas Meta por banca.</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">
+                {metricsOnly ? 'Integrações Meta' : 'Visão geral de todas as bancas'}
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                {metricsOnly
+                  ? 'Status e detalhes das contas de anúncio conectadas.'
+                  : 'Acompanhe integração e métricas Meta por banca.'}
+              </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <input
                 value={overviewSearch}
                 onChange={(e) => { setOverviewSearch(e.target.value); setOverviewPage(1); }}
-                placeholder="Buscar banca por nome ou URL"
+                placeholder={metricsOnly ? 'Buscar por Ad Account ou ID…' : 'Buscar banca por nome ou URL'}
                 className="px-3 py-2 border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-500 bg-white dark:bg-[#2a2a2a]"
               />
               <button
@@ -4884,7 +4991,7 @@ export default function AdminMetaPage() {
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-gray-50 dark:bg-[#2a2a2a] text-gray-700 dark:text-gray-200">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Banca</th>
+                  {!metricsOnly ? <th className="px-4 py-3 text-left font-semibold">Banca</th> : null}
                   <th className="px-4 py-3 text-left font-semibold">Integração</th>
                   <th className="px-4 py-3 text-left font-semibold">Detalhes da integração</th>
                   <th className="px-4 py-3 text-left font-semibold">Último sync</th>
@@ -4897,6 +5004,7 @@ export default function AdminMetaPage() {
                       key={`${row.banca_id}-${row.integration_id ?? 'none'}-${row.integration_index}`}
                       className="align-top hover:bg-gray-50/60 dark:hover:bg-[#2a2a2a]/60"
                     >
+                      {!metricsOnly ? (
                       <td className="px-4 py-3">
                         <p className="font-semibold text-gray-900 dark:text-gray-50">{row.banca_name}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 break-all">{row.banca_url}</p>
@@ -4906,6 +5014,7 @@ export default function AdminMetaPage() {
                           </p>
                         ) : null}
                       </td>
+                      ) : null}
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
@@ -4951,11 +5060,11 @@ export default function AdminMetaPage() {
                                 document.getElementById('dados-sincronizados-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                               }, 0);
                             }}
-                            className="px-3 py-1.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white text-xs font-medium"
+                            className="px-3 py-1.5 rounded-lg bg-[#E86A24] hover:bg-[#D95E1B] text-white text-xs font-medium"
                           >
                             Ver dados
                           </button>
-                          {row.configured && row.integration_id ? (
+                          {row.configured && row.integration_id && !metricsOnly ? (
                             <>
                               <button
                                 type="button"
@@ -4990,7 +5099,7 @@ export default function AdminMetaPage() {
             </table>
           </div>
           {/* Paginação */}
-          {filteredOverviewRows.length > 0 && (
+          {overviewRowsForTable.length > 0 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 dark:border-[#383838] bg-gray-50/40 dark:bg-[#1e1e1e]/80">
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Exibindo{' '}
@@ -4999,10 +5108,10 @@ export default function AdminMetaPage() {
                 </span>{' '}
                 a{' '}
                 <span className="font-semibold text-gray-700 dark:text-gray-200">
-                  {Math.min(overviewPageSafe * OVERVIEW_PAGE_SIZE, filteredOverviewRows.length)}
+                  {Math.min(overviewPageSafe * OVERVIEW_PAGE_SIZE, overviewRowsForTable.length)}
                 </span>{' '}
                 de{' '}
-                <span className="font-semibold text-gray-700 dark:text-gray-200">{filteredOverviewRows.length}</span> linhas
+                <span className="font-semibold text-gray-700 dark:text-gray-200">{overviewRowsForTable.length}</span> linhas
               </p>
               <div className="flex items-center gap-1">
                 <button
@@ -5040,7 +5149,7 @@ export default function AdminMetaPage() {
                         onClick={() => setOverviewPage(item as number)}
                         className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                           overviewPageSafe === item
-                            ? 'bg-[#8CD955] border-[#8CD955] text-white'
+                            ? 'bg-[#E86A24] border-[#E86A24] text-white'
                             : 'border-gray-200 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#333]'
                         }`}
                       >
@@ -5067,15 +5176,26 @@ export default function AdminMetaPage() {
               </div>
             </div>
           )}
-          {!loadingOverview && overviewRows.length === 0 && !overviewError && (
+          {!loadingOverview && overviewRowsForTable.length === 0 && !overviewError && (
             <div className="p-6 text-sm text-center text-gray-500 dark:text-gray-400">
-              Nenhuma banca encontrada para exibir no painel geral.
+              {metricsOnly
+                ? 'Nenhuma integração Meta encontrada para exibir.'
+                : 'Nenhuma banca encontrada para exibir no painel geral.'}
             </div>
           )}
         </div>
 
 
         <div id="meta-config-section" className={metaCardOverflow}>
+          {metricsOnly ? (
+            <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e]">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">Configuração Meta Ads</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Token, conta de anúncio, pixel e sincronização com a Meta.
+              </p>
+            </div>
+          ) : null}
+          {!metricsOnly ? (
           <div className="p-4 border-b border-gray-100 dark:border-[#383838] bg-gray-50/50 dark:bg-[#1e1e1e]">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
               <Building2 className="w-4 h-4 inline mr-2" />
@@ -5111,7 +5231,7 @@ export default function AdminMetaPage() {
                     value={bancaPickerSearch}
                     onChange={(e) => setBancaPickerSearch(e.target.value)}
                     placeholder="Buscar banca…"
-                    className="w-full px-3 py-2.5 text-sm border-b border-gray-100 dark:border-[#404040] text-gray-800 dark:text-gray-100 bg-transparent placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                    className="w-full px-3 py-2.5 text-sm border-b border-gray-100 dark:border-[#404040] text-gray-800 dark:text-gray-100 bg-transparent placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30"
                     autoComplete="off"
                   />
                   <div className="overflow-y-auto p-2 space-y-0.5">
@@ -5147,7 +5267,7 @@ export default function AdminMetaPage() {
                                 setSyncedData(null);
                               }
                             }}
-                            className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                            className="mt-1 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                           />
                           <span className="min-w-0 flex-1">
                             <span className="flex flex-wrap items-center gap-1.5">
@@ -5231,10 +5351,11 @@ export default function AdminMetaPage() {
               </div>
             ) : null}
           </div>
+          ) : null}
 
           {loading && selectedBancaIds.length > 0 ? (
             <div className="p-8 flex justify-center">
-              <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
             </div>
           ) : selectedBancaIds.length > 0 ? (
             <div className="p-6 space-y-6">
@@ -5324,20 +5445,26 @@ export default function AdminMetaPage() {
                     <option value="__new__">+ Nova integração (outra conta/token)</option>
                   </select>
                   <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                    Cada opção é uma linha em{' '}
-                    <code className="text-[11px] bg-white/80 dark:bg-[#333] px-1 rounded">meta_integration_configs</code>.
-                    Testar conexão e revelar token exigem um banca_id vinculado à integração selecionada (tabela
-                    meta_integration_bancas). O filtro superior da página só vale como contexto quando essa banca também
-                    está entre os vínculos da integração atual.
+                    {metricsOnly ? (
+                      <>Selecione a conta de anúncio para testar conexão, sincronizar campanhas e editar token.</>
+                    ) : (
+                      <>
+                        Cada opção é uma linha em{' '}
+                        <code className="text-[11px] bg-white/80 dark:bg-[#333] px-1 rounded">meta_integration_configs</code>.
+                        Testar conexão e revelar token exigem um banca_id vinculado à integração selecionada (tabela
+                        meta_integration_bancas). O filtro superior da página só vale como contexto quando essa banca também
+                        está entre os vínculos da integração atual.
+                      </>
+                    )}
                   </p>
-                  {adminMetaCreateNewIntegration ? (
+                  {adminMetaCreateNewIntegration && !metricsOnly ? (
                     <p className="text-xs text-indigo-800 dark:text-indigo-200 mt-2 max-w-xl">
                       Nova integração: será criado um novo registro para esta(s) banca(s). Se você não colar um Access
                       Token, o sistema reaproveita o token já salvo de outra integração Meta vinculada à mesma banca
                       (prioridade: integração que estava selecionada antes de «Nova integração»).
                     </p>
                   ) : null}
-                  {!adminMetaCreateNewIntegration ? (
+                  {!adminMetaCreateNewIntegration && !metricsOnly ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
@@ -5531,7 +5658,7 @@ export default function AdminMetaPage() {
                       <option value="">Nenhuma</option>
                       {campaigns.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {c.campaign_kind === 'bolao' ? '[Bolão] ' : ''}
+                          {!metricsOnly && c.campaign_kind === 'bolao' ? '[Bolão] ' : ''}
                           {c.name || c.id}
                         </option>
                       ))}
@@ -5553,7 +5680,7 @@ export default function AdminMetaPage() {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   Salvar configuração
@@ -5693,12 +5820,16 @@ export default function AdminMetaPage() {
               
             </div>
           ) : (
-            <div className="p-8 text-center text-gray-500">Marque pelo menos uma banca para configurar a integração Meta.</div>
+            <div className="p-8 text-center text-gray-500">
+              {metricsOnly
+                ? 'Nenhuma integração disponível para configurar.'
+                : 'Marque pelo menos uma banca para configurar a integração Meta.'}
+            </div>
           )}
         </div>
       </div>
 
-      {consultorModalOpen && (
+      {!metricsOnly && consultorModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-2xl bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-[#404040] shadow-xl">
             <div className="px-5 py-4 border-b border-gray-100 dark:border-[#383838] flex items-center justify-between">
@@ -5816,7 +5947,7 @@ export default function AdminMetaPage() {
                                     return { ...prev, [consultorModalCampaignKey]: Array.from(current) };
                                   });
                                 }}
-                                className="mt-0.5 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                                className="mt-0.5 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                               />
                               <span className="min-w-0">
                                 <span className="block text-sm text-gray-900 dark:text-gray-50">{consultor.full_name || 'Sem nome'}</span>
@@ -5852,7 +5983,7 @@ export default function AdminMetaPage() {
                   const ok = await handleSaveCampaignConsultors(selectedConsultorModalRow);
                   if (ok) setConsultorModalOpen(false);
                 }}
-                className="px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white text-sm font-medium"
+                className="px-4 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 text-white text-sm font-medium"
               >
                 {campaignConsultorSavingKey === consultorModalCampaignKey ? 'Salvando…' : 'Salvar atribuição'}
               </button>
@@ -5880,6 +6011,7 @@ export default function AdminMetaPage() {
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">{newIntegrationError}</div>
               ) : null}
               <div className="grid gap-4 sm:grid-cols-2">
+                {!metricsOnly ? (
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">Bancas desta integração</label>
                   <div className="max-h-44 overflow-auto border border-gray-200 dark:border-[#404040] rounded-xl p-3 bg-white dark:bg-[#2a2a2a] space-y-2">
@@ -5896,7 +6028,7 @@ export default function AdminMetaPage() {
                                 : newIntegrationForm.banca_ids.filter((x) => x !== b.id);
                               setNewIntegrationForm((f) => ({ ...f, banca_ids: next }));
                             }}
-                            className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                            className="mt-1 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                           />
                           <span className="min-w-0">
                             <span className="font-medium">{b.name || b.url}</span>
@@ -5913,6 +6045,7 @@ export default function AdminMetaPage() {
                     Adiciona outra integração Meta para as bancas marcadas; as que já existiam continuam vinculadas (várias contas/tokens por banca).
                   </p>
                 </div>
+                ) : null}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">Base URL Meta</label>
                   <input
@@ -6001,7 +6134,7 @@ export default function AdminMetaPage() {
                   type="button"
                   onClick={handleCreateIntegration}
                   disabled={newIntegrationSaving}
-                  className="px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium disabled:opacity-50"
                 >
                   {newIntegrationSaving ? 'Salvando…' : 'Criar integração'}
                 </button>
@@ -6012,7 +6145,7 @@ export default function AdminMetaPage() {
       )}
 
       {/* Modal: Vincular bancas adicionais a uma integração já existente */}
-      {linkBancaModalRow && (() => {
+      {!metricsOnly && linkBancaModalRow && (() => {
         const integrationId = linkBancaModalRow.integration_id ?? '';
         const linkedToThisIntegration = new Set(
           overviewRows
@@ -6074,7 +6207,7 @@ export default function AdminMetaPage() {
                   value={linkBancaSearch}
                   onChange={(e) => setLinkBancaSearch(e.target.value)}
                   placeholder="Buscar banca…"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-[#404040] rounded-xl text-gray-800 dark:text-gray-100 bg-white dark:bg-[#2a2a2a] placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30"
                   autoComplete="off"
                 />
                 <div className="border border-gray-200 dark:border-[#404040] rounded-xl bg-white dark:bg-[#2a2a2a] divide-y divide-gray-100 dark:divide-[#383838] max-h-[50vh] overflow-y-auto">
@@ -6104,7 +6237,7 @@ export default function AdminMetaPage() {
                                 e.target.checked ? [...prev, id] : prev.filter((x) => x !== id)
                               );
                             }}
-                            className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                            className="mt-1 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                           />
                           <span className="min-w-0 flex-1">
                             <span className="flex flex-wrap items-center gap-1.5">
@@ -6144,7 +6277,7 @@ export default function AdminMetaPage() {
                   type="button"
                   onClick={() => void handleSubmitLinkBancas()}
                   disabled={linkBancaSaving || linkBancaSelectedIds.length === 0}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium disabled:opacity-50"
                 >
                   {linkBancaSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
                   {linkBancaSaving

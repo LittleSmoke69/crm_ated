@@ -257,7 +257,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between gap-3 p-3 sm:p-4 border-b border-gray-200 dark:border-[#404040]">
           <div className="flex items-center gap-2 min-w-0">
-            <Users className="w-5 h-5 text-[#8CD955] shrink-0" />
+            <Users className="w-5 h-5 text-[#E86A24] shrink-0" />
             <div className="min-w-0">
               <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white truncate">Grupos da campanha</h2>
               {job && (
@@ -282,7 +282,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
           {loading && (
             <div className="flex flex-col items-center justify-center py-16 text-gray-500 dark:text-gray-400">
-              <Loader2 className="w-8 h-8 animate-spin mb-2 text-[#8CD955]" />
+              <Loader2 className="w-8 h-8 animate-spin mb-2 text-[#E86A24]" />
               <p className="text-sm">Carregando resultados por grupo…</p>
             </div>
           )}
@@ -352,7 +352,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
                       px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors
                       ${
                         filter === tab.key
-                          ? 'bg-[#8CD955]/20 text-[#5a9a2a] dark:text-[#8CD955] border border-[#8CD955]/40'
+                          ? 'bg-[#E86A24]/20 text-[#5a9a2a] dark:text-[#E86A24] border border-[#E86A24]/40'
                           : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-400 border border-transparent hover:bg-gray-200 dark:hover:bg-[#3a3a3a]'
                       }
                     `}
@@ -432,7 +432,7 @@ const MassSendJobDetailModal: React.FC<MassSendJobDetailModalProps> = ({
               type="button"
               disabled={retrying || !userId || loading}
               onClick={handleRetryFailures}
-              className="px-4 py-2.5 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center justify-center gap-2"
+              className="px-4 py-2.5 rounded-lg bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center justify-center gap-2"
             >
               {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
               Nova campanha só com falhas ({failedIds.length})

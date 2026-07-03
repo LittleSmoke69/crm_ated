@@ -142,7 +142,7 @@ const QRCodeModal: React.FC<QRCodeModalProps> = ({
               Escaneie este QR Code com o WhatsApp para reconectar a instância
             </p>
             <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 dark:bg-[#333] text-xs text-gray-600 dark:text-gray-400">
-              <Smartphone className="w-4 h-4 flex-shrink-0 text-[#8CD955]" />
+              <Smartphone className="w-4 h-4 flex-shrink-0 text-[#E86A24]" />
               <span>WhatsApp → Menu (☰) → Aparelhos conectados → Conectar um aparelho</span>
             </div>
           </div>

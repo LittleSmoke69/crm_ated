@@ -301,7 +301,7 @@ export const CampaignModal: React.FC<CampaignModalProps> = ({
               onChange={(e) => setText(e.target.value)}
               placeholder="Digite o texto da campanha..."
               rows={4}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 resize-y"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 resize-y"
               disabled={isSubmitting}
             />
           </div>
@@ -315,7 +315,7 @@ export const CampaignModal: React.FC<CampaignModalProps> = ({
             {!file ? (
               <div
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD95515] transition-colors"
+                className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-[#E86A24] hover:bg-[#E86A2415] transition-colors"
               >
                 <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                 <p className="text-sm text-gray-600 mb-1">
@@ -404,7 +404,7 @@ export const CampaignModal: React.FC<CampaignModalProps> = ({
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div
-                  className="bg-[#8CD955] h-2 rounded-full transition-all duration-300"
+                  className="bg-[#E86A24] h-2 rounded-full transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -424,7 +424,7 @@ export const CampaignModal: React.FC<CampaignModalProps> = ({
           <button
             onClick={handleConfirm}
             disabled={isSubmitting || !text.trim()}
-            className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? 'Enviando...' : 'Confirmar criação'}
           </button>

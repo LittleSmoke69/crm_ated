@@ -4,6 +4,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { MoreHorizontal, Plus, Loader2 } from 'lucide-react';
 import { Lead } from './types';
 import LeadCard from './LeadCard';
+import { zapCard } from '@/lib/zap-card-styles';
 
 interface KanbanColumnProps {
   id: string;
@@ -121,100 +122,45 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       setVisibleRange({ start: 0, end });
     }
   }, [sortedLeads.length, itemHeight]);
-  // Map column colors to Tailwind classes or inline styles
   const getHeaderColor = () => {
-    switch (color) {
-      case 'gray': return 'bg-gray-100 text-gray-700';
-      case 'blue': return 'bg-blue-100 text-blue-700';
-      case 'green':
-      case 'emerald': return 'bg-gray-100';
-      case 'purple': return 'bg-purple-100 text-purple-700';
-      case 'slate': return 'bg-slate-200 text-slate-700';
-      case 'amber': return 'bg-amber-100 text-amber-700';
-      case 'red': return 'bg-red-100 text-red-700';
-      case 'rose': return 'bg-rose-100 text-rose-700';
-      case 'orange': return 'bg-orange-100 text-orange-700';
-      case 'indigo': return 'bg-indigo-100 text-indigo-700';
-      case 'teal': return 'bg-teal-100 text-teal-700';
-      case 'zinc': return 'bg-zinc-200 text-zinc-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
-  };
-  
-  const getHeaderStyle = () => {
-    if (color === 'green' || color === 'emerald') {
-      return { color: '#8CD955', backgroundColor: '#8CD95515' };
-    }
-    return {};
+    return 'border border-[#E86A24]/30 bg-[#E86A24]/15 text-[#E86A24]';
   };
 
-  const getBgColor = () => {
-    switch (color) {
-      case 'gray': return 'bg-gray-50/50';
-      case 'blue': return 'bg-blue-50/50';
-      case 'green':
-      case 'emerald': return 'bg-gray-50/50';
-      case 'purple': return 'bg-purple-50/50';
-      case 'slate': return 'bg-slate-50/50';
-      case 'amber': return 'bg-amber-50/50';
-      case 'red': return 'bg-red-50/50';
-      case 'rose': return 'bg-rose-50/50';
-      case 'orange': return 'bg-orange-50/50';
-      case 'indigo': return 'bg-indigo-50/50';
-      case 'teal': return 'bg-teal-50/50';
-      case 'zinc': return 'bg-zinc-50/50';
-      default: return 'bg-gray-50/50';
-    }
-  };
+  const getHeaderStyle = () => ({});
 
-  const getBorderColor = () => {
-    switch (color) {
-      case 'gray': return 'border-gray-200';
-      case 'blue': return 'border-blue-200';
-      case 'green':
-      case 'emerald': return 'border-gray-200';
-      case 'purple': return 'border-purple-200';
-      case 'slate': return 'border-slate-200';
-      case 'amber': return 'border-amber-200';
-      case 'red': return 'border-red-200';
-      case 'rose': return 'border-rose-200';
-      case 'orange': return 'border-orange-200';
-      case 'indigo': return 'border-indigo-200';
-      case 'teal': return 'border-teal-200';
-      case 'zinc': return 'border-zinc-200';
-      default: return 'border-gray-200';
-    }
-  };
+  const getBgColor = () => '';
+
+  const getBorderColor = () => 'border-[#E86A24]/20';
 
   return (
     <div 
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => onDrop(e, id)}
-      className={`flex flex-col min-w-[340px] w-full max-w-[420px] h-full min-h-[500px] rounded-[32px] border-2 ${getBorderColor()} dark:border-[#404040] ${getBgColor()} dark:bg-[#2a2a2a] overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md`}
+      className={`${zapCard} flex h-full min-h-[500px] w-full max-w-[420px] min-w-[340px] flex-col overflow-hidden transition-all duration-300 hover:shadow-[#E86A24]/20`}
     >
       {/* Column Header */}
-      <div className="p-6 flex items-center justify-between bg-gray-100/60 dark:bg-[#333]/80 backdrop-blur-md border-b border-black/5 dark:border-[#404040]">
+      <div className="flex items-center justify-between border-b border-[#404040] bg-[#333]/60 p-6 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <span 
-            className={`px-4 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest ${getHeaderColor()} shadow-sm border border-black/5`}
+            className={`rounded-xl px-4 py-1.5 text-[11px] font-black uppercase tracking-widest shadow-sm ${getHeaderColor()}`}
             style={getHeaderStyle()}
           >
             {title}
           </span>
-          <span className="text-gray-600 dark:text-gray-300 text-[11px] font-black bg-white dark:bg-[#404040] px-3 py-1.5 rounded-xl border border-gray-100 dark:border-[#555] shadow-sm" title={totalLeads != null ? `${count} exibidos de ${totalLeads} no total` : undefined}>
+          <span className="rounded-xl border border-[#404040] bg-[#333] px-3 py-1.5 text-[11px] font-black text-gray-300 shadow-sm" title={totalLeads != null ? `${count} exibidos de ${totalLeads} no total` : undefined}>
             {totalLeads != null ? `${count}/${totalLeads}` : count}
           </span>
         </div>
         <div className="flex items-center gap-1">
           <button 
             onClick={() => onAddLead?.(id)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-white rounded-lg transition-all"
+            className="rounded-lg p-1.5 text-gray-400 transition-all hover:bg-[#404040] hover:text-[#E86A24]"
           >
             <Plus className="w-4 h-4" />
           </button>
           <button 
             onClick={() => onOpenSortModal?.(id)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-white rounded-lg transition-all"
+            className="rounded-lg p-1.5 text-gray-400 transition-all hover:bg-[#404040] hover:text-[#E86A24]"
           >
             <MoreHorizontal className="w-4 h-4" />
           </button>
@@ -224,7 +170,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
       {/* Leads List - Virtualizado para performance quando há muitos leads */}
       <div 
         ref={listContainerRef}
-        className="flex-1 overflow-y-auto p-4 custom-scrollbar min-h-0"
+        className="flex-1 overflow-y-auto p-4 custom-scrollbar min-h-0 bg-[#1a1a1a]/40"
         onScroll={handleScroll}
         style={{
           position: 'relative',
@@ -303,7 +249,7 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
               className={`w-full py-3 flex items-center justify-center gap-2 text-sm font-bold rounded-xl transition-all border-2 bg-white/50 ${
                 isLoadingMore
                   ? 'text-gray-400 border-gray-200 cursor-not-allowed'
-                  : 'text-[#6AB83D] hover:bg-[#8CD955]/10 border-[#8CD955]/30 hover:border-[#8CD955]'
+                  : 'text-[#C9531A] hover:bg-[#E86A24]/10 border-[#E86A24]/30 hover:border-[#E86A24]'
               }`}
             >
               {isLoadingMore ? (
@@ -327,10 +273,10 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
         <button 
           onClick={() => onAddLead?.(id)}
           className="w-full py-3 flex items-center justify-center gap-2 text-sm font-black text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-[#404040] rounded-xl transition-all border border-dashed border-gray-300 dark:border-[#555] hover:shadow-sm"
-          style={{ '--hover-color': '#8CD955', '--hover-border': '#8CD955' } as React.CSSProperties}
+          style={{ '--hover-color': '#E86A24', '--hover-border': '#E86A24' } as React.CSSProperties}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#8CD955';
-            e.currentTarget.style.borderColor = '#8CD955';
+            e.currentTarget.style.color = '#E86A24';
+            e.currentTarget.style.borderColor = '#E86A24';
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.color = '#6B7280';

@@ -66,7 +66,7 @@ const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, data = [] }) => 
         <select
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
-          className="text-sm border border-gray-300 dark:border-[#555] rounded-lg px-3 py-1.5 text-gray-700 dark:text-white dark:bg-[#333] focus:outline-none focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00]"
+          className="text-sm border border-gray-300 dark:border-[#555] rounded-lg px-3 py-1.5 text-gray-700 dark:text-white dark:bg-[#333] focus:outline-none focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00]"
         >
           <option value="7">Últimos 7 dias</option>
           <option value="30">Últimos 30 dias</option>
@@ -108,10 +108,10 @@ const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, data = [] }) => 
             <Line
               type="monotone"
               dataKey="adicoes"
-              stroke={isDark ? '#00ff00' : '#8CD955'}
+              stroke={isDark ? '#00ff00' : '#E86A24'}
               strokeWidth={2}
               name="Adições aos Grupos"
-              dot={{ fill: isDark ? '#00ff00' : '#8CD955', r: 4 }}
+              dot={{ fill: isDark ? '#00ff00' : '#E86A24', r: 4 }}
               activeDot={{ r: 6 }}
             />
           </LineChart>

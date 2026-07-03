@@ -178,7 +178,7 @@ export default function FlowsPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -237,7 +237,7 @@ export default function FlowsPage() {
             </button>
             <button
               onClick={() => router.push('/admin/flows/new')}
-              className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition"
+              className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
             >
               <Plus className="w-5 h-5" />
               Criar Flow
@@ -247,7 +247,7 @@ export default function FlowsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
           </div>
         ) : flows.length === 0 ? (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-lg shadow-md p-8 text-center text-gray-500 dark:text-gray-400">
@@ -256,7 +256,7 @@ export default function FlowsPage() {
             <p className="text-sm mb-4">Crie seu primeiro flow para começar a automatizar</p>
             <button
               onClick={() => router.push('/admin/flows/new')}
-              className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition"
+              className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
             >
               Criar Primeiro Flow
             </button>
@@ -286,7 +286,7 @@ export default function FlowsPage() {
                       </span>
                     </div>
                   </div>
-                  <Workflow className="w-8 h-8 text-[#8CD955] flex-shrink-0" />
+                  <Workflow className="w-8 h-8 text-[#E86A24] flex-shrink-0" />
                 </div>
 
                 <div className="text-xs text-gray-500 dark:text-gray-400 mb-4">
@@ -296,7 +296,7 @@ export default function FlowsPage() {
                 <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100 dark:border-[#353535]">
                   <button
                     onClick={() => router.push(`/admin/flows/${flow.id}`)}
-                    className="flex-1 min-w-[100px] px-3 py-2 bg-[#8CD955] hover:bg-[#7CC845] text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                    className="flex-1 min-w-[100px] px-3 py-2 bg-[#E86A24] hover:bg-[#7CC845] text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
                   >
                     <Edit className="w-4 h-4" />
                     Editar

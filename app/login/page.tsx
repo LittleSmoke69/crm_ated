@@ -11,29 +11,7 @@ import {
   clearZaplotoSlugCookie,
   isCentralZaplotoAuthPath,
 } from '@/lib/utils/tenant-href';
-
-/** Mapeia o status (role) do perfil para a rota inicial de acesso. */
-function getLandingRouteByStatus(status: string | null | undefined): string {
-  switch (status) {
-    case 'super_admin':
-    case 'admin':
-      return '/admin';
-    case 'dono_banca':
-      return '/dono-banca';
-    case 'gestor':
-      return '/gestor-trafego';
-    case 'gerente':
-      return '/gerente';
-    case 'consultor':
-      return '/consultor';
-    case 'auditoria':
-      return '/admin';
-    case 'suporte':
-      return '/admin/hierarchy';
-    default:
-      return '/';
-  }
-}
+import { getLandingRouteByStatus } from '@/lib/utils/landing-route';
 
 const LoginPage = () => {
   const router = useTenantRouter();
@@ -111,7 +89,7 @@ const LoginPage = () => {
 
       setSessionArtifacts(userId, userEmail, status);
 
-      // Login na ZapLoto central: remove cookie WL antigo (evita /admin → /suarifa/admin).
+      // Login na crm-atendimento central: remove cookie WL antigo (evita /admin → /suarifa/admin).
       if (typeof window !== 'undefined' && isCentralZaplotoAuthPath(window.location.pathname)) {
         clearZaplotoSlugCookie();
       }
@@ -246,7 +224,7 @@ const LoginPage = () => {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-500 dark:text-[#888] mt-6 px-2">
-          © 2026 ZAPLOTO. Todos os direitos reservados.
+          © 2026 crmTR. Todos os direitos reservados.
         </p>
       </div>
     </div>

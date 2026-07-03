@@ -465,50 +465,50 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
           <div className="flex items-center justify-between mb-4 overflow-x-auto">
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
-                currentStep >= 1 ? 'bg-[#8CD955] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
+                currentStep >= 1 ? 'bg-[#E86A24] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
               }`}>
                 {currentStep > 1 ? <CheckCircle2 className="w-5 h-5" /> : '1'}
               </div>
-              <span className={`text-xs font-medium ${currentStep >= 1 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`text-xs font-medium ${currentStep >= 1 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                 Escolha
               </span>
             </div>
             <div className="flex-1 h-0.5 bg-gray-300 dark:bg-[#404040] mx-2">
-              <div className={`h-full transition-all ${currentStep >= 2 ? 'bg-[#8CD955]' : ''}`} style={{ width: currentStep >= 2 ? '100%' : '0%' }}></div>
+              <div className={`h-full transition-all ${currentStep >= 2 ? 'bg-[#E86A24]' : ''}`} style={{ width: currentStep >= 2 ? '100%' : '0%' }}></div>
             </div>
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
-                currentStep >= 2 ? 'bg-[#8CD955] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
+                currentStep >= 2 ? 'bg-[#E86A24] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
               }`}>
                 {currentStep > 2 ? <CheckCircle2 className="w-5 h-5" /> : '2'}
               </div>
-              <span className={`text-xs font-medium ${currentStep >= 2 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`text-xs font-medium ${currentStep >= 2 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                 Data e Hora
               </span>
             </div>
             <div className="flex-1 h-0.5 bg-gray-300 dark:bg-[#404040] mx-2">
-              <div className={`h-full transition-all ${currentStep >= 3 ? 'bg-[#8CD955]' : ''}`} style={{ width: currentStep >= 3 ? '100%' : '0%' }}></div>
+              <div className={`h-full transition-all ${currentStep >= 3 ? 'bg-[#E86A24]' : ''}`} style={{ width: currentStep >= 3 ? '100%' : '0%' }}></div>
             </div>
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
-                currentStep >= 3 ? 'bg-[#8CD955] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
+                currentStep >= 3 ? 'bg-[#E86A24] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
               }`}>
                 {currentStep > 3 ? <CheckCircle2 className="w-5 h-5" /> : '3'}
               </div>
-              <span className={`text-xs font-medium ${currentStep >= 3 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`text-xs font-medium ${currentStep >= 3 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                 Grupos
               </span>
             </div>
             <div className="flex-1 h-0.5 bg-gray-300 dark:bg-[#404040] mx-2">
-              <div className={`h-full transition-all ${currentStep >= 4 ? 'bg-[#8CD955]' : ''}`} style={{ width: currentStep >= 4 ? '100%' : '0%' }}></div>
+              <div className={`h-full transition-all ${currentStep >= 4 ? 'bg-[#E86A24]' : ''}`} style={{ width: currentStep >= 4 ? '100%' : '0%' }}></div>
             </div>
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
-                currentStep >= 4 ? 'bg-[#8CD955] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
+                currentStep >= 4 ? 'bg-[#E86A24] text-white' : 'bg-gray-300 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
               }`}>
                 4
               </div>
-              <span className={`text-xs font-medium ${currentStep >= 4 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`text-xs font-medium ${currentStep >= 4 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                 Confirmar
               </span>
             </div>
@@ -528,14 +528,14 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                 onClick={() => setSelectedAction('send')}
                 className={`w-full p-4 rounded-xl border-2 transition-all text-left ${
                   selectedAction === 'send'
-                    ? 'border-[#8CD955] bg-[#8CD955]/10'
-                    : 'border-gray-300 dark:border-[#555] hover:border-[#8CD955]/50'
+                    ? 'border-[#E86A24] bg-[#E86A24]/10'
+                    : 'border-gray-300 dark:border-[#555] hover:border-[#E86A24]/50'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
                     selectedAction === 'send'
-                      ? 'bg-[#8CD955] border-[#8CD955]'
+                      ? 'bg-[#E86A24] border-[#E86A24]'
                       : 'border-gray-300 dark:border-[#555]'
                   }`}>
                     {selectedAction === 'send' && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
@@ -557,7 +557,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                   onClick={() => setScheduleType('once')}
                   className={`flex-1 p-3 rounded-xl border-2 transition-all ${
                     scheduleType === 'once'
-                      ? 'border-[#8CD955] bg-[#8CD955]/10'
+                      ? 'border-[#E86A24] bg-[#E86A24]/10'
                       : 'border-gray-300 dark:border-[#555]'
                   }`}
                 >
@@ -567,7 +567,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                   onClick={() => setScheduleType('recurring')}
                   className={`flex-1 p-3 rounded-xl border-2 transition-all ${
                     scheduleType === 'recurring'
-                      ? 'border-[#8CD955] bg-[#8CD955]/10'
+                      ? 'border-[#E86A24] bg-[#E86A24]/10'
                       : 'border-gray-300 dark:border-[#555]'
                   }`}
                 >
@@ -603,7 +603,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                         return `${y}-${m}-${d}T${h}:${min}`;
                       })()}
                       step="300"
-                      className="w-full px-4 py-3 text-base border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333] [color-scheme:light] dark:[color-scheme:dark]"
+                      className="w-full px-4 py-3 text-base border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333] [color-scheme:light] dark:[color-scheme:dark]"
                     />
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Um único campo para escolher data e hora</p>
                   </div>
@@ -619,14 +619,14 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                           onClick={() => toggleDay(day.value)}
                           className={`p-3 rounded-xl border-2 transition-all text-left ${
                             recurringDays.has(day.value)
-                              ? 'border-[#8CD955] bg-[#8CD955]/10'
+                              ? 'border-[#E86A24] bg-[#E86A24]/10'
                               : 'border-gray-300 dark:border-[#555]'
                           }`}
                         >
                           <div className="flex items-center gap-2">
                             <div className={`w-4 h-4 rounded border flex items-center justify-center ${
                               recurringDays.has(day.value)
-                                ? 'bg-[#8CD955] border-[#8CD955]'
+                                ? 'bg-[#E86A24] border-[#E86A24]'
                                 : 'border-gray-300 dark:border-[#555]'
                             }`}>
                               {recurringDays.has(day.value) && <Check className="w-3 h-3 text-white stroke-[3]" />}
@@ -647,8 +647,8 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                           onClick={() => setRecurringTime(t)}
                           className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                             recurringTime === t
-                              ? 'bg-[#8CD955] text-white border-2 border-[#8CD955]'
-                              : 'bg-white dark:bg-[#333] text-gray-700 dark:text-gray-300 border-2 border-gray-300 dark:border-[#555] hover:border-[#8CD955]/50'
+                              ? 'bg-[#E86A24] text-white border-2 border-[#E86A24]'
+                              : 'bg-white dark:bg-[#333] text-gray-700 dark:text-gray-300 border-2 border-gray-300 dark:border-[#555] hover:border-[#E86A24]/50'
                           }`}
                         >
                           {t}
@@ -660,7 +660,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                       value={recurringTime}
                       onChange={(e) => setRecurringTime(e.target.value)}
                       step="300"
-                      className="w-full px-4 py-3 text-base border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333] [color-scheme:light] dark:[color-scheme:dark]"
+                      className="w-full px-4 py-3 text-base border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333] [color-scheme:light] dark:[color-scheme:dark]"
                     />
                   </div>
                   
@@ -686,7 +686,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                 <select
                   value={selectedInstance}
                   onChange={(e) => setSelectedInstance(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-800 dark:text-white"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-800 dark:text-white"
                 >
                   {instances.length === 0 ? (
                     <option value="" className="text-gray-800">Nenhuma instância conectada</option>
@@ -715,7 +715,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                   <button 
                     onClick={fetchEvolutionGroups}
                     disabled={fetchingAll || !selectedInstance}
-                    className="text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    className="text-[#E86A24] hover:text-[#D95E1B] flex items-center gap-1.5 font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
                     {fetchingAll ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -744,7 +744,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                   placeholder="Pesquisar grupos..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl pl-10 pr-4 py-2.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                  className="w-full bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl pl-10 pr-4 py-2.5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] placeholder:text-gray-500 dark:placeholder:text-gray-400"
                 />
               </div>
 
@@ -752,7 +752,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                 <label className="flex items-center gap-3 cursor-pointer">
                   <div className={`w-5 h-5 rounded border flex items-center justify-center ${
                     selectedGroups.size === filteredGroups.length && filteredGroups.length > 0
-                      ? 'bg-[#8CD955] border-[#8CD955]'
+                      ? 'bg-[#E86A24] border-[#E86A24]'
                       : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555]'
                   }`}>
                     {selectedGroups.size === filteredGroups.length && filteredGroups.length > 0 && (
@@ -761,7 +761,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                   </div>
                   <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Selecionar todos os grupos</span>
                 </label>
-                <span className="text-[#8CD955] font-bold text-sm">
+                <span className="text-[#E86A24] font-bold text-sm">
                   {selectedGroups.size} grupo{selectedGroups.size !== 1 ? 's' : ''} selecionado{selectedGroups.size !== 1 ? 's' : ''}
                 </span>
               </div>
@@ -770,7 +770,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               <div className="max-h-64 overflow-y-auto space-y-1 border border-gray-200 dark:border-[#404040] rounded-xl p-2">
                 {loading ? (
                   <div className="flex items-center justify-center py-8">
-                    <Loader2 className="w-6 h-6 text-[#8CD955] animate-spin" />
+                    <Loader2 className="w-6 h-6 text-[#E86A24] animate-spin" />
                   </div>
                 ) : filteredGroups.length === 0 ? (
                   <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">Nenhum grupo encontrado</div>
@@ -781,19 +781,19 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
                       onClick={() => toggleGroup(group.id)}
                       className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${
                         selectedGroups.has(group.id)
-                          ? 'bg-[#8CD955]/10 border border-[#8CD955]/40'
-                          : 'hover:bg-[#8CD955]/5 border border-transparent'
+                          ? 'bg-[#E86A24]/10 border border-[#E86A24]/40'
+                          : 'hover:bg-[#E86A24]/5 border border-transparent'
                       }`}
                     >
                       <div className={`w-5 h-5 rounded border flex items-center justify-center ${
                         selectedGroups.has(group.id)
-                          ? 'bg-[#8CD955] border-[#8CD955]'
+                          ? 'bg-[#E86A24] border-[#E86A24]'
                           : 'bg-white dark:bg-[#333] border-gray-300 dark:border-[#555]'
                       }`}>
                         {selectedGroups.has(group.id) && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
                       </div>
                       <span className={`text-sm font-medium truncate ${
-                        selectedGroups.has(group.id) ? 'text-[#6AB83D]' : 'text-gray-700 dark:text-gray-300'
+                        selectedGroups.has(group.id) ? 'text-[#C9531A]' : 'text-gray-700 dark:text-gray-300'
                       }`}>
                         {group.subject}
                       </span>
@@ -856,7 +856,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               id="dontShowAgain"
               checked={dontShowAgain}
               onChange={(e) => setDontShowAgain(e.target.checked)}
-              className="w-4 h-4 text-[#8CD955] rounded focus:ring-[#8CD955]"
+              className="w-4 h-4 text-[#E86A24] rounded focus:ring-[#E86A24]"
             />
             <label htmlFor="dontShowAgain" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               Não mostrar novamente
@@ -877,7 +877,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               <button
                 onClick={handleNext}
                 disabled={!canGoToNextStep()}
-                className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:hover:bg-[#8CD955] text-white font-bold rounded-xl transition-all flex items-center gap-2"
+                className="px-6 py-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:hover:bg-[#E86A24] text-white font-bold rounded-xl transition-all flex items-center gap-2"
               >
                 Continuar
                 <ArrowRight className="w-4 h-4" />
@@ -886,7 +886,7 @@ const ScheduleMessageModal: React.FC<ScheduleMessageModalProps> = ({
               <button
                 onClick={handleSave}
                 disabled={saving || !canGoToNextStep()}
-                className="px-6 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:hover:bg-[#8CD955] text-white font-bold rounded-xl transition-all flex items-center gap-2"
+                className="px-6 py-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:hover:bg-[#E86A24] text-white font-bold rounded-xl transition-all flex items-center gap-2"
               >
                 {saving ? (
                   <>

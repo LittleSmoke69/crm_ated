@@ -137,7 +137,7 @@ export default function ZaplinkFormPage() {
                     value={formData.full_name}
                     onChange={(e) => setFormData((p) => ({ ...p, full_name: e.target.value }))}
                     placeholder="Seu nome"
-                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                     required
                   />
                 </div>
@@ -151,7 +151,7 @@ export default function ZaplinkFormPage() {
                     value={formData.email}
                     onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))}
                     placeholder="seu@email.com"
-                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                     required
                   />
                 </div>
@@ -165,7 +165,7 @@ export default function ZaplinkFormPage() {
                     value={formData.phone}
                     onChange={(e) => setFormData((p) => ({ ...p, phone: e.target.value }))}
                     placeholder="(00) 00000-0000"
-                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                     required
                   />
                 </div>
@@ -183,7 +183,7 @@ export default function ZaplinkFormPage() {
                         setFormData((p) => ({ ...p, instagram_handle: v }));
                       }}
                       placeholder="@seuinstagram"
-                      className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                      className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                       required={isInfluenciador}
                     />
                   </div>
@@ -192,7 +192,7 @@ export default function ZaplinkFormPage() {
               )}
               <button
                 type="submit"
-                className="w-full py-3 rounded-lg text-white font-semibold transition flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600]"
+                className="w-full py-3 rounded-lg text-white font-semibold transition flex items-center justify-center gap-2 shadow-md hover:shadow-lg bg-[#E86A24] dark:bg-[#00ff00] hover:bg-[#D95E1B] dark:hover:bg-[#00e600]"
               >
                 Continuar
               </button>
@@ -227,7 +227,7 @@ export default function ZaplinkFormPage() {
                   type="button"
                   onClick={handleConfirm}
                   disabled={loading}
-                  className="flex-1 py-3 rounded-lg text-white font-semibold transition flex items-center justify-center gap-2 shadow-md bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600] disabled:opacity-50"
+                  className="flex-1 py-3 rounded-lg text-white font-semibold transition flex items-center justify-center gap-2 shadow-md bg-[#E86A24] dark:bg-[#00ff00] hover:bg-[#D95E1B] dark:hover:bg-[#00e600] disabled:opacity-50"
                 >
                   {loading ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />

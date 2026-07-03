@@ -972,7 +972,7 @@ export default function DonoBancaHierarquia({
                 disabled={bancasLoading}
                 className="flex items-center gap-2 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 px-4 py-3 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm disabled:opacity-80"
               >
-                <Filter className="w-4 h-4 text-[#8CD955]" />
+                <Filter className="w-4 h-4 text-[#E86A24]" />
                 {bancasLoading ? 'Carregando bancas...' : 'Selecione uma banca'}
                 <ChevronDown className="w-4 h-4 ml-auto" />
               </button>
@@ -1184,7 +1184,7 @@ export default function DonoBancaHierarquia({
                   }}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                 >
-                  <Filter className="w-4 h-4 text-[#8CD955]" />
+                  <Filter className="w-4 h-4 text-[#E86A24]" />
                   <span className="truncate max-w-[140px] sm:max-w-none">{bancas.find((b) => b.id === selectedBancaId)?.name ?? 'Banca'}</span>
                   <ChevronDown className="w-4 h-4 shrink-0" />
                 </button>
@@ -1205,7 +1205,7 @@ export default function DonoBancaHierarquia({
                           setShowBancaFilter(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
-                          selectedBancaId === banca.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          selectedBancaId === banca.id ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         {banca.name}
@@ -1222,7 +1222,7 @@ export default function DonoBancaHierarquia({
                   onClick={() => setShowDatePicker(!showDatePicker)}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                 >
-                  <Calendar className="w-4 h-4 text-[#8CD955]" />
+                  <Calendar className="w-4 h-4 text-[#E86A24]" />
                   <span>
                     {dateFilter === 'daily' && 'Hoje'}
                     {dateFilter === 'yesterday' && 'Ontem'}
@@ -1246,7 +1246,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'daily' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'daily' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Hoje
@@ -1259,7 +1259,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'yesterday' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'yesterday' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Ontem
@@ -1272,7 +1272,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '7days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '7days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 7 dias
@@ -1285,7 +1285,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '15days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '15days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 15 dias
@@ -1298,7 +1298,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '30days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '30days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 30 dias
@@ -1311,7 +1311,7 @@ export default function DonoBancaHierarquia({
                           if (appliedEndDate) setCustomEndDate(appliedEndDate);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'custom' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'custom' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Personalizado
@@ -1324,7 +1324,7 @@ export default function DonoBancaHierarquia({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'all' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Todo o Período
@@ -1340,7 +1340,7 @@ export default function DonoBancaHierarquia({
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <div>
@@ -1351,7 +1351,7 @@ export default function DonoBancaHierarquia({
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <button
@@ -1363,7 +1363,7 @@ export default function DonoBancaHierarquia({
                             }
                           }}
                           disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         >
                           Aplicar
                         </button>
@@ -1391,7 +1391,7 @@ export default function DonoBancaHierarquia({
           
           <div>
             {loadingMetrics && !externalMetrics ? (
-              <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 dark:border-emerald-700/50">
+              <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 dark:border-emerald-700/50">
                 <div className="flex items-center gap-2 mb-6">
                   <BarChart3 className="w-6 h-6 text-white" />
                   <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
@@ -1411,7 +1411,7 @@ export default function DonoBancaHierarquia({
                 </div>
               </div>
             ) : externalMetrics ? (
-              <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 dark:border-emerald-700/50">
+              <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 dark:border-emerald-700/50">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
                 <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
@@ -1513,7 +1513,7 @@ export default function DonoBancaHierarquia({
               </div>
             </div>
             ) : (
-              <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 dark:border-emerald-700/50">
+              <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] dark:from-emerald-800 dark:to-emerald-900 p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 dark:border-emerald-700/50">
                 <div className="text-center py-8">
                   <AlertCircle className="w-12 h-12 text-white/80 mx-auto mb-4" />
                   <p className="text-white font-medium">Dados externos não encontrados</p>
@@ -1590,7 +1590,7 @@ export default function DonoBancaHierarquia({
         {externalMetrics && (
           <div className="bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-4 sm:mb-6 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                 Análise Detalhada do Resumo Geral
               </h2>
               
@@ -1777,7 +1777,7 @@ export default function DonoBancaHierarquia({
         <div className="relative">
           {loadingMetrics && (
             <div className="absolute inset-0 bg-white/85 dark:bg-[#1a1a1a]/90 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3 min-h-[280px]">
-              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
+              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#E86A24] border-t-transparent" />
               <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Carregando gerentes e consultores...</p>
             </div>
           )}

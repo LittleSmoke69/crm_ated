@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 /**
  * Recalcula métricas de todas as campanhas usando COUNT por campanha (evita limite de linhas do PostgREST).
@@ -77,6 +78,10 @@ export async function GET(req: NextRequest) {
     const canAccess = profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'dono_banca';
     if (!canAccess) {
       return errorResponse('Acesso negado. Apenas administradores podem acessar.', 403);
+    }
+
+    if (!isEvolutionStackEnabled()) {
+      return successResponse([]);
     }
 
     const { searchParams } = new URL(req.url);

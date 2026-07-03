@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
         )
       `);
 
-    // evolution_instances.zaploto_id pode ser NULL (legado); no tenant padrão isso equivale ao ZapLoto central.
+    // evolution_instances.zaploto_id pode ser NULL (legado); no tenant padrão isso equivale ao crm-atendimento central.
     if (!isSuperAdmin) {
       if (instancesZaplotoScopeId === ZAPLOTO_DEFAULT_TENANT_ID) {
         query = query.or(

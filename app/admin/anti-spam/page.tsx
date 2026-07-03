@@ -648,16 +648,16 @@ export default function AdminAntiSpamPage() {
   const totalPages = Math.ceil(actionsTotal / 25);
 
   const inputClass =
-    'mt-1 block w-full rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 [color-scheme:light] dark:[color-scheme:dark]';
+    'mt-1 block w-full rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/20 [color-scheme:light] dark:[color-scheme:dark]';
   const inputClassInline =
-    'rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#8CD955] focus:ring-2 focus:ring-[#8CD955]/20 [color-scheme:light] dark:[color-scheme:dark]';
+    'rounded-lg border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] px-3 py-2 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder-gray-400 focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/20 [color-scheme:light] dark:[color-scheme:dark]';
 
   return (
     <Layout>
       <div className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto">
         {verifyingGroups && (
-          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border-b-2 border-[#8CD955]/50 shadow-sm">
-            <Loader2 className="h-5 w-5 animate-spin text-[#8CD955]" />
+          <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-2 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 lg:-mx-8 lg:-mt-8 lg:px-8 lg:pt-8 mb-4 flex items-center justify-center gap-2 rounded-b-lg bg-[#E86A24]/15 dark:bg-[#E86A24]/20 border-b-2 border-[#E86A24]/50 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-[#E86A24]" />
             <span className="text-sm font-medium text-gray-800 dark:text-gray-200">Verificação de grupos em andamento em segundo plano</span>
           </div>
         )}
@@ -665,7 +665,7 @@ export default function AdminAntiSpamPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <Shield className="h-8 w-8 text-[#8CD955]" />
+                <Shield className="h-8 w-8 text-[#E86A24]" />
                 Anti-Spam
               </h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -746,7 +746,7 @@ export default function AdminAntiSpamPage() {
                 onClick={() => setActiveTab(tab)}
                 className={`px-4 py-3 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
                   activeTab === tab
-                    ? 'border-[#8CD955] text-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/15'
+                    ? 'border-[#E86A24] text-[#E86A24] bg-[#E86A24]/10 dark:bg-[#E86A24]/15'
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                 }`}
               >
@@ -769,7 +769,7 @@ export default function AdminAntiSpamPage() {
                 type="button"
                 onClick={handleTestRun}
                 disabled={loading}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 shrink-0 transition"
+                className="inline-flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 shrink-0 transition"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                 Executar teste
@@ -902,7 +902,7 @@ export default function AdminAntiSpamPage() {
                     })
                   }
                   disabled={saving || !instances.length}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 transition"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                   {configs.length > 0 ? 'Nova configuração para esta banca' : 'Criar configuração'}
@@ -944,7 +944,7 @@ export default function AdminAntiSpamPage() {
                     type="button"
                     onClick={handleVerifyGroups}
                     disabled={verifyingGroups || loadingGroups}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 transition"
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 transition"
                   >
                     {verifyingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
                     Verificar grupos
@@ -1050,12 +1050,12 @@ export default function AdminAntiSpamPage() {
                             className="flex items-center gap-2 text-left min-w-0 flex-1"
                           >
                             {busy ? (
-                              <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" />
+                              <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#E86A24]" />
                             ) : (
                               <span
                                 className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center ${
                                   isProtected
-                                    ? 'bg-[#8CD955] border-[#8CD955] text-white'
+                                    ? 'bg-[#E86A24] border-[#E86A24] text-white'
                                     : 'border-gray-400 dark:border-gray-500'
                                 }`}
                               >
@@ -1111,7 +1111,7 @@ export default function AdminAntiSpamPage() {
                         <button
                           type="button"
                           onClick={() => handleAddBlacklist(r.phone)}
-                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] transition"
+                          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B] transition"
                         >
                           <Plus className="w-3 h-3" /> Bloquear
                         </button>
@@ -1160,7 +1160,7 @@ export default function AdminAntiSpamPage() {
                           onClick={() => setEventsPage(p)}
                           className={`min-w-[2rem] rounded-lg border px-2 py-1.5 text-sm font-medium transition ${
                             eventsPage === p
-                              ? 'border-[#8CD955] bg-[#8CD955] text-white'
+                              ? 'border-[#E86A24] bg-[#E86A24] text-white'
                               : 'border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]'
                           }`}
                         >
@@ -1202,7 +1202,7 @@ export default function AdminAntiSpamPage() {
                   const el = document.getElementById('new-phone') as HTMLInputElement;
                   if (el?.value.trim()) handleAddBlacklist(el.value.trim());
                 }}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] transition"
+                className="inline-flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] transition"
               >
                 <Plus className="w-4 h-4" /> Adicionar
               </button>
@@ -1278,7 +1278,7 @@ export default function AdminAntiSpamPage() {
                           onClick={() => setBlacklistPage(p)}
                           className={`min-w-[2rem] rounded-lg border px-2 py-1.5 text-sm font-medium transition ${
                             blacklistPage === p
-                              ? 'border-[#8CD955] bg-[#8CD955] text-white'
+                              ? 'border-[#E86A24] bg-[#E86A24] text-white'
                               : 'border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]'
                           }`}
                         >
@@ -1325,7 +1325,7 @@ export default function AdminAntiSpamPage() {
                       <td className="py-3 px-3 text-gray-600 dark:text-gray-400">{new Date(r.created_at).toLocaleString('pt-BR')}</td>
                       <td className="py-3 px-3 text-gray-800 dark:text-gray-200">{r.action === 'remove_from_group' ? 'Remoção do grupo' : r.action === 'add_to_blacklist' ? 'Adicionado à lista negra' : r.action}</td>
                       <td className="py-3 px-3">
-                        {r.result === 'success' && <CheckCircle2 className="w-4 h-4 text-[#8CD955] inline" />}
+                        {r.result === 'success' && <CheckCircle2 className="w-4 h-4 text-[#E86A24] inline" />}
                         {r.result === 'fail' && <XCircle className="w-4 h-4 text-red-500 inline" />}
                         {r.result === 'skipped' && <span className="text-gray-500 dark:text-gray-400">ignorado</span>}
                         <span className="text-gray-700 dark:text-gray-300 ml-1">{r.result === 'success' ? 'Sucesso' : r.result === 'fail' ? 'Falha' : r.result}</span>
@@ -1375,7 +1375,7 @@ export default function AdminAntiSpamPage() {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                    <Scan className="h-5 w-5 text-[#8CD955]" /> Scanner de grupos
+                    <Scan className="h-5 w-5 text-[#E86A24]" /> Scanner de grupos
                   </h2>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 space-y-2">
                     <span className="block">
@@ -1413,7 +1413,7 @@ export default function AdminAntiSpamPage() {
                     }
                   }}
                   disabled={scanning}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 shrink-0 transition"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 shrink-0 transition"
                 >
                   {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scan className="w-4 h-4" />}
                   {scanning ? 'Escaneando...' : 'Escanear agora'}

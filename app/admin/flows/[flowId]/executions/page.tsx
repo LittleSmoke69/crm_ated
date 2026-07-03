@@ -237,7 +237,7 @@ export default function FlowExecutionsPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -268,7 +268,7 @@ export default function FlowExecutionsPage() {
               onClick={() => setActiveTab('executions')}
               className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
                 activeTab === 'executions'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5'
+                  ? 'text-[#E86A24] border-b-2 border-[#E86A24] bg-[#E86A24]/5'
                   : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
               }`}
             >
@@ -279,7 +279,7 @@ export default function FlowExecutionsPage() {
               onClick={() => setActiveTab('events')}
               className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
                 activeTab === 'events'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5'
+                  ? 'text-[#E86A24] border-b-2 border-[#E86A24] bg-[#E86A24]/5'
                   : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
               }`}
             >
@@ -294,7 +294,7 @@ export default function FlowExecutionsPage() {
           <>
             {loading ? (
               <div className="flex items-center justify-center p-8">
-                <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
               </div>
             ) : executions.length === 0 ? (
               <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
@@ -396,7 +396,7 @@ export default function FlowExecutionsPage() {
                       onClick={() => setSelectedExecution(
                         selectedExecution?.id === execution.id ? null : execution
                       )}
-                      className="px-4 py-2 bg-[#8CD955] hover:bg-[#7CC845] text-white rounded-lg text-sm font-medium flex items-center gap-2 transition"
+                      className="px-4 py-2 bg-[#E86A24] hover:bg-[#7CC845] text-white rounded-lg text-sm font-medium flex items-center gap-2 transition"
                     >
                       <Eye className="w-4 h-4" />
                       {selectedExecution?.id === execution.id ? 'Ocultar' : 'Ver Detalhes'}
@@ -421,7 +421,7 @@ export default function FlowExecutionsPage() {
                       </h4>
                       {loadingSteps ? (
                         <div className="flex items-center justify-center p-4">
-                          <Loader2 className="w-5 h-5 animate-spin text-[#8CD955]" />
+                          <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
                         </div>
                       ) : executionSteps.length === 0 ? (
                         <p className="text-sm text-gray-500">Nenhum step registrado</p>
@@ -538,7 +538,7 @@ export default function FlowExecutionsPage() {
                     <select
                       value={eventsEnvFilter}
                       onChange={(e) => setEventsEnvFilter(e.target.value as 'prod' | 'test' | 'all')}
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       <option value="prod">Produção</option>
                       <option value="test">Teste</option>
@@ -570,7 +570,7 @@ export default function FlowExecutionsPage() {
             {/* Lista de eventos */}
             {loadingEvents ? (
               <div className="flex items-center justify-center p-8">
-                <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
               </div>
             ) : webhookEvents.length === 0 ? (
               <div className="bg-white rounded-lg shadow-md p-8 text-center">

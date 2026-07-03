@@ -223,7 +223,7 @@ export default function ForgotPasswordPage() {
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="seu@email.com"
-                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 placeholder:text-gray-600"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 placeholder:text-gray-600"
                     disabled={loading}
                     autoFocus
                   />
@@ -233,7 +233,7 @@ export default function ForgotPasswordPage() {
                 type="submit"
                 disabled={loading}
                 className="w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ArrowRight className="w-5 h-5" /> Continuar</>}
               </button>
@@ -245,7 +245,7 @@ export default function ForgotPasswordPage() {
               {maskedEmail && <p className="text-sm text-gray-600">Conta: {maskedEmail}</p>}
               <div>
                 <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">Telefone (WhatsApp)</label>
-                <div className="flex border-2 border-gray-200 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-[#8CD955] focus-within:border-[#8CD955]">
+                <div className="flex border-2 border-gray-200 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-[#E86A24] focus-within:border-[#E86A24]">
                   <span className="flex items-center px-3 bg-gray-100 text-gray-600 font-medium border-r border-gray-200">+55</span>
                   <div className="relative flex-1 flex items-center">
                     <Phone className="absolute left-3 w-5 h-5 text-gray-400" />
@@ -269,7 +269,7 @@ export default function ForgotPasswordPage() {
                 type="submit"
                 disabled={loading}
                 className="w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>Enviar código</>}
               </button>
@@ -289,7 +289,7 @@ export default function ForgotPasswordPage() {
                     value={d}
                     onChange={e => handleCodeChange(i, e.target.value)}
                     onKeyDown={e => handleCodeKeyDown(i, e)}
-                    className="w-11 h-12 text-center text-xl font-bold border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800"
+                    className="w-11 h-12 text-center text-xl font-bold border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800"
                     disabled={loading}
                   />
                 ))}
@@ -298,7 +298,7 @@ export default function ForgotPasswordPage() {
                 type="submit"
                 disabled={loading}
                 className="w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><KeyRound className="w-5 h-5" /> Verificar</>}
               </button>
@@ -317,7 +317,7 @@ export default function ForgotPasswordPage() {
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     placeholder="Mínimo 6 caracteres"
-                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 placeholder:text-gray-600"
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 placeholder:text-gray-600"
                     disabled={loading}
                     minLength={6}
                     autoFocus
@@ -328,7 +328,7 @@ export default function ForgotPasswordPage() {
                 type="submit"
                 disabled={loading}
                 className="w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>Salvar e entrar</>}
               </button>
@@ -336,7 +336,7 @@ export default function ForgotPasswordPage() {
           )}
 
           <div className="mt-6 text-center">
-            <Link href="/login" className="text-sm text-[#8CD955] hover:underline font-medium">Voltar ao login</Link>
+            <Link href="/login" className="text-sm text-[#E86A24] hover:underline font-medium">Voltar ao login</Link>
           </div>
         </div>
       </div>

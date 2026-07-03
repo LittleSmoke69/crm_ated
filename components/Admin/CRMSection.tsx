@@ -149,7 +149,7 @@ export function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: 
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
-        className={`flex items-center bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 rounded ${className}`}
+        className={`flex items-center bg-transparent text-sm font-semibold text-gray-700 dark:text-gray-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 rounded ${className}`}
       >
         <span className={displayValue ? '' : 'text-gray-400'}>{displayValue || 'dd/mm/aaaa'}</span>
       </div>
@@ -181,7 +181,7 @@ export function DateInputDDMMYYYY({ value, onChange, className = '', maxDate }: 
                   onClick={() => !isAfterMax && selectDay(day)}
                   disabled={isAfterMax}
                   className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                    isAfterMax ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : isSelected ? 'bg-[#8CD955] text-white' : isToday ? 'bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white' : 'hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300'
+                    isAfterMax ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : isSelected ? 'bg-[#E86A24] text-white' : isToday ? 'bg-gray-200 dark:bg-[#404040] text-gray-800 dark:text-white' : 'hover:bg-gray-100 dark:hover:bg-[#404040] text-gray-700 dark:text-gray-300'
                   }`}
                 >
                   {day}
@@ -224,7 +224,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="pl-9 pr-8 py-2 w-full min-w-[200px] bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-semibold text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 flex items-center justify-between gap-2"
+        className="pl-9 pr-8 py-2 w-full min-w-[200px] bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-semibold text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 flex items-center justify-between gap-2"
       >
         <span className="truncate">{label}</span>
         <ChevronDown className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -240,7 +240,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Pesquisar banca..."
-                className="w-full pl-8 pr-3 py-2 bg-gray-50 dark:bg-[#404040] border border-gray-100 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                className="w-full pl-8 pr-3 py-2 bg-gray-50 dark:bg-[#404040] border border-gray-100 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30"
               />
             </div>
           </div>
@@ -248,7 +248,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
             <button
               type="button"
               onClick={() => { onChange('all'); setOpen(false); }}
-              className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] ${value === 'all' ? 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-300'}`}
+              className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] ${value === 'all' ? 'bg-emerald-50 dark:bg-[#E86A24]/20 text-[#C9531A] dark:text-[#E86A24]' : 'text-gray-700 dark:text-gray-300'}`}
             >
               Todas as bancas
             </button>
@@ -257,7 +257,7 @@ function BancaSelectWithSearch({ bancas, value, onChange }: { bancas: Banca[]; v
                 key={b.id}
                 type="button"
                 onClick={() => { onChange(b.url); setOpen(false); }}
-                className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] truncate ${value === b.url ? 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-300'}`}
+                className={`w-full px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-[#404040] truncate ${value === b.url ? 'bg-emerald-50 dark:bg-[#E86A24]/20 text-[#C9531A] dark:text-[#E86A24]' : 'text-gray-700 dark:text-gray-300'}`}
               >
                 {b.name}
               </button>
@@ -313,7 +313,7 @@ function MetricCard({ title, value, icon, bgColor }: any) {
 
   if (isEmerald) {
     gradientClass = 'from-gray-100 to-gray-50 border-gray-200';
-    dotGradientClass = 'from-[#8CD955] to-[#A8E677]';
+    dotGradientClass = 'from-[#E86A24] to-[#EF9057]';
     bgElementsClass = 'bg-gray-200/20';
     bgElementsBottomClass = 'bg-gray-300/10';
   } else if (isRose) {
@@ -393,7 +393,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   // Tags state
   const [tags, setTags] = useState<Tag[]>([]);
   const [newTagLabel, setNewTagLabel] = useState('');
-  const [newTagColor, setNewTagColor] = useState('#8CD955');
+  const [newTagColor, setNewTagColor] = useState('#E86A24');
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
   const [isSubmittingTag, setIsSubmittingTag] = useState(false);
   const [activeTab, setActiveTab] = useState<'bancas' | 'tags'>('bancas');
@@ -613,7 +613,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           setSuccess('Etiqueta criada com sucesso!');
         }
         setNewTagLabel('');
-        setNewTagColor('#8CD955');
+        setNewTagColor('#E86A24');
         setTimeout(() => setSuccess(null), 3000);
       } else {
         setError(result.error || 'Erro ao salvar etiqueta');
@@ -634,7 +634,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   const handleCancelEditTag = () => {
     setEditingTag(null);
     setNewTagLabel('');
-    setNewTagColor('#8CD955');
+    setNewTagColor('#E86A24');
   };
 
   const handleDeleteTag = async (id: string) => {
@@ -664,7 +664,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center p-12">
-        <Loader2 className="w-8 h-8 text-[#8CD955] animate-spin" />
+        <Loader2 className="w-8 h-8 text-[#E86A24] animate-spin" />
       </div>
     );
   }
@@ -674,21 +674,21 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       <nav className="flex flex-wrap gap-2" aria-label="Atalhos do CRM">
         <Link
           href="/crm/kanban"
-          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
         >
           <Kanban className="h-3.5 w-3.5 shrink-0" />
           Kanban
         </Link>
         <Link
           href="/crm/transferido"
-          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
         >
           <ArrowRightLeft className="h-3.5 w-3.5 shrink-0" />
           Transferido
         </Link>
         <Link
           href="/crm/avulsos"
-          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#8CD955]/50 hover:bg-[#8CD955]/10 hover:text-[#6AB83D] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#8CD955]/15 dark:hover:text-[#8CD955]"
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
         >
           <UserPlus className="h-3.5 w-3.5 shrink-0" />
           Avulsos
@@ -726,7 +726,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                 }
               }}
               disabled={metricsLoading}
-              className="ml-1 px-4 py-2 rounded-lg font-bold text-sm bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 transition-colors flex items-center gap-2"
+              className="ml-1 px-4 py-2 rounded-lg font-bold text-sm bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 transition-colors flex items-center gap-2"
             >
               {metricsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
               Buscar
@@ -740,7 +740,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             className={`px-4 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2 ${
               showManagement 
                 ? 'bg-gray-100 dark:bg-[#404040] text-gray-700 dark:text-gray-300' 
-                : 'bg-[#8CD955] text-white shadow-md shadow-gray-100 dark:shadow-none hover:bg-[#7BC84A]'
+                : 'bg-[#E86A24] text-white shadow-md shadow-gray-100 dark:shadow-none hover:bg-[#D95E1B]'
             }`}
           >
             <Settings className="w-4 h-4" />
@@ -749,7 +749,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           <button 
             onClick={loadDashboard}
             disabled={metricsLoading}
-            className="p-2 bg-white dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-gray-400 dark:text-gray-500 hover:text-[#8CD955] transition-colors"
+            className="p-2 bg-white dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-gray-400 dark:text-gray-500 hover:text-[#E86A24] transition-colors"
           >
             <RefreshCw className={`w-5 h-5 ${metricsLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -764,7 +764,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
       )}
 
       {success && (
-        <div className="p-4 bg-gray-50 dark:bg-[#8CD955]/10 border border-gray-200 dark:border-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] rounded-xl flex items-center gap-3">
+        <div className="p-4 bg-gray-50 dark:bg-[#E86A24]/10 border border-gray-200 dark:border-[#E86A24]/30 text-[#C9531A] dark:text-[#E86A24] rounded-xl flex items-center gap-3">
           <CheckCircle2 className="w-5 h-5" />
           <span className="font-medium text-sm">{success}</span>
         </div>
@@ -779,7 +779,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               onClick={() => setActiveTab('bancas')}
               className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all ${
                 activeTab === 'bancas'
-                  ? 'bg-[#8CD955] text-white shadow-md'
+                  ? 'bg-[#E86A24] text-white shadow-md'
                   : 'bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]'
               }`}
             >
@@ -789,7 +789,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               onClick={() => setActiveTab('tags')}
               className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm transition-all ${
                 activeTab === 'tags'
-                  ? 'bg-[#8CD955] text-white shadow-md'
+                  ? 'bg-[#E86A24] text-white shadow-md'
                   : 'bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#404040]'
               }`}
             >
@@ -802,7 +802,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               <div className="lg:col-span-1">
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-6 border border-gray-100 dark:border-[#404040] shadow-sm">
                   <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-gray-800">
-                    {editingBanca ? <Edit2 className="w-5 h-5 text-[#8CD955]" /> : <Plus className="w-5 h-5 text-[#8CD955]" />}
+                    {editingBanca ? <Edit2 className="w-5 h-5 text-[#E86A24]" /> : <Plus className="w-5 h-5 text-[#E86A24]" />}
                     {editingBanca ? 'Editar Banca' : 'Nova Banca'}
                   </h2>
               <form onSubmit={handleSubmitBanca} className="space-y-4">
@@ -813,7 +813,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Ex: Arena VIP"
-                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
+                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                   />
                 </div>
                 <div>
@@ -823,7 +823,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     value={newUrl}
                     onChange={(e) => setNewUrl(e.target.value)}
                     placeholder="Ex: web.girodasorte.digital ou https://..."
-                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
+                    className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                   />
                   <p className="mt-1.5 text-[10px] text-gray-400 font-medium ml-1">
                     * Será salva exatamente como digitada (Nova Banca e Editar Banca)
@@ -833,7 +833,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                   <button 
                     type="submit"
                     disabled={isSubmitting}
-                    className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
+                    className="flex-1 bg-[#E86A24] hover:bg-[#D95E1B] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
                   >
                     {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : editingBanca ? <Edit2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                     {editingBanca ? 'ATUALIZAR BANCA' : 'CADASTRAR BANCA'}
@@ -856,7 +856,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm overflow-hidden">
               <div className="p-6 border-b border-gray-50 dark:border-[#404040] bg-gray-50/30 dark:bg-[#333]/50 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-800">Bancas Cadastradas</h2>
-                <span className="bg-emerald-100 text-[#6AB83D] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+                <span className="bg-emerald-100 text-[#C9531A] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                   {bancas.length} Total
                 </span>
               </div>
@@ -864,7 +864,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                 {bancas.map(b => (
                       <div key={b.id} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-[#333] transition-all">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl flex items-center justify-center font-black text-[#8CD955]">
+                      <div className="w-10 h-10 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl flex items-center justify-center font-black text-[#E86A24]">
                         {b.name.charAt(0).toUpperCase()}
                       </div>
                       <div>
@@ -875,7 +875,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                     <div className="flex items-center gap-1">
                       <button 
                         onClick={() => handleEditBanca(b)}
-                        className="p-2.5 text-gray-300 hover:text-[#8CD955] hover:bg-emerald-50 rounded-lg transition-all"
+                        className="p-2.5 text-gray-300 hover:text-[#E86A24] hover:bg-emerald-50 rounded-lg transition-all"
                         title="Editar banca"
                       >
                         <Edit2 className="w-4 h-4" />
@@ -906,7 +906,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               <div className="lg:col-span-1">
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-xl p-6 border border-gray-100 dark:border-[#404040] shadow-sm">
                   <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-gray-800">
-                    <TagIcon className="w-5 h-5 text-[#8CD955]" />
+                    <TagIcon className="w-5 h-5 text-[#E86A24]" />
                     {editingTag ? 'Editar Etiqueta' : 'Nova Etiqueta'}
                   </h2>
                   <form onSubmit={handleAddTag} className="space-y-4">
@@ -917,7 +917,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                         value={newTagLabel}
                         onChange={(e) => setNewTagLabel(e.target.value)}
                         placeholder="Ex: VIP"
-                        className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
+                        className="w-full bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                       />
                     </div>
                     <div>
@@ -933,8 +933,8 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                           type="text" 
                           value={newTagColor}
                           onChange={(e) => setNewTagColor(e.target.value)}
-                          placeholder="#8CD955"
-                          className="flex-1 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
+                          placeholder="#E86A24"
+                          className="flex-1 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-xl px-4 py-3 text-sm text-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:bg-white dark:focus:bg-[#333] transition-all"
                         />
                       </div>
                     </div>
@@ -942,7 +942,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                       <button 
                         type="submit"
                         disabled={isSubmittingTag}
-                        className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
+                        className="flex-1 bg-[#E86A24] hover:bg-[#D95E1B] text-white py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-gray-100"
                       >
                         {isSubmittingTag ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                         {editingTag ? 'ATUALIZAR' : 'CRIAR ETIQUETA'}
@@ -965,7 +965,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm overflow-hidden">
                   <div className="p-6 border-b border-gray-50 dark:border-[#404040] bg-gray-50/30 dark:bg-[#333]/50 flex items-center justify-between">
                     <h2 className="text-lg font-bold text-gray-800">Etiquetas Cadastradas</h2>
-                    <span className="bg-emerald-100 text-[#6AB83D] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+                    <span className="bg-emerald-100 text-[#C9531A] px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                       {tags.length} Total
                     </span>
                   </div>
@@ -1021,7 +1021,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
           {metricsLoading && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/90 dark:bg-[#1a1a1a]/95 backdrop-blur-sm">
               <div className="flex flex-col items-center gap-3">
-                <Loader2 className="w-10 h-10 text-[#8CD955] animate-spin" />
+                <Loader2 className="w-10 h-10 text-[#E86A24] animate-spin" />
                 <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Carregando dados...</span>
               </div>
             </div>
@@ -1039,7 +1039,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               title="Total Depositado" 
               value={formatCurrency(metrics?.total_deposited || 0)} 
               icon={<Wallet className="w-5 h-5" />} 
-              bgColor="bg-[#8CD955]" 
+              bgColor="bg-[#E86A24]" 
             />
             <MetricCard 
               title="Total Apostado" 
@@ -1095,7 +1095,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
                   id="top5-sort"
                   value={top5Sort}
                   onChange={(e) => setTop5Sort(e.target.value)}
-                  className="px-3 py-2 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-medium text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  className="px-3 py-2 bg-gray-50 dark:bg-[#333] border border-gray-100 dark:border-[#555] rounded-lg text-sm font-medium text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30"
                 >
                   <option value="vendas">Por total depositado</option>
                   <option value="cadastro">Por cadastro</option>
@@ -1128,7 +1128,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               {chartData?.status_distribution ? <StatusDistributionChart data={chartData.status_distribution} /> : <LoadingChart />}
             </ChartBox>
 
-            <ChartBox title="Lucratividade por Consultor" icon={Target} iconColor="text-[#8CD955]">
+            <ChartBox title="Lucratividade por Consultor" icon={Target} iconColor="text-[#E86A24]">
               {chartData?.consultant_profitability ? <BancaRankingChart data={chartData.consultant_profitability} prefix="R$ " /> : <LoadingChart />}
             </ChartBox>
 

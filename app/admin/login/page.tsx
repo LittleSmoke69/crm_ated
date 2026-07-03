@@ -96,7 +96,7 @@ const AdminLoginPage = () => {
             <Logo size="xl" />
           </div>
           <div className="flex items-center justify-center gap-2 mb-4">
-            <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#8CD955' }}>
+            <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#E86A24' }}>
               <Shield className="w-7 h-7 text-white" />
             </div>
           </div>
@@ -131,7 +131,7 @@ const AdminLoginPage = () => {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="admin@email.com"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400 transition"
+                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 placeholder:text-gray-400 transition"
                   disabled={loading}
                   autoComplete="username"
                   inputMode="email"
@@ -153,7 +153,7 @@ const AdminLoginPage = () => {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 placeholder:text-gray-400 transition"
+                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 placeholder:text-gray-400 transition"
                   disabled={loading}
                   autoComplete="current-password"
                   required
@@ -162,7 +162,7 @@ const AdminLoginPage = () => {
             </div>
 
             <div className="text-right">
-              <Link href="/forgot-password" className="text-sm text-[#8CD955] hover:text-[#7BC84A] font-medium transition">
+              <Link href="/forgot-password" className="text-sm text-[#E86A24] hover:text-[#D95E1B] font-medium transition">
                 Esqueceu a senha? Clique aqui
               </Link>
             </div>
@@ -172,12 +172,12 @@ const AdminLoginPage = () => {
               type="submit"
               disabled={loading}
               className="w-full py-3 rounded-lg text-white font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md hover:shadow-lg"
-              style={{ backgroundColor: '#8CD955' }}
+              style={{ backgroundColor: '#E86A24' }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#7BC84A';
+                e.currentTarget.style.backgroundColor = '#D95E1B';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = '#8CD955';
+                e.currentTarget.style.backgroundColor = '#E86A24';
               }}
             >
               {loading ? (
@@ -200,7 +200,7 @@ const AdminLoginPage = () => {
               Não é administrador?{' '}
               <a
                 href="/login"
-                className="text-[#8CD955] hover:text-[#7BC84A] font-medium transition"
+                className="text-[#E86A24] hover:text-[#D95E1B] font-medium transition"
               >
                 Fazer login normal
               </a>

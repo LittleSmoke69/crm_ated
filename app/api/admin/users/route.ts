@@ -5,6 +5,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { validateHierarchy, hasHierarchyCycle } from '@/lib/middleware/permissions';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 const DEFAULT_SETTINGS = {
   max_leads_per_day: 100,
@@ -68,24 +69,31 @@ export async function GET(req: NextRequest) {
     const campaignsRows: any[] = [];
     const instancesRows: any[] = [];
     const searchesRows: any[] = [];
+    const evolutionEnabled = isEvolutionStackEnabled();
 
     for (const ids of userIdChunks) {
-      const [
-        { data: settingsBatch },
-        { data: campaignsBatch },
-        { data: instancesBatch },
-        { data: searchesBatch },
-      ] = await Promise.all([
+      const queries: Promise<{ data: any[] | null }>[] = [
         supabaseServiceRole.from('user_settings').select('*').in('user_id', ids),
-        supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', ids),
-        supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', ids),
-        supabaseServiceRole.from('searches').select('user_id').in('user_id', ids),
-      ]);
+      ];
+      if (evolutionEnabled) {
+        queries.push(
+          supabaseServiceRole.from('campaigns').select('user_id, processed_contacts, failed_contacts').in('user_id', ids),
+          supabaseServiceRole.from('whatsapp_instances').select('user_id').in('user_id', ids),
+          supabaseServiceRole.from('searches').select('user_id').in('user_id', ids),
+        );
+      }
 
+      const results = await Promise.all(queries);
+      const settingsBatch = results[0]?.data;
       if (settingsBatch) settingsRows.push(...settingsBatch);
-      if (campaignsBatch) campaignsRows.push(...campaignsBatch);
-      if (instancesBatch) instancesRows.push(...instancesBatch);
-      if (searchesBatch) searchesRows.push(...searchesBatch);
+      if (evolutionEnabled) {
+        const campaignsBatch = results[1]?.data;
+        const instancesBatch = results[2]?.data;
+        const searchesBatch = results[3]?.data;
+        if (campaignsBatch) campaignsRows.push(...campaignsBatch);
+        if (instancesBatch) instancesRows.push(...instancesBatch);
+        if (searchesBatch) searchesRows.push(...searchesBatch);
+      }
     }
 
     const settingsByUser = new Map<string, any>();

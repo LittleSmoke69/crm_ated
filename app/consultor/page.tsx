@@ -872,7 +872,7 @@ export default function ConsultorPage() {
   if (checking || initialLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
       </div>
     );
   }
@@ -918,8 +918,8 @@ export default function ConsultorPage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#8CD95515] rounded-xl">
-              <LayoutDashboard className="w-6 h-6 text-[#8CD955]" />
+            <div className="p-2.5 bg-[#E86A2415] rounded-xl">
+              <LayoutDashboard className="w-6 h-6 text-[#E86A24]" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Desempenho</h1>
@@ -934,7 +934,7 @@ export default function ConsultorPage() {
                 onClick={() => setShowBancaFilter(!showBancaFilter)}
                 className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm"
               >
-                <Filter className="w-4 h-4 text-[#8CD955]" />
+                <Filter className="w-4 h-4 text-[#E86A24]" />
                 <span className="truncate max-w-[150px]">
                   {selectedBanca ? bancas.find(b => b.url === selectedBanca)?.name || 'Banca Selecionada' : 'Todas as Bancas'}
                 </span>
@@ -951,7 +951,7 @@ export default function ConsultorPage() {
                         placeholder="Buscar banca..."
                         value={bancaSearchTerm}
                         onChange={(e) => setBancaSearchTerm(e.target.value)}
-                        className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#8CD955]/30 placeholder:text-gray-500 dark:placeholder:text-gray-500 outline-none"
+                        className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#E86A24]/30 placeholder:text-gray-500 dark:placeholder:text-gray-500 outline-none"
                       />
                     </div>
                   </div>
@@ -962,7 +962,7 @@ export default function ConsultorPage() {
                         setShowBancaFilter(false);
                       }}
                       className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
-                        !selectedBanca ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                        !selectedBanca ? 'bg-[#E86A2410] text-[#E86A24] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                       }`}
                     >
                       Todas as Bancas
@@ -977,7 +977,7 @@ export default function ConsultorPage() {
                             setShowBancaFilter(false);
                           }}
                           className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
-                            selectedBanca === banca.url ? 'bg-[#8CD95510] text-[#8CD955] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                            selectedBanca === banca.url ? 'bg-[#E86A2410] text-[#E86A24] font-bold' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
                           <div className="font-bold">{banca.name}</div>
@@ -1000,7 +1000,7 @@ export default function ConsultorPage() {
                   disabled={consultoresLoading || consultoresDaBanca.length === 0}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm disabled:opacity-80"
                 >
-                  <Users className="w-4 h-4 text-[#8CD955]" />
+                  <Users className="w-4 h-4 text-[#E86A24]" />
                   {consultoresLoading
                     ? 'Carregando...'
                     : selectedConsultorId === 'all'
@@ -1020,7 +1020,7 @@ export default function ConsultorPage() {
                           placeholder="Pesquisar consultor..."
                           value={consultorDesempenhoSearchTerm}
                           onChange={(e) => setConsultorDesempenhoSearchTerm(e.target.value)}
-                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
                           autoFocus
                         />
                       </div>
@@ -1034,7 +1034,7 @@ export default function ConsultorPage() {
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                           selectedConsultorId === 'all'
-                            ? 'bg-[#8CD95515] text-[#8CD955] font-medium'
+                            ? 'bg-[#E86A2415] text-[#E86A24] font-medium'
                             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                         }`}
                       >
@@ -1051,7 +1051,7 @@ export default function ConsultorPage() {
                               setConsultorDesempenhoSearchTerm('');
                             }}
                             className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              selectedConsultorId === c.id ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                              selectedConsultorId === c.id ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -1079,7 +1079,7 @@ export default function ConsultorPage() {
                 onClick={() => setShowDatePicker(!showDatePicker)}
                 className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm"
               >
-                <Calendar className="w-4 h-4 text-[#8CD955]" />
+                <Calendar className="w-4 h-4 text-[#E86A24]" />
                 {dateFilter === 'daily' && 'Diário'}
                 {dateFilter === 'yesterday' && 'Ontem'}
                 {dateFilter === '7days' && 'Últimos 7 dias'}
@@ -1105,7 +1105,7 @@ export default function ConsultorPage() {
                           }
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                          dateFilter === filter ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                         }`}
                       >
                         {filter === 'daily' && 'Diário'}
@@ -1127,7 +1127,7 @@ export default function ConsultorPage() {
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <div>
@@ -1138,7 +1138,7 @@ export default function ConsultorPage() {
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <button
@@ -1150,7 +1150,7 @@ export default function ConsultorPage() {
                             }
                           }}
                           disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         >
                           Aplicar
                         </button>
@@ -1205,7 +1205,7 @@ export default function ConsultorPage() {
 
             <Link
               href="/crm/kanban"
-              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
+              className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#E86A24]/20"
             >
               <Users className="w-4 h-4" />
               Meu CRM
@@ -1222,7 +1222,7 @@ export default function ConsultorPage() {
           {(() => {
             if (dataLoading) {
               return (
-                <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 text-white min-h-[280px]">
+                <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 text-white min-h-[280px]">
                   <div className="flex items-center justify-between gap-3 mb-6">
                     <div className="flex items-center gap-2">
                       <TrendingUp className="w-6 h-6 text-white" />
@@ -1250,7 +1250,7 @@ export default function ConsultorPage() {
             
             if (externalKpis) {
               return (
-                <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40 text-white">
+                <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 text-white">
                   <div className="flex items-center gap-2 mb-6">
                     <TrendingUp className="w-6 h-6 text-white" />
                     <h2 className="text-xl font-bold">Resumo de Resultado de Novos Cadastro</h2>
@@ -1356,7 +1356,7 @@ export default function ConsultorPage() {
                 <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] min-h-[280px]">
                   <div className="flex items-center justify-between gap-3 mb-6">
                     <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                      <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                      <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                       Análises e Gráficos
                     </h2>
                     <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Carregando gráficos...</span>
@@ -1373,7 +1373,7 @@ export default function ConsultorPage() {
               return (
                 <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
                   <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
-                    <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                    <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                     Análises e Gráficos
                   </h2>
                   
@@ -1516,7 +1516,7 @@ export default function ConsultorPage() {
               </div>
               <div className="mt-2 h-2 rounded-full bg-gray-200 dark:bg-[#333] overflow-hidden">
                 <div
-                  className="h-full bg-[#8CD955] transition-all duration-300"
+                  className="h-full bg-[#E86A24] transition-all duration-300"
                   style={{ width: `${(dashboardProgress.processed / Math.max(1, dashboardProgress.total)) * 100}%` }}
                 />
               </div>
@@ -1683,7 +1683,7 @@ export default function ConsultorPage() {
                           <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.created_at || '-'}</td>
                           <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.type || '-'}</td>
                           <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.wallet || '-'}</td>
-                          <td className="px-4 py-2 font-bold text-[#8CD955]">R$ {parsePtBrValue(row.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-2 font-bold text-[#E86A24]">R$ {parsePtBrValue(row.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.consultant_name || row.consultant_email || '-'}</td>
                         </tr>
                       ))}
@@ -1712,7 +1712,7 @@ export default function ConsultorPage() {
                           <tr key={`bet-${row.user_id_sender}`} className="border-t border-gray-100 dark:border-[#333]">
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_name || '-'}</td>
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_email || '-'}</td>
-                            <td className="px-4 py-2 font-bold text-[#8CD955]">
+                            <td className="px-4 py-2 font-bold text-[#E86A24]">
                               R$ {Number(row.total_apostado || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">
@@ -1744,7 +1744,7 @@ export default function ConsultorPage() {
                           <tr key={`dep-${row.user_id_sender}`} className="border-t border-gray-100 dark:border-[#333]">
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_name || '-'}</td>
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.user_email || '-'}</td>
-                            <td className="px-4 py-2 font-bold text-[#8CD955]">
+                            <td className="px-4 py-2 font-bold text-[#E86A24]">
                               R$ {Number(row.total_depositado || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{Number(row.deposits_count || 0).toLocaleString('pt-BR')}</td>
@@ -1764,7 +1764,7 @@ export default function ConsultorPage() {
         <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040]">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
-              <Award className="w-5 h-5 text-[#8CD955]" />
+              <Award className="w-5 h-5 text-[#E86A24]" />
               Lista de ganhadores
             </h2>
             {selectedBanca && (
@@ -1775,7 +1775,7 @@ export default function ConsultorPage() {
                     onClick={() => setShowWinnersDatePicker(!showWinnersDatePicker)}
                     className="flex items-center gap-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#3a3a3a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 transition-all"
                   >
-                    <Calendar className="w-4 h-4 text-[#8CD955]" />
+                    <Calendar className="w-4 h-4 text-[#E86A24]" />
                     {winnersPeriod === 'daily' && 'Diário'}
                     {winnersPeriod === 'yesterday' && 'Ontem'}
                     {winnersPeriod === '7days' && 'Últimos 7 dias'}
@@ -1801,7 +1801,7 @@ export default function ConsultorPage() {
                             }
                           }}
                           className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                            winnersPeriod === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
+                            winnersPeriod === filter ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                           }`}
                         >
                           {filter === 'daily' && 'Diário'}
@@ -1822,7 +1822,7 @@ export default function ConsultorPage() {
                               value={winnersCustomStart}
                               onChange={(e) => setWinnersCustomStart(e.target.value)}
                               max={winnersCustomEnd || new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                             />
                           </div>
                           <div>
@@ -1833,7 +1833,7 @@ export default function ConsultorPage() {
                               onChange={(e) => setWinnersCustomEnd(e.target.value)}
                               min={winnersCustomStart}
                               max={new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                             />
                           </div>
                           <button
@@ -1846,7 +1846,7 @@ export default function ConsultorPage() {
                               }
                             }}
                             disabled={!winnersCustomStart || !winnersCustomEnd}
-                            className="w-full bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                            className="w-full bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                           >
                             Aplicar
                           </button>
@@ -1861,7 +1861,7 @@ export default function ConsultorPage() {
                   onClick={handleGerarListaWhatsApp}
                   disabled={winners.length === 0}
                   title={winners.length === 0 ? 'Gere a lista selecionando banca e período' : 'Copiar lista (nome + valor) para colar no WhatsApp'}
-                  className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
+                  className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
                 >
                   <Copy className="w-4 h-4" />
                   {winnersListCopied ? 'Copiado!' : 'Gerar Lista'}
@@ -1876,7 +1876,7 @@ export default function ConsultorPage() {
             </div>
           ) : winnersLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]" />
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]" />
             </div>
           ) : winnersError ? (
             <div className="text-center py-8 text-amber-600 text-sm">{winnersError}</div>
@@ -1889,12 +1889,12 @@ export default function ConsultorPage() {
               {winners.map((w, index) => (
                 <div
                   key={String(w.id)}
-                  className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
+                  className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#E86A24]/30 transition-all"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#8CD955] flex items-center justify-center shadow-sm">
+                        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#E86A24] flex items-center justify-center shadow-sm">
                           <span className="text-xs font-bold text-white">{index + 1}</span>
                         </div>
                         <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{w.name}</p>
@@ -1906,7 +1906,7 @@ export default function ConsultorPage() {
                             href={`https://wa.me/${normalizePhoneForTel(w.phone)}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#8CD955] font-medium transition-colors"
+                            className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#E86A24] font-medium transition-colors"
                             title="Abrir conversa no WhatsApp"
                           >
                             {formatWinnersPhone(w.phone)}
@@ -1926,7 +1926,7 @@ export default function ConsultorPage() {
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5 font-medium">Total ganho</p>
-                      <p className="text-base font-bold text-[#8CD955]">
+                      <p className="text-base font-bold text-[#E86A24]">
                         R$ {(w.last_winner_value ?? w.total_ganho ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </p>
                     </div>

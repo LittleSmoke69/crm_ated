@@ -123,7 +123,7 @@ export function VslDesignPanel({
           <button
             type="button"
             onClick={() => applyTemplate()}
-            className="w-full py-2 bg-[#8CD955] text-white font-medium rounded-lg hover:opacity-90 text-sm"
+            className="w-full py-2 bg-[#E86A24] text-white font-medium rounded-lg hover:opacity-90 text-sm"
           >
             Recarregar template
           </button>
@@ -137,7 +137,7 @@ export function VslDesignPanel({
                   type="button"
                   onClick={() => setSelectedId(b.id)}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${
-                    selectedId === b.id ? 'bg-[#8CD955]/20 text-[#5a9a3a]' : 'hover:bg-gray-100 text-gray-700'
+                    selectedId === b.id ? 'bg-[#E86A24]/20 text-[#5a9a3a]' : 'hover:bg-gray-100 text-gray-700'
                   }`}
                 >
                   {b.label}

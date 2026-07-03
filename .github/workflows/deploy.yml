@@ -1,4 +1,4 @@
-name: Deploy ZaplotoV3 na VPS
+name: Deploy crmTR na VPS
 
 on:
   push:
@@ -14,33 +14,33 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           command_timeout: 60m
-          envs: GH_TOKEN
+          envs: GH_TOKEN,GITHUB_REPOSITORY
           script: |
             set -e
 
-            DEPLOY_DIR="/home/claudeuser/ZaplotoV3"
+            DEPLOY_DIR="/home/claudeuser/crm-at"
 
             # Se o diretório não existir, faz clone
             if [ ! -d "$DEPLOY_DIR/.git" ]; then
               echo "📥 Clonando repositório..."
-              git clone "https://x-access-token:${GH_TOKEN}@github.com/Zaploto/ZaplotoV3.git" "$DEPLOY_DIR"
+              git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$DEPLOY_DIR"
             fi
 
             echo "📦 Acessando diretório..."
             cd "$DEPLOY_DIR"
 
             echo "🔄 Fazendo git pull..."
-            # Usa GITHUB_TOKEN no URL apenas para o fetch, depois remove por segurança
-            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/Zaploto/ZaplotoV3.git"
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
             git fetch origin main
             git reset --hard origin/main
-            git remote set-url origin https://github.com/Zaploto/ZaplotoV3.git
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
 
             echo "🔐 Validando chaves Supabase no .env (build exige anon, não service_role)..."
             if [ ! -f .env ]; then
@@ -106,7 +106,6 @@ jobs:
 
               echo "… RabbitMQ status=$STATUS running=$RUNNING (tentativa $i/$MAX_LOOPS)"
 
-              # Nunca reiniciar em loop: no máximo 1 restart após ~3 min unhealthy
               if [ "$STATUS" = "unhealthy" ] && [ "$RABBIT_RESTARTED" = "0" ] && [ "$i" -ge 18 ]; then
                 echo "⚠️ RabbitMQ unhealthy — reinício único (aguarde ~2 min após isso)..."
                 docker compose restart rabbitmq || true

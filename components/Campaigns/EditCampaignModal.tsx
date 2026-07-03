@@ -262,7 +262,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
               <select
                 value={campaignStatus}
                 onChange={(e) => setCampaignStatus(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
               >
                 <option value="pending">Pendente</option>
                 <option value="running">Em Execução</option>
@@ -294,7 +294,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value="fixed"
                       checked={delayMode === 'fixed'}
                       onChange={(e) => setDelayMode(e.target.value as 'fixed')}
-                      className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
+                      className="w-4 h-4 text-[#E86A24] border-gray-300 focus:ring-[#E86A24]"
                     />
                     <span className="text-sm text-gray-700 dark:text-gray-300">Fixo</span>
                   </label>
@@ -305,7 +305,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value="random"
                       checked={delayMode === 'random'}
                       onChange={(e) => setDelayMode(e.target.value as 'random')}
-                      className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
+                      className="w-4 h-4 text-[#E86A24] border-gray-300 focus:ring-[#E86A24]"
                     />
                     <span className="text-sm text-gray-700 dark:text-gray-300">Aleatório</span>
                   </label>
@@ -324,7 +324,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={delayValue}
                       onChange={(e) => setDelayValue(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div>
@@ -334,7 +334,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                     <select
                       value={delayUnit}
                       onChange={(e) => setDelayUnit(e.target.value as 'seconds' | 'minutes')}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     >
                       <option value="seconds">Segundos</option>
                       <option value="minutes">Minutos</option>
@@ -355,7 +355,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={randomMinSeconds}
                       onChange={(e) => setRandomMinSeconds(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div>
@@ -367,7 +367,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       value={randomMaxSeconds}
                       onChange={(e) => setRandomMaxSeconds(Number(e.target.value))}
                       min="0"
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                   <div className="flex items-end">
@@ -394,7 +394,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   value="sequential"
                   checked={distributionMode === 'sequential'}
                   onChange={(e) => setDistributionMode(e.target.value as 'sequential')}
-                  className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
+                  className="w-4 h-4 text-[#E86A24] border-gray-300 focus:ring-[#E86A24]"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Sequencial</span>
               </label>
@@ -405,7 +405,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                   value="random"
                   checked={distributionMode === 'random'}
                   onChange={(e) => setDistributionMode(e.target.value as 'random')}
-                  className="w-4 h-4 text-[#8CD955] border-gray-300 focus:ring-[#8CD955]"
+                  className="w-4 h-4 text-[#E86A24] border-gray-300 focus:ring-[#E86A24]"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Aleatório</span>
               </label>
@@ -424,7 +424,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
               onChange={(e) => setConcurrency(Number(e.target.value))}
               min="1"
               max="10"
-              className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+              className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             />
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
               *Use com cautela para evitar rate-limit. Recomendado: 1-3
@@ -469,7 +469,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                       key={name}
                       className={`px-3 py-2 rounded-md text-xs border-2 transition-all flex items-center gap-2 ${
                         isConnected
-                          ? 'bg-green-50 dark:bg-[#8CD955]/20 border-green-400 dark:border-[#8CD955]/50 text-green-800 dark:text-[#8CD955]'
+                          ? 'bg-green-50 dark:bg-[#E86A24]/20 border-green-400 dark:border-[#E86A24]/50 text-green-800 dark:text-[#E86A24]'
                           : 'bg-red-50 dark:bg-red-900/30 border-red-400 dark:border-red-600/50 text-red-800 dark:text-red-300'
                       }`}
                     >
@@ -513,14 +513,14 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
                 Instâncias conectadas disponíveis ({availableConnected.length})
               </p>
               {availableConnected.length > 0 ? (
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-green-50 dark:bg-[#8CD955]/10 rounded border border-green-200 dark:border-[#8CD955]/30">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-green-50 dark:bg-[#E86A24]/10 rounded border border-green-200 dark:border-[#E86A24]/30">
                   {availableConnected.map((inst) => {
                     const hasProxy = !!inst.proxy_id || !!inst.proxy;
                     return (
                       <button
                         key={inst.instance_name}
                         onClick={() => toggleInstance(inst.instance_name)}
-                        className="px-3 py-1.5 rounded-md text-xs border-2 border-green-400 dark:border-[#8CD955]/50 bg-white dark:bg-[#333] text-green-700 dark:text-[#8CD955] hover:bg-green-100 dark:hover:bg-[#8CD955]/20 transition-all flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-md text-xs border-2 border-green-400 dark:border-[#E86A24]/50 bg-white dark:bg-[#333] text-green-700 dark:text-[#E86A24] hover:bg-green-100 dark:hover:bg-[#E86A24]/20 transition-all flex items-center gap-1.5"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
                         <span className="font-medium">{inst.instance_name}</span>
@@ -595,7 +595,7 @@ const EditCampaignModal: React.FC<EditCampaignModalProps> = ({
             </button>
             <button
               onClick={handleSave}
-              className="px-4 py-2 text-sm font-medium text-white bg-[#8CD955] hover:bg-[#7BC84A] rounded-lg transition flex items-center gap-2"
+              className="px-4 py-2 text-sm font-medium text-white bg-[#E86A24] hover:bg-[#D95E1B] rounded-lg transition flex items-center gap-2"
             >
               <Save className="w-4 h-4" />
               Salvar Alterações

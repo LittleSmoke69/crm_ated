@@ -16,7 +16,7 @@ const ThemeContext = createContext<ThemeContextType | null>(null);
 const STORAGE_KEY = 'zaploto_theme_preference';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('light');
+  const [theme, setThemeState] = useState<Theme>('dark');
   const [isLoading, setIsLoading] = useState(true);
 
   const applyTheme = useCallback((t: Theme) => {
@@ -82,7 +82,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
 
       const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-      const resolved: Theme = stored === 'dark' || stored === 'light' ? stored : 'light';
+      const resolved: Theme = stored === 'dark' || stored === 'light' ? stored : 'dark';
       setThemeState(resolved);
       applyTheme(resolved);
       setIsLoading(false);

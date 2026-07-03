@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
 
     const { data: tag, error: tagError } = await supabaseServiceRole
       .from('crm_tags')
-      .select('id')
+      .select('id, move_to_column_key')
       .eq('id', tagId)
       .single();
 
@@ -87,7 +87,23 @@ export async function POST(req: NextRequest) {
     }
 
     console.log(`${LOG_PREFIX} [POST] 8. Sucesso — etiqueta adicionada. leadTag:`, leadTag?.id ?? leadTag);
-    return successResponse(leadTag, 'Etiqueta adicionada com sucesso');
+
+    // Automação: se a etiqueta tem coluna-alvo, move o cliente para ela no Kanban.
+    const moveTo = (tag as { move_to_column_key?: string | null }).move_to_column_key;
+    let movedTo: string | null = null;
+    if (moveTo) {
+      const { error: moveErr } = await supabaseServiceRole.rpc('crm_move_lead', {
+        p_lead_external_id: leadId.toString(),
+        p_user_id: userIdToUse,
+        p_column_key: moveTo,
+        p_position: 0,
+        p_moved_by: requesterId,
+      });
+      if (moveErr) console.error(`${LOG_PREFIX} [POST] Falha ao mover cliente pela etiqueta:`, moveErr.message);
+      else movedTo = moveTo;
+    }
+
+    return successResponse({ ...leadTag, moved_to_column_key: movedTo }, 'Etiqueta adicionada com sucesso');
   } catch (err: any) {
     console.error(`${LOG_PREFIX} [POST] Exceção não tratada:`, err?.message, err?.stack);
     return serverErrorResponse(err);

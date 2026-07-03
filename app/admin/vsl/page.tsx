@@ -111,7 +111,7 @@ export default function AdminVslPage() {
           <button
             type="button"
             onClick={() => router.push('/admin/vsl/new')}
-            className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 transition shadow-sm shrink-0"
+            className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 transition shadow-sm shrink-0"
           >
             <Plus className="w-4 h-4" />
             Novo projeto

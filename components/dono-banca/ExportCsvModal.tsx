@@ -470,7 +470,7 @@ export default function ExportCsvModal({
       >
         {exportLoading ? (
           <>
-            <Loader2 className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
+            <Loader2 className="w-5 h-5 animate-spin text-[#E86A24] flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-900 dark:text-white">Processando dados para download...</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -490,7 +490,7 @@ export default function ExportCsvModal({
           </>
         ) : isDone ? (
           <>
-            <CheckCircle2 className="w-5 h-5 text-[#8CD955] flex-shrink-0" />
+            <CheckCircle2 className="w-5 h-5 text-[#E86A24] flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-900 dark:text-white">CSV pronto para download</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">{totalLoaded.toLocaleString('pt-BR')} leads</p>
@@ -502,7 +502,7 @@ export default function ExportCsvModal({
                 setExportAccumulated([]);
                 onClose();
               }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl font-medium bg-[#8CD955] hover:bg-[#7BC84A] text-gray-900"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900"
             >
               <Download className="w-4 h-4" />
               Baixar CSV
@@ -536,7 +536,7 @@ export default function ExportCsvModal({
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-[#404040]">
           <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <Download className="w-5 h-5 text-[#8CD955]" />
+            <Download className="w-5 h-5 text-[#E86A24]" />
             Exportar leads em CSV
           </h2>
           <button
@@ -553,7 +553,7 @@ export default function ExportCsvModal({
           {/* Overlay de carregamento (igual ao CRM quando carrega muitos dados) */}
           {previewLoading && (
             <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-20 flex items-center justify-center min-h-[240px]">
-              <div className="flex flex-col items-center gap-3 text-[#8CD955]">
+              <div className="flex flex-col items-center gap-3 text-[#E86A24]">
                 <Loader2 className="w-8 h-8 animate-spin" />
                 <span className="text-sm font-semibold">Contando clientes...</span>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-normal">Aguarde, isso pode levar alguns segundos quando há muitos dados.</span>
@@ -582,9 +582,9 @@ export default function ExportCsvModal({
               </p>
             ) : previewCount !== null && !previewLoading ? (
               <>
-                <Users className="w-4 h-4 text-[#8CD955]" />
+                <Users className="w-4 h-4 text-[#E86A24]" />
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                  <span className="text-[#8CD955]">{previewCount.toLocaleString('pt-BR')}</span>
+                  <span className="text-[#E86A24]">{previewCount.toLocaleString('pt-BR')}</span>
                   {previewHasMore ? '+' : ''} cliente{previewCount !== 1 ? 's' : ''} encontrado{previewCount !== 1 ? 's' : ''}
                 </span>
               </>
@@ -620,7 +620,7 @@ export default function ExportCsvModal({
                           return (
                           <div
                             key={String(lead.id)}
-                            className="rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-100 dark:border-[#404040] p-2 text-left hover:border-[#8CD955]/40 transition-colors"
+                            className="rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-100 dark:border-[#404040] p-2 text-left hover:border-[#E86A24]/40 transition-colors"
                           >
                             <p className="text-xs font-medium text-gray-900 dark:text-white truncate" title={fullName}>
                               {fullName}
@@ -652,7 +652,7 @@ export default function ExportCsvModal({
           {exportProgress && (
             <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
               <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-              <span className="font-medium text-[#8CD955]">Processando dados para download...</span>
+              <span className="font-medium text-[#E86A24]">Processando dados para download...</span>
               <span className="text-gray-500 dark:text-gray-500">
                 {exportProgress.totalBancas && exportProgress.totalBancas > 1
                   ? `Banca ${exportProgress.bancaIndex}/${exportProgress.totalBancas} · `
@@ -676,7 +676,7 @@ export default function ExportCsvModal({
                   <button
                     type="button"
                     onClick={handleDownloadLoadedNow}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#8CD955] hover:bg-[#7BC84A] text-gray-900"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900"
                   >
                     <Download className="w-4 h-4" />
                     Baixar CSV com {exportAccumulated.length.toLocaleString('pt-BR')} leads já carregados
@@ -704,7 +704,7 @@ export default function ExportCsvModal({
                   type="button"
                   onClick={runExport}
                   disabled={!canExport}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#8CD955] hover:bg-[#7BC84A] text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Download className="w-4 h-4" />
                   Exportar CSV

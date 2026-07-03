@@ -4,7 +4,7 @@ import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const GIRO_BONUS_LABEL = 'Recebeu bonus de Giro';
-const GIRO_BONUS_COLOR = '#8CD955';
+const GIRO_BONUS_COLOR = '#E86A24';
 
 /**
  * GET /api/crm/tags/ensure-giro-bonus

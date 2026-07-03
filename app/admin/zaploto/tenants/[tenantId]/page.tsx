@@ -53,7 +53,7 @@ export default function AdminZaplotoTenantDetailPage() {
     () =>
       resolveTenantPalettes({
         theme_colors: form.theme_colors,
-        primary_color: form.primary_color || '#8CD955',
+        primary_color: form.primary_color || '#E86A24',
         secondary_color: (form.secondary_color ?? '').trim() || null,
       }),
     [form.theme_colors, form.primary_color, form.secondary_color]
@@ -101,7 +101,7 @@ export default function AdminZaplotoTenantDetailPage() {
             name: json.data.name,
             slug: json.data.slug,
             app_title: json.data.app_title ?? '',
-            primary_color: json.data.primary_color ?? '#8CD955',
+            primary_color: json.data.primary_color ?? '#E86A24',
             secondary_color: json.data.secondary_color ?? '',
             is_active: json.data.is_active,
             logo_source: json.data.logo_source ?? '',
@@ -135,7 +135,7 @@ export default function AdminZaplotoTenantDetailPage() {
           slug: normalizedSlug,
           domain: null,
           app_title: form.app_title?.trim() || form.name,
-          primary_color: form.primary_color || '#8CD955',
+          primary_color: form.primary_color || '#E86A24',
           secondary_color: (form.secondary_color ?? '').trim() || null,
           theme_colors: normalizeThemeColorsInput(form.theme_colors ?? null),
           is_active: form.is_active,
@@ -250,7 +250,7 @@ export default function AdminZaplotoTenantDetailPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -312,7 +312,7 @@ export default function AdminZaplotoTenantDetailPage() {
               <button
                 type="button"
                 onClick={() => handleCopyUrl(baseUrl)}
-                className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium shrink-0"
+                className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium shrink-0"
               >
                 {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 {copied ? 'Copiado!' : 'Copiar'}
@@ -328,7 +328,7 @@ export default function AdminZaplotoTenantDetailPage() {
               <button
                 type="button"
                 onClick={() => handleCopyUrl(loginUrl)}
-                className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium shrink-0"
+                className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] text-sm font-medium shrink-0"
               >
                 {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 {copied ? 'Copiado!' : 'Copiar login'}
@@ -351,7 +351,7 @@ export default function AdminZaplotoTenantDetailPage() {
               )}
             </div>
             <div className="flex flex-col gap-2">
-              <label className="inline-flex items-center gap-2 px-3 py-2 bg-[#8CD955] text-white rounded-lg text-sm font-medium cursor-pointer hover:bg-[#7bc84d] w-fit">
+              <label className="inline-flex items-center gap-2 px-3 py-2 bg-[#E86A24] text-white rounded-lg text-sm font-medium cursor-pointer hover:bg-[#7bc84d] w-fit">
                 {uploadingLogo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                 {uploadingLogo ? 'Enviando...' : 'Enviar arquivo'}
                 <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="hidden" onChange={handleLogoFile} disabled={uploadingLogo} />
@@ -404,8 +404,8 @@ export default function AdminZaplotoTenantDetailPage() {
           <BrandColorField
             label="Cor primária (marca)"
             hint="Hex (#RRGGBB). Base para tokens que não tiverem override abaixo."
-            value={form.primary_color ?? '#8CD955'}
-            placeholder="#8CD955"
+            value={form.primary_color ?? '#E86A24'}
+            placeholder="#E86A24"
             previewLabel="Marca"
             onChange={(v) => setForm((f) => ({ ...f, primary_color: v }))}
           />
@@ -432,7 +432,7 @@ export default function AdminZaplotoTenantDetailPage() {
               type="checkbox"
               checked={form.is_active !== false}
               onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
-              className="rounded border-gray-300 dark:border-gray-600 text-[#8CD955] focus:ring-[#8CD955]"
+              className="rounded border-gray-300 dark:border-gray-600 text-[#E86A24] focus:ring-[#E86A24]"
             />
             <span className="text-sm text-gray-700 dark:text-gray-300">Ativo</span>
           </label>
@@ -441,7 +441,7 @@ export default function AdminZaplotoTenantDetailPage() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50 flex items-center gap-2"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Salvar

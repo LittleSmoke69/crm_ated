@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
 
     // Valida formato da cor (hex)
     if (!/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(color)) {
-      return errorResponse('Cor deve estar no formato hexadecimal (ex: #8CD955)', 400);
+      return errorResponse('Cor deve estar no formato hexadecimal (ex: #E86A24)', 400);
     }
 
     const { data, error } = await supabaseServiceRole

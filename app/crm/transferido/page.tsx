@@ -854,7 +854,7 @@ const TransferidoContent = () => {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
         <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955] mx-auto mb-4" />
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24] mx-auto mb-4" />
           <p className="text-gray-700 dark:text-gray-200 font-medium">Carregando...</p>
         </div>
       </div>
@@ -868,13 +868,13 @@ const TransferidoContent = () => {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-emerald-100 rounded-xl">
-                <ArrowRightLeft className="w-5 h-5 md:w-6 md:h-6 text-[#8CD955]" />
+                <ArrowRightLeft className="w-5 h-5 md:w-6 md:h-6 text-[#E86A24]" />
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">Leads Transferidos</h1>
                   {isInitialLoading && (
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#8CD955]/20 text-[#8CD955] text-xs font-semibold">
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#E86A24]/20 text-[#E86A24] text-xs font-semibold">
                       <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
                       Carregando...
                     </span>
@@ -908,7 +908,7 @@ const TransferidoContent = () => {
               )}
               <button
                 onClick={() => setShowStatusModal(true)}
-                className="whitespace-nowrap flex items-center gap-2 bg-[#8CD955] text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-[#7BC84A] transition-all shadow-md flex-shrink-0"
+                className="whitespace-nowrap flex items-center gap-2 bg-[#E86A24] text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-[#D95E1B] transition-all shadow-md flex-shrink-0"
               >
                 <Eye className="w-3.5 h-3.5" />
                 Informações de Status
@@ -926,7 +926,7 @@ const TransferidoContent = () => {
             </div>
             <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
               <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Depositado</p>
-              <p className="text-lg font-bold text-[#8CD955]">{formatCurrency(metrics?.total_deposited ?? 0)}</p>
+              <p className="text-lg font-bold text-[#E86A24]">{formatCurrency(metrics?.total_deposited ?? 0)}</p>
             </div>
             <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
               <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Clientes Ativos</p>
@@ -946,8 +946,8 @@ const TransferidoContent = () => {
 
           {/* Bloco: mantém o usuário informado até terminar todos os lotes; mostra total de leads já carregados */}
           {batchLoadInProgress && (
-            <div className="mb-4 py-4 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
-              <RefreshCw className="w-6 h-6 animate-spin text-[#8CD955] flex-shrink-0" />
+            <div className="mb-4 py-4 px-4 bg-[#E86A24]/15 dark:bg-[#E86A24]/10 border-2 border-[#E86A24]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
+              <RefreshCw className="w-6 h-6 animate-spin text-[#E86A24] flex-shrink-0" />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">
                   {rawLeads.length === 0
@@ -958,7 +958,7 @@ const TransferidoContent = () => {
                 </p>
                 {loadingProgress && (loadingFullInBackground || loading || filterLoading) && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-1">
-                    <span className="font-medium text-[#8CD955]">{loadingProgress.totalLoaded.toLocaleString('pt-BR')} leads</span> no quadro
+                    <span className="font-medium text-[#E86A24]">{loadingProgress.totalLoaded.toLocaleString('pt-BR')} leads</span> no quadro
                     {loadingProgress.totalBancas != null && loadingProgress.totalBancas > 0 && (
                       <> · Banca {loadingProgress.currentBanca} de {loadingProgress.totalBancas}</>
                     )}
@@ -1008,8 +1008,8 @@ const TransferidoContent = () => {
         <div className="flex-1 overflow-x-auto overflow-y-auto pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[400px]">
           {/* Indicador quando já há leads e ainda está carregando mais lotes em segundo plano */}
           {(loading || filterLoading || loadingFullInBackground) && rawLeads.length > 0 && (
-            <div className="absolute top-2 right-2 z-20 flex items-center gap-2 px-3 py-1.5 bg-[#8CD955]/20 dark:bg-[#8CD955]/15 border border-[#8CD955]/40 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8CD955]" />
+            <div className="absolute top-2 right-2 z-20 flex items-center gap-2 px-3 py-1.5 bg-[#E86A24]/20 dark:bg-[#E86A24]/15 border border-[#E86A24]/40 rounded-lg text-xs font-medium text-gray-700 dark:text-gray-200">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#E86A24]" />
               <span>{loadingProgress?.totalLoaded?.toLocaleString('pt-BR') ?? 0} leads carregados</span>
             </div>
           )}
@@ -1047,8 +1047,8 @@ const TransferidoContent = () => {
         {isInitialLoading && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/85 dark:bg-[#1a1a1a]/92 backdrop-blur-sm rounded-2xl">
             <div className="flex flex-col items-center gap-4 px-6 py-8 max-w-sm text-center">
-              <div className="p-4 rounded-full bg-[#8CD955]/20">
-                <RefreshCw className="w-10 h-10 text-[#8CD955] animate-spin" />
+              <div className="p-4 rounded-full bg-[#E86A24]/20">
+                <RefreshCw className="w-10 h-10 text-[#E86A24] animate-spin" />
               </div>
               <div>
                 <p className="font-bold text-gray-800 dark:text-white text-lg">{loadingMessage}</p>
@@ -1093,7 +1093,7 @@ const TransferidoContent = () => {
               </p>
             </div>
             <div className="sticky bottom-0 bg-gray-50 dark:bg-[#333] border-t border-gray-200 dark:border-[#404040] px-6 py-4 rounded-b-2xl">
-              <button onClick={() => setShowStatusModal(false)} className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold rounded-xl">
+              <button onClick={() => setShowStatusModal(false)} className="w-full py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold rounded-xl">
                 Entendi
               </button>
             </div>

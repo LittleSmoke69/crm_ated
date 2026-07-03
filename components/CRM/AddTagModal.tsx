@@ -207,14 +207,14 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
               <button
                 type="button"
                 onClick={handleCloseAfterSuccess}
-                className="px-4 py-3 sm:py-2 min-h-[44px] bg-[#8CD955] hover:bg-[#7bc74a] text-white font-medium rounded-xl transition touch-manipulation"
+                className="px-4 py-3 sm:py-2 min-h-[44px] bg-[#E86A24] hover:bg-[#7bc74a] text-white font-medium rounded-xl transition touch-manipulation"
               >
                 Fechar
               </button>
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center py-8 shrink-0">
-              <Loader2 className="w-6 h-6 animate-spin text-[#8CD955]" />
+              <Loader2 className="w-6 h-6 animate-spin text-[#E86A24]" />
             </div>
           ) : availableTags.length === 0 ? (
             <div className="text-center py-8 text-gray-500 shrink-0">
@@ -229,7 +229,7 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
                   key={tag.id}
                   onClick={() => handleAddTag(tag.id)}
                   disabled={adding === tag.id}
-                  className="w-full flex items-center gap-3 p-3 sm:p-3 py-3.5 rounded-xl border border-gray-200 hover:border-[#8CD955] hover:bg-[#8CD955]/5 active:bg-[#8CD955]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px] touch-manipulation"
+                  className="w-full flex items-center gap-3 p-3 sm:p-3 py-3.5 rounded-xl border border-gray-200 hover:border-[#E86A24] hover:bg-[#E86A24]/5 active:bg-[#E86A24]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px] touch-manipulation"
                 >
                   <div
                     className="w-4 h-4 rounded-full flex-shrink-0"
@@ -239,7 +239,7 @@ const AddTagModal: React.FC<AddTagModalProps> = ({
                     {tag.label}
                   </span>
                   {adding === tag.id && (
-                    <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" />
+                    <Loader2 className="w-4 h-4 animate-spin text-[#E86A24]" />
                   )}
                 </button>
               ))}

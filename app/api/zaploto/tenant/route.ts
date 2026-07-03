@@ -15,10 +15,10 @@ const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
 
 const defaultPayload = () => ({
   id: null,
-  name: 'ZapLoto',
+  name: 'crmTR',
   slug: 'zaploto',
-  app_title: 'ZapLoto',
-  primary_color: '#8CD955',
+  app_title: 'crmTR',
+  primary_color: '#E86A24',
   logo_url: null,
   favicon_url: null,
   secondary_color: null,
@@ -99,7 +99,7 @@ export async function GET(req: NextRequest) {
       name: tenant.name,
       slug: tenant.slug,
       domain: tenant.domain,
-      app_title: tenant.app_title || 'ZapLoto',
+      app_title: tenant.app_title === 'crm-atendimento' ? 'crmTR' : (tenant.app_title || 'crmTR'),
       primary_color: tenant.primary_color,
       secondary_color: tenant.secondary_color,
       logo_url: branding.logo_url,

@@ -5,11 +5,11 @@ import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { Loader2 } from 'lucide-react';
 
-/** Redireciona para a gestão unificada do chat (aba Relatório). */
+/** Redireciona para a gestão unificada do chat. */
 export default function ChatReportRedirectPage() {
   const router = useTenantRouter();
   useEffect(() => {
-    router.replace('/admin/chat-gestao?tab=relatorio');
+    router.replace('/admin/chat-gestao');
   }, [router]);
   return (
     <Layout>

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from '@/components/WhitelabelLink';
 import { Loader2, MessageSquare, Plus, RefreshCw } from 'lucide-react';
+import { zapCardMuted, zapInput, zapTableWrap } from '@/lib/zap-card-styles';
 
 type EvolutionApiOption = {
   id: string;
@@ -217,12 +218,12 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <MessageSquare className="w-6 h-6 text-[#8CD955]" />
+            <MessageSquare className="w-6 h-6 text-[#E86A24]" />
             Instâncias de atendimento (Evolution)
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             Crie instâncias vinculadas ao webhook Zaploto e atribua consultores. O atendimento em tempo real é feito em{' '}
-            <Link href="/chat-atendimento" className="text-[#8CD955] font-medium underline">
+            <Link href="/chat-atendimento" className="text-[#E86A24] font-medium underline">
               Chat Atendimento
             </Link>
             .
@@ -250,10 +251,10 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
 
       <form
         onSubmit={handleCreate}
-        className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6 space-y-4"
+        className={`${zapCardMuted} space-y-4 p-6`}
       >
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-          <Plus className="w-5 h-5 text-[#8CD955]" />
+        <h3 className="flex items-center gap-2 text-lg font-semibold text-white">
+          <Plus className="w-5 h-5 text-[#E86A24]" />
           Nova instância
         </h3>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -266,7 +267,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
                 required
                 value={gerenteCreateId}
                 onChange={(e) => setGerenteCreateId(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-sm"
+                className={`w-full px-3 py-2 text-sm ${zapInput}`}
               >
                 <option value="">Selecione o gerente...</option>
                 {gerentes.map((g) => (
@@ -283,7 +284,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
               required
               value={evolutionApiId}
               onChange={(e) => setEvolutionApiId(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-sm"
+              className={`w-full px-3 py-2 text-sm ${zapInput}`}
             >
               <option value="">Selecione...</option>
               {apis.map((a) => (
@@ -300,7 +301,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
               value={instanceName}
               onChange={(e) => setInstanceName(e.target.value)}
               placeholder="ex: atendimento_loja_a"
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-sm"
+              className={`w-full px-3 py-2 text-sm ${zapInput}`}
             />
           </div>
           <div>
@@ -308,7 +309,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
             <select
               value={maturationType}
               onChange={(e) => setMaturationType(e.target.value as 'maturado' | 'virgem')}
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] text-sm"
+              className={`w-full px-3 py-2 text-sm ${zapInput}`}
             >
               <option value="maturado">Maturado</option>
               <option value="virgem">Virgem (Maturador / rede mútua)</option>
@@ -318,7 +319,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
               Consultores (opcional)
             </label>
-            <div className="max-h-32 overflow-y-auto rounded-lg border border-gray-300 dark:border-[#404040] bg-white dark:bg-[#333] px-2 py-2 space-y-1.5 text-sm">
+            <div className={`max-h-32 overflow-y-auto px-2 py-2 space-y-1.5 text-sm ${zapInput}`}>
               {consultores.length === 0 ? (
                 <span className="text-gray-500 text-xs">Nenhum consultor listado</span>
               ) : (
@@ -347,7 +348,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
           type="submit"
           disabled={saving}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-60"
-          style={{ backgroundColor: '#8CD955' }}
+          style={{ backgroundColor: '#E86A24' }}
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           Criar instância
@@ -360,8 +361,8 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
         )}
       </form>
 
-      <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040]">
+      <div className={`${zapTableWrap} overflow-hidden`}>
+        <div className="border-b border-[#404040] px-6 py-4">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             {mode === 'admin' ? 'Todas as instâncias' : 'Suas instâncias'}
           </h3>
@@ -376,7 +377,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-[#404040] text-left text-gray-500 dark:text-gray-400">
+                <tr className="border-b border-[#404040] text-left text-xs font-bold uppercase tracking-wider text-gray-400">
                   <th className="px-4 py-3 font-medium">Instância</th>
                   {mode === 'admin' && <th className="px-4 py-3 font-medium">Gerente</th>}
                   <th className="px-4 py-3 font-medium">Status</th>
@@ -387,7 +388,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
                 {assignments.map((row) => {
                   const inst = row.evolution_instances;
                   return (
-                    <tr key={row.id} className="border-b border-gray-100 dark:border-[#333]">
+                    <tr key={row.id} className="border-b border-[#404040]/40 hover:bg-[#333]/50">
                       <td className="px-4 py-3 text-gray-900 dark:text-gray-100 font-medium">
                         {inst?.instance_name || row.evolution_instance_id}
                       </td>

@@ -105,9 +105,9 @@ export default function TagsSummaryChart({
       {hasConsultoresData && (mostUsedConsultor || leastUsedConsultor) && (
         <div className="flex flex-wrap gap-4 text-sm">
           {mostUsedConsultor && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#8CD95515] dark:bg-[#8CD95525] border border-[#8CD955]/30">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#E86A2415] dark:bg-[#E86A2425] border border-[#E86A24]/30">
               <span className="font-bold text-gray-600 dark:text-gray-400">Mais etiquetas:</span>
-              <span className="font-bold text-[#8CD955] truncate max-w-[200px]" title={mostUsedConsultor}>
+              <span className="font-bold text-[#E86A24] truncate max-w-[200px]" title={mostUsedConsultor}>
                 {mostUsedConsultor}
               </span>
             </div>
@@ -164,7 +164,7 @@ export default function TagsSummaryChart({
                   />
                   <Bar dataKey="count" name="Aplicações" radius={[0, 4, 4, 0]}>
                     {tagsChartData.map((entry, index) => (
-                      <Cell key={entry.id} fill={entry.color || '#8CD955'} />
+                      <Cell key={entry.id} fill={entry.color || '#E86A24'} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -214,8 +214,8 @@ export default function TagsSummaryChart({
                     {consultoresChartData.map((entry, index) => {
                       const isFirst = index === 0;
                       const isLast = consultoresChartData.length > 1 && index === consultoresChartData.length - 1;
-                      let fill = '#8CD955';
-                      if (isFirst) fill = '#8CD955';
+                      let fill = '#E86A24';
+                      if (isFirst) fill = '#E86A24';
                       else if (isLast) fill = '#9ca3af';
                       return <Cell key={entry.name + index} fill={fill} />;
                     })}

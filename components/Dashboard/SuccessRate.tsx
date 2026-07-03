@@ -17,7 +17,7 @@ const SuccessRate: React.FC<SuccessRateProps> = ({ rate }) => {
             className="absolute top-0 left-0 h-full transition-all duration-500 rounded-full"
             style={{ 
               width: `${rate}%`,
-              background: 'linear-gradient(to right, #A8E677, #8CD955)'
+              background: 'linear-gradient(to right, #EF9057, #E86A24)'
             }}
           />
         </div>

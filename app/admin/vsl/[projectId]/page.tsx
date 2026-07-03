@@ -209,7 +209,7 @@ export default function AdminVslProjectPage() {
     );
   }
 
-  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none transition';
+  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none transition';
 
   return (
     <Layout>
@@ -241,8 +241,8 @@ export default function AdminVslProjectPage() {
         {/* Card: Dados do projeto */}
         <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#8CD955]/15">
-              <Settings className="w-5 h-5 text-[#8CD955]" />
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#E86A24]/15">
+              <Settings className="w-5 h-5 text-[#E86A24]" />
             </div>
             <div>
               <h2 className="font-semibold text-gray-800">Dados do projeto</h2>
@@ -292,7 +292,7 @@ export default function AdminVslProjectPage() {
                   max={60}
                   value={form.redirect_timer_seconds}
                   onChange={(e) => setForm((f) => ({ ...f, redirect_timer_seconds: Number(e.target.value) || 5 }))}
-                  className="w-full sm:w-28 border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none transition"
+                  className="w-full sm:w-28 border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none transition"
                 />
               </div>
             </div>
@@ -310,7 +310,7 @@ export default function AdminVslProjectPage() {
                 type="button"
                 onClick={() => { void saveProject(); void saveTimer(); }}
                 disabled={saving}
-                className="flex items-center gap-2 px-6 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
+                className="flex items-center gap-2 px-6 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Salvar alterações
@@ -362,7 +362,7 @@ export default function AdminVslProjectPage() {
             </div>
           </div>
           <div className="p-6">
-            <label className="flex flex-col items-center justify-center w-full min-h-[120px] border-2 border-dashed border-gray-200 rounded-xl cursor-pointer hover:border-[#8CD955]/50 hover:bg-gray-50/50 transition">
+            <label className="flex flex-col items-center justify-center w-full min-h-[120px] border-2 border-dashed border-gray-200 rounded-xl cursor-pointer hover:border-[#E86A24]/50 hover:bg-gray-50/50 transition">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/svg+xml"
@@ -389,8 +389,8 @@ export default function AdminVslProjectPage() {
         <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden lg:min-h-0">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
             <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#8CD955]/15">
-                <FileVideo className="w-5 h-5 text-[#8CD955]" />
+              <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#E86A24]/15">
+                <FileVideo className="w-5 h-5 text-[#E86A24]" />
               </div>
               <div>
                 <h2 className="font-semibold text-gray-800">Páginas VSL</h2>
@@ -400,7 +400,7 @@ export default function AdminVslProjectPage() {
             <button
               type="button"
               onClick={() => router.push(`/admin/vsl/${projectId}/pages/new`)}
-              className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white text-sm font-medium rounded-xl hover:opacity-90 transition"
+              className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white text-sm font-medium rounded-xl hover:opacity-90 transition"
             >
               Nova página
             </button>
@@ -421,7 +421,7 @@ export default function AdminVslProjectPage() {
                         type="button"
                         onClick={() => router.push(`/admin/vsl/${projectId}/pages/${p.id}/edit`)}
                         title="Editar página"
-                        className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-[#8CD955] rounded-lg transition"
+                        className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-[#E86A24] rounded-lg transition"
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
@@ -429,7 +429,7 @@ export default function AdminVslProjectPage() {
                         href={`/vsl/${p.slug}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-sm text-[#8CD955] hover:underline font-medium"
+                        className="flex items-center gap-1 text-sm text-[#E86A24] hover:underline font-medium"
                       >
                         <ExternalLink className="w-4 h-4" />
                         /vsl/{p.slug}

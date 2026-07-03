@@ -719,7 +719,7 @@ const ContactsPage = () => {
           <div
             key={toast.id}
             className={`flex items-center gap-3 w-full sm:min-w-[320px] px-4 sm:px-6 py-4 rounded-lg shadow-lg text-white ${
-              toast.type === 'success' ? 'bg-[#8CD955]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
+              toast.type === 'success' ? 'bg-[#E86A24]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
             }`}
           >
             {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
@@ -755,7 +755,7 @@ const ContactsPage = () => {
             </div>
             <button
               onClick={handleExportCSV}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 border-2 border-[#8CD955] text-[#8CD955] rounded-lg hover:bg-[#8CD95515] transition flex items-center justify-center gap-2 text-sm sm:text-base"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 border-2 border-[#E86A24] text-[#E86A24] rounded-lg hover:bg-[#E86A2415] transition flex items-center justify-center gap-2 text-sm sm:text-base"
             >
               <Download className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden sm:inline">Exportar CSV</span>
@@ -785,7 +785,7 @@ const ContactsPage = () => {
                 setSelectedContacts(new Set());
                 setShowCustomListModal(true);
               }}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 border-2 border-[#8CD955] text-[#8CD955] rounded-lg hover:bg-[#8CD95515] transition flex items-center justify-center gap-2 text-sm sm:text-base"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 border-2 border-[#E86A24] text-[#E86A24] rounded-lg hover:bg-[#E86A2415] transition flex items-center justify-center gap-2 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden sm:inline">Criar Lista</span>
@@ -793,7 +793,7 @@ const ContactsPage = () => {
             </button>
             <button
               onClick={loadInitialData}
-              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg transition flex items-center justify-center gap-2 text-sm sm:text-base"
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg transition flex items-center justify-center gap-2 text-sm sm:text-base"
             >
               <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden sm:inline">Atualizar</span>
@@ -812,7 +812,7 @@ const ContactsPage = () => {
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 placeholder="Nome ou telefone..."
-                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 text-gray-200 bg-[#333]"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] placeholder:text-gray-500 text-gray-200 bg-[#333]"
               />
             </div>
             <div>
@@ -820,7 +820,7 @@ const ContactsPage = () => {
               <select
                 value={filterStatus}
                 onChange={e => setFilterStatus(e.target.value)}
-                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-200 bg-[#333]"
               >
                 <option value="all">Todos</option>
                 <option value="active">Ativos</option>
@@ -837,7 +837,7 @@ const ContactsPage = () => {
                   setItemsPerPage(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
+                className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-200 bg-[#333]"
               >
                 <option value="10">10</option>
                 <option value="25">25</option>
@@ -880,7 +880,7 @@ const ContactsPage = () => {
           
           {loadingInitial ? (
             <div className="flex flex-col items-center justify-center py-16 gap-4" data-tour-id="contatos-loading">
-              <Loader2 className="w-12 h-12 text-[#8CD955] animate-spin" aria-hidden />
+              <Loader2 className="w-12 h-12 text-[#E86A24] animate-spin" aria-hidden />
               <p className="text-gray-400 font-medium">Carregando contatos...</p>
             </div>
           ) : paginatedContacts.length === 0 ? (
@@ -895,7 +895,7 @@ const ContactsPage = () => {
                     type="checkbox"
                     checked={selectedContacts.size === paginatedContacts.length && paginatedContacts.length > 0}
                     onChange={handleSelectAll}
-                    className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955]"
+                    className="w-5 h-5 text-[#E86A24] rounded focus:ring-[#E86A24]"
                   />
                   <span className="text-sm text-gray-400">
                     {selectedContacts.size > 0 ? `${selectedContacts.size} selecionado(s)` : 'Selecionar todos'}
@@ -905,7 +905,7 @@ const ContactsPage = () => {
                   {selectedContacts.size > 0 && (
                     <button
                       onClick={() => setShowCustomListModal(true)}
-                      className="w-full sm:w-auto px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg transition flex items-center justify-center gap-2 text-sm sm:text-base"
+                      className="w-full sm:w-auto px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg transition flex items-center justify-center gap-2 text-sm sm:text-base"
                     >
                       <Plus className="w-4 h-4" />
                       <span className="hidden sm:inline">Criar Lista Personalizada</span>
@@ -944,8 +944,8 @@ const ContactsPage = () => {
                         displayAsBlocked
                           ? 'border-blue-900/50 bg-blue-900/20 opacity-80'
                           : selectedContacts.has(contact.id)
-                          ? 'border-[#8CD955] bg-[#8CD95515]'
-                          : 'border-[#404040] hover:border-[#8CD95540] bg-[#333]'
+                          ? 'border-[#E86A24] bg-[#E86A2415]'
+                          : 'border-[#404040] hover:border-[#E86A2440] bg-[#333]'
                       }`}
                     >
                     <div className="flex items-start sm:items-center gap-3 flex-1 w-full sm:w-auto min-w-0">
@@ -954,7 +954,7 @@ const ContactsPage = () => {
                         checked={selectedContacts.has(contact.id)}
                         onChange={() => handleToggleSelectContact(contact.id)}
                         disabled={displayAsBlocked}
-                        className="w-5 h-5 text-[#8CD955] rounded focus:ring-[#8CD955] flex-shrink-0 mt-1 sm:mt-0 disabled:bg-gray-200 disabled:cursor-not-allowed"
+                        className="w-5 h-5 text-[#E86A24] rounded focus:ring-[#E86A24] flex-shrink-0 mt-1 sm:mt-0 disabled:bg-gray-200 disabled:cursor-not-allowed"
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -964,7 +964,7 @@ const ContactsPage = () => {
                           <span
                             className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${
                               contact.status === 'active'
-                                ? 'bg-[#8CD95515] text-[#6AB83D]'
+                                ? 'bg-[#E86A2415] text-[#C9531A]'
                                 : contact.status === 'pending'
                                 ? 'bg-yellow-900/30 text-yellow-400'
                                 : 'bg-[#404040] text-gray-400'
@@ -1002,7 +1002,7 @@ const ContactsPage = () => {
                       <button
                         onClick={() => handleToggleStatus(contact)}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition flex-shrink-0 ${
-                          contact.status === 'active' ? 'bg-[#8CD955]' : 'bg-gray-300'
+                          contact.status === 'active' ? 'bg-[#E86A24]' : 'bg-gray-300'
                         }`}
                       >
                         <span
@@ -1059,7 +1059,7 @@ const ContactsPage = () => {
           
           {loadingLists ? (
             <div className="text-center py-8">
-              <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[#8CD955] mb-2" />
+              <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[#E86A24] mb-2" />
               <p className="text-gray-500">Carregando listas...</p>
             </div>
           ) : customLists.length === 0 ? (
@@ -1070,7 +1070,7 @@ const ContactsPage = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {customLists.map(list => (
-                <div key={list.id} className="p-4 border-2 border-[#404040] rounded-xl hover:border-[#8CD95540] hover:bg-[#8CD95510] transition bg-[#333]">
+                <div key={list.id} className="p-4 border-2 border-[#404040] rounded-xl hover:border-[#E86A2440] hover:bg-[#E86A2410] transition bg-[#333]">
                   <div className="flex justify-between items-start mb-2">
                     <h3 className="font-bold text-gray-200 truncate pr-2">{list.name}</h3>
                     <div className="flex gap-1">
@@ -1108,7 +1108,7 @@ const ContactsPage = () => {
                           // Scroll para o topo para ver os contatos marcados
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="p-1.5 text-[#8CD955] hover:bg-[#8CD95515] rounded transition"
+                        className="p-1.5 text-[#E86A24] hover:bg-[#E86A2415] rounded transition"
                         title="Editar Contatos da Lista"
                       >
                         <Users className="w-4 h-4" />
@@ -1179,7 +1179,7 @@ const ContactsPage = () => {
                   value={customListName}
                   onChange={e => setCustomListName(e.target.value)}
                   placeholder="Ex: Lista de Vendas"
-                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] placeholder:text-gray-500 text-gray-200 bg-[#333]"
+                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] placeholder:text-gray-500 text-gray-200 bg-[#333]"
                 />
               </div>
 
@@ -1194,7 +1194,7 @@ const ContactsPage = () => {
                         type="number"
                         value={listContactCount}
                         onChange={e => setListContactCount(Number(e.target.value))}
-                        className="flex-1 px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
+                        className="flex-1 px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-200 bg-[#333]"
                         min="0"
                         max={availableContactsCount}
                       />
@@ -1211,8 +1211,8 @@ const ContactsPage = () => {
                   </div>
 
                   {selectedContacts.size > 0 && (
-                    <div className="p-3 bg-[#8CD95515] border border-[#8CD95540] rounded-lg">
-                      <p className="text-sm text-[#6AB83D] font-medium">
+                    <div className="p-3 bg-[#E86A2415] border border-[#E86A2440] rounded-lg">
+                      <p className="text-sm text-[#C9531A] font-medium">
                         {selectedContacts.size} contato(s) selecionado(s) manualmente serão priorizados.
                       </p>
                     </div>
@@ -1227,7 +1227,7 @@ const ContactsPage = () => {
                 <select
                   value={listSelectedGroup}
                   onChange={e => setListSelectedGroup(e.target.value)}
-                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-200 bg-[#333]"
+                  className="w-full px-4 py-2 border-2 border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-200 bg-[#333]"
                 >
                   <option value="">Nenhum Grupo</option>
                   {dbGroups.map(group => (
@@ -1257,7 +1257,7 @@ const ContactsPage = () => {
                 <button
                   onClick={handleCreateCustomList}
                   disabled={creatingList}
-                  className={`flex-1 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg transition flex items-center justify-center gap-2 font-medium ${creatingList ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  className={`flex-1 px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg transition flex items-center justify-center gap-2 font-medium ${creatingList ? 'opacity-70 cursor-not-allowed' : ''}`}
                 >
                   {creatingList ? (
                     <>

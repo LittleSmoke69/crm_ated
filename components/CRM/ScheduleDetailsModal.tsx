@@ -316,7 +316,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                     onEditMessage(schedule.message_id);
                     onClose();
                   }}
-                  className="px-3 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                  className="px-3 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition-colors flex items-center gap-2"
                 >
                   <ExternalLink className="w-4 h-4" />
                   Editar mensagem
@@ -376,7 +376,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                         value={formData.selectedDate}
                         onChange={(e) => setFormData({ ...formData, selectedDate: e.target.value })}
                         min={new Date().toISOString().split('T')[0]}
-                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                       />
                     </div>
                     <div>
@@ -387,7 +387,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                         type="time"
                         value={formData.selectedTime}
                         onChange={(e) => setFormData({ ...formData, selectedTime: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                       />
                     </div>
                   </>
@@ -401,7 +401,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                       type="time"
                       value={formData.selectedTime}
                       onChange={(e) => setFormData({ ...formData, selectedTime: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                     />
                   </div>
                 )}
@@ -436,7 +436,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                   <select
                     value={formData.instance_name}
                     onChange={(e) => setFormData({ ...formData, instance_name: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione a instância</option>
                     {instancesWithCurrent.map((inst) => (
@@ -463,7 +463,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowAddGroups(true)}
-                  className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium flex items-center gap-1"
+                  className="px-3 py-1.5 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg text-sm font-medium flex items-center gap-1"
                 >
                   <Plus className="w-4 h-4" />
                   Adicionar grupos
@@ -489,7 +489,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                               onEditMessageForGroup(schedule.message_id, s.id);
                               onClose();
                             }}
-                            className="px-2 py-1 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 rounded text-sm font-medium flex items-center gap-1"
+                            className="px-2 py-1 text-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/20 rounded text-sm font-medium flex items-center gap-1"
                             title="Editar mensagem só para este grupo (cria novo modelo)"
                           >
                             <Edit2 className="w-4 h-4" />
@@ -544,7 +544,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                               setSelectedGroupIdsToAdd((prev) => prev.filter((id) => id !== g.group_id));
                             }
                           }}
-                          className="rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                          className="rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                         />
                         <span className="text-sm text-gray-800 dark:text-white">{g.group_subject || g.group_id}</span>
                       </label>
@@ -556,7 +556,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                     type="button"
                     onClick={handleAddGroupsToDisparo}
                     disabled={addingGroups || selectedGroupIdsToAdd.length === 0}
-                    className="px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white rounded-lg text-sm font-medium flex items-center gap-2"
+                    className="px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 text-white rounded-lg text-sm font-medium flex items-center gap-2"
                   >
                     {addingGroups ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                     Adicionar selecionados
@@ -589,7 +589,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
                         group_subject: g?.group_subject || '',
                       });
                     }}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-800 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione o grupo</option>
                     {groupsWithCurrent.map((g) => (
@@ -642,7 +642,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
           {!isEditing ? (
             <button
               onClick={() => setIsEditing(true)}
-              className="flex-1 px-4 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
             >
               <Edit2 className="w-5 h-5" />
               Editar
@@ -651,7 +651,7 @@ const ScheduleDetailsModal: React.FC<ScheduleDetailsModalProps> = ({
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex-1 px-4 py-3 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-3 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
             >
               {saving ? (
                 <Loader2 className="w-5 h-5 animate-spin" />

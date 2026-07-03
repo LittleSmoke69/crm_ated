@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
     const res = successResponse({
       adminUserId: adminProfile.id,
       adminEmail: adminProfile.email,
+      adminStatus: adminProfile.status,
     });
     await appendRestoreAdminSession(res, adminProfile.id);
     return res;

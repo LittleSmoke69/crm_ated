@@ -131,7 +131,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
           }}
           className={buttonClass}
         >
-          <Filter className="w-4 h-4 text-[#8CD955]" />
+          <Filter className="w-4 h-4 text-[#E86A24]" />
           <span className="truncate max-w-[150px]">{selectedBancaName}</span>
           <ChevronDown className={`w-4 h-4 transition-transform ${showBanca ? 'rotate-180' : ''}`} />
         </button>
@@ -145,7 +145,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                   placeholder="Buscar banca..."
                   value={bancaSearch}
                   onChange={(e) => setBancaSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#8CD955]/30 placeholder:text-gray-500 dark:placeholder:text-gray-500 outline-none"
+                  className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#E86A24]/30 placeholder:text-gray-500 dark:placeholder:text-gray-500 outline-none"
                 />
               </div>
             </div>
@@ -157,7 +157,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                 }}
                 className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
                   !selectedBanca
-                    ? 'bg-[#8CD95510] text-[#8CD955] font-bold'
+                    ? 'bg-[#E86A2410] text-[#E86A24] font-bold'
                     : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                 }`}
               >
@@ -172,7 +172,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                   }}
                   className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all mb-1 ${
                     selectedBanca === banca.url
-                      ? 'bg-[#8CD95510] text-[#8CD955] font-bold'
+                      ? 'bg-[#E86A2410] text-[#E86A24] font-bold'
                       : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                   }`}
                 >
@@ -201,7 +201,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
             disabled={consultoresLoading || consultores.length === 0}
             className={`${buttonClass} disabled:opacity-80`}
           >
-            <Users className="w-4 h-4 text-[#8CD955]" />
+            <Users className="w-4 h-4 text-[#E86A24]" />
             {consultoresLoading
               ? 'Carregando...'
               : selectedConsultorId === 'all'
@@ -219,7 +219,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                     placeholder="Pesquisar consultor..."
                     value={consultorSearch}
                     onChange={(e) => setConsultorSearch(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
                     autoFocus
                   />
                 </div>
@@ -233,7 +233,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                   }}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                     selectedConsultorId === 'all'
-                      ? 'bg-[#8CD95515] text-[#8CD955] font-medium'
+                      ? 'bg-[#E86A2415] text-[#E86A24] font-medium'
                       : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                   }`}
                 >
@@ -249,7 +249,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                     }}
                     className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                       selectedConsultorId === c.id
-                        ? 'bg-[#8CD95515] text-[#8CD955] font-medium'
+                        ? 'bg-[#E86A2415] text-[#E86A24] font-medium'
                         : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                     }`}
                   >
@@ -282,7 +282,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
           }}
           className={buttonClass}
         >
-          <Calendar className="w-4 h-4 text-[#8CD955]" />
+          <Calendar className="w-4 h-4 text-[#E86A24]" />
           {DATE_FILTER_LABEL[dateFilter]}
           <ChevronDown className={`w-4 h-4 transition-transform ${showDate ? 'rotate-180' : ''}`} />
         </button>
@@ -302,7 +302,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                   }}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                     dateFilter === filter
-                      ? 'bg-[#8CD95515] text-[#8CD955] font-medium'
+                      ? 'bg-[#E86A2415] text-[#E86A24] font-medium'
                       : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                   }`}
                 >
@@ -320,7 +320,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                       value={customStartDate}
                       onChange={(e) => onChangeCustomStartDate(e.target.value)}
                       max={customEndDate || new Date().toISOString().split('T')[0]}
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     />
                   </div>
                   <div>
@@ -333,7 +333,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                       onChange={(e) => onChangeCustomEndDate(e.target.value)}
                       min={customStartDate}
                       max={new Date().toISOString().split('T')[0]}
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     />
                   </div>
                   <button
@@ -344,7 +344,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                       }
                     }}
                     disabled={!customStartDate || !customEndDate}
-                    className="w-full bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+                    className="w-full bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
                   >
                     Aplicar
                   </button>

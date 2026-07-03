@@ -51,7 +51,7 @@ export default function AdminHierarchyPage() {
     return (
       <Layout>
         <div className="min-h-[60vh] flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -67,7 +67,7 @@ export default function AdminHierarchyPage() {
             <p className="text-gray-600 dark:text-[#aaa] mb-4">Acesso restrito a SuperAdmin, Admin, Suporte ou cargo com permissão de Hierarquia.</p>
             <button
               onClick={() => router.push('/')}
-              className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition"
+              className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition"
             >
               Voltar ao Início
             </button>
@@ -84,8 +84,8 @@ export default function AdminHierarchyPage() {
           <div className="flex items-center gap-2 text-sm mb-6">
             <button
               type="button"
-              onClick={() => router.push(status === 'suporte' ? '/' : '/admin')}
-              className="text-[#8CD955] dark:text-[#00ff00] font-medium hover:underline"
+              onClick={() => router.push(status === 'suporte' ? '/crm/kanban' : '/admin')}
+              className="text-[#E86A24] dark:text-[#00ff00] font-medium hover:underline"
             >
               {status === 'suporte' ? 'Início' : 'Admin'}
             </button>

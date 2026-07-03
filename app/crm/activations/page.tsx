@@ -1539,8 +1539,8 @@ const ActivationsPage = () => {
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-[#8CD95515] rounded-lg">
-            <Activity className="w-6 h-6 text-[#8CD955]" />
+          <div className="p-2 bg-[#E86A2415] rounded-lg">
+            <Activity className="w-6 h-6 text-[#E86A24]" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Mensagem</h1>
@@ -1555,7 +1555,7 @@ const ActivationsPage = () => {
               onClick={() => setActiveTab('messages')}
               className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'messages'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  ? 'text-[#E86A24] border-b-2 border-[#E86A24] bg-[#E86A24]/5 dark:bg-[#E86A24]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
@@ -1565,7 +1565,7 @@ const ActivationsPage = () => {
               onClick={() => setActiveTab('schedules')}
               className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'schedules'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  ? 'text-[#E86A24] border-b-2 border-[#E86A24] bg-[#E86A24]/5 dark:bg-[#E86A24]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
@@ -1575,7 +1575,7 @@ const ActivationsPage = () => {
               onClick={() => setActiveTab('mass_send')}
               className={`flex-shrink-0 px-4 sm:px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 whitespace-nowrap ${
                 activeTab === 'mass_send'
-                  ? 'text-[#8CD955] border-b-2 border-[#8CD955] bg-[#8CD955]/5 dark:bg-[#8CD955]/10'
+                  ? 'text-[#E86A24] border-b-2 border-[#E86A24] bg-[#E86A24]/5 dark:bg-[#E86A24]/10'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-[#333]'
               }`}
             >
@@ -1646,7 +1646,7 @@ const ActivationsPage = () => {
                   handleRemoveFile();
                   setShowCreateModal(true);
                 }}
-                className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-md flex-shrink-0 whitespace-nowrap"
+                className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-md flex-shrink-0 whitespace-nowrap"
               >
                 <Plus className="w-5 h-5" />
                 Nova mensagem
@@ -1659,7 +1659,7 @@ const ActivationsPage = () => {
         <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] overflow-hidden">
           {loading ? (
             <div className="p-12 text-center">
-              <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin"></div>
+              <div className="inline-block w-8 h-8 border-4 border-[#E86A24] border-t-transparent rounded-full animate-spin"></div>
               <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando mensagens...</p>
             </div>
           ) : filteredMessages.length === 0 ? (
@@ -1672,7 +1672,7 @@ const ActivationsPage = () => {
               {paginatedMessages.map((message) => (
                 <div
                   key={message.id}
-                  className="p-4 bg-white dark:bg-[#333] hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10 transition-colors relative group border-b border-gray-200 dark:border-[#404040] last:border-b-0"
+                  className="p-4 bg-white dark:bg-[#333] hover:bg-[#E86A2415] dark:hover:bg-[#E86A24]/10 transition-colors relative group border-b border-gray-200 dark:border-[#404040] last:border-b-0"
                 >
                   <div className="flex items-start gap-4">
                     {/* Ícone de favorito */}
@@ -1698,7 +1698,7 @@ const ActivationsPage = () => {
                               {formatDate(message.created_at)}
                             </span>
                             {message.category && (
-                              <span className="px-2 py-1 bg-[#8CD95515] dark:bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#8CD955] rounded text-xs font-medium">
+                              <span className="px-2 py-1 bg-[#E86A2415] dark:bg-[#E86A24]/20 text-[#C9531A] dark:text-[#E86A24] rounded text-xs font-medium">
                                 {message.category}
                               </span>
                             )}
@@ -1732,7 +1732,7 @@ const ActivationsPage = () => {
                                     setShowSendModal(true);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-sm text-[#8CD955] hover:bg-[#8CD95515] flex items-center gap-2 font-medium"
+                                  className="w-full px-4 py-2 text-left text-sm text-[#E86A24] hover:bg-[#E86A2415] flex items-center gap-2 font-medium"
                                 >
                                   <Send className="w-4 h-4" />
                                   Enviar mensagem
@@ -1783,7 +1783,7 @@ const ActivationsPage = () => {
                                   <button
                                     type="button"
                                     onClick={() => setPreviewingCardMessage(message)}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8CD955]/20 hover:bg-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] text-xs font-medium transition-colors"
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#E86A24]/20 hover:bg-[#E86A24]/30 text-[#C9531A] dark:text-[#E86A24] text-xs font-medium transition-colors"
                                   >
                                     <Eye className="w-3.5 h-3.5" />
                                     Preview
@@ -1883,7 +1883,7 @@ const ActivationsPage = () => {
                           type="text"
                           value={formData.title}
                           onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-gray-500"
                           placeholder="Ex: asas"
                           required
                         />
@@ -1898,7 +1898,7 @@ const ActivationsPage = () => {
                               <span className="text-red-500">*</span>
                             )}
                           </label>
-                          <div className="w-3 h-3 bg-[#8CD955] rounded-full"></div>
+                          <div className="w-3 h-3 bg-[#E86A24] rounded-full"></div>
                         </div>
                         <textarea
                           value={formData.content}
@@ -1925,7 +1925,7 @@ const ActivationsPage = () => {
                             onChange={(e) => setFormData({ ...formData, mention_all: e.target.checked })}
                             className="sr-only peer"
                           />
-                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#E86A24]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#E86A24]"></div>
                         </label>
                       </div>
                     </div>
@@ -1944,7 +1944,7 @@ const ActivationsPage = () => {
                         <select
                           value={formData.message_type}
                           onChange={(e) => setFormData({ ...formData, message_type: e.target.value })}
-                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                         >
                           <option value="text_only">Somente textos e/ou anexos</option>
                           <option value="text_with_attachment">Texto com anexo</option>
@@ -1978,7 +1978,7 @@ const ActivationsPage = () => {
                               onChange={(e) => setFormData({ ...formData, send_intelligent: e.target.checked })}
                               className="sr-only peer"
                             />
-                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#E86A24]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#E86A24]"></div>
                           </label>
                         </div>
                       )}
@@ -2003,11 +2003,11 @@ const ActivationsPage = () => {
                           {!attachmentFile && !mediaPreviewUrl ? (
                             <div
                               onClick={() => fileInputRef.current?.click()}
-                              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-[#8CD955]', 'bg-[#8CD955]/10'); }}
-                              onDragLeave={(e) => { e.currentTarget.classList.remove('border-[#8CD955]', 'bg-[#8CD955]/10'); }}
+                              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-[#E86A24]', 'bg-[#E86A24]/10'); }}
+                              onDragLeave={(e) => { e.currentTarget.classList.remove('border-[#E86A24]', 'bg-[#E86A24]/10'); }}
                               onDrop={(e) => {
                                 e.preventDefault();
-                                e.currentTarget.classList.remove('border-[#8CD955]', 'bg-[#8CD955]/10');
+                                e.currentTarget.classList.remove('border-[#E86A24]', 'bg-[#E86A24]/10');
                                 const file = e.dataTransfer.files?.[0];
                                 if (file) {
                                   const input = fileInputRef.current;
@@ -2019,7 +2019,7 @@ const ActivationsPage = () => {
                                   }
                                 }
                               }}
-                              className="border-2 border-dashed border-gray-300 dark:border-[#555] rounded-xl p-6 sm:p-8 text-center cursor-pointer hover:border-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 active:scale-[0.99] transition-all min-h-[120px] flex flex-col items-center justify-center"
+                              className="border-2 border-dashed border-gray-300 dark:border-[#555] rounded-xl p-6 sm:p-8 text-center cursor-pointer hover:border-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 active:scale-[0.99] transition-all min-h-[120px] flex flex-col items-center justify-center"
                             >
                               <Upload className="w-10 h-10 sm:w-8 sm:h-8 text-gray-400 dark:text-gray-500 mx-auto mb-2 flex-shrink-0" />
                               <p className="text-sm text-gray-600 dark:text-gray-400 mb-1 font-medium">
@@ -2195,14 +2195,14 @@ const ActivationsPage = () => {
                         </div>
 
                         {/* Header do chat */}
-                        <div className="bg-[#8CD955] text-white px-4 py-3 flex items-center justify-between">
+                        <div className="bg-[#E86A24] text-white px-4 py-3 flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <ArrowLeft className="w-5 h-5 cursor-pointer" />
-                            <div className="w-10 h-10 bg-[#7BC84A] rounded-full flex items-center justify-center font-bold">
+                            <div className="w-10 h-10 bg-[#D95E1B] rounded-full flex items-center justify-center font-bold">
                               DC
                             </div>
                             <div>
-                              <div className="font-semibold">Zaploto Cliente</div>
+                              <div className="font-semibold">crm-atendimento</div>
                               <div className="text-xs text-emerald-100">online</div>
                             </div>
                           </div>
@@ -2220,7 +2220,7 @@ const ActivationsPage = () => {
                           {/* Mensagem */}
                           <div className="flex justify-end mb-2">
                             {mediaPreviewUrl && (mediaType === 'image' || mediaType === 'video') ? (
-                              <div className="bg-[#8CD955] text-white rounded-lg max-w-[80%] shadow-sm overflow-hidden">
+                              <div className="bg-[#E86A24] text-white rounded-lg max-w-[80%] shadow-sm overflow-hidden">
                                 {/* Preview de mídia no celular - preenche completamente sem espaço verde */}
                                 {mediaType === 'image' && (
                                   <img
@@ -2264,7 +2264,7 @@ const ActivationsPage = () => {
                                 </div>
                               </div>
                             ) : (
-                              <div className="bg-[#8CD955] text-white rounded-lg px-3 py-2 max-w-[80%] shadow-sm">
+                              <div className="bg-[#E86A24] text-white rounded-lg px-3 py-2 max-w-[80%] shadow-sm">
                                 {mediaPreviewUrl && mediaType === 'audio' && (
                                   <div className="mb-2">
                                     <audio src={mediaPreviewUrl} controls className="w-full" />
@@ -2294,7 +2294,7 @@ const ActivationsPage = () => {
                           />
                           <Paperclip className="w-5 h-5 text-gray-400 cursor-pointer" />
                           <Camera className="w-5 h-5 text-gray-400 cursor-pointer" />
-                          <div className="w-8 h-8 bg-[#8CD955] rounded-full flex items-center justify-center cursor-pointer">
+                          <div className="w-8 h-8 bg-[#E86A24] rounded-full flex items-center justify-center cursor-pointer">
                             <Mic className="w-4 h-4 text-white" />
                           </div>
                         </div>
@@ -2311,11 +2311,11 @@ const ActivationsPage = () => {
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between text-sm gap-2">
                       <span className="text-gray-600 dark:text-gray-400 font-medium truncate">{uploadStatus || 'Enviando...'}</span>
-                      <span className="text-[#8CD955] font-semibold tabular-nums flex-shrink-0">{uploadProgress}%</span>
+                      <span className="text-[#E86A24] font-semibold tabular-nums flex-shrink-0">{uploadProgress}%</span>
                     </div>
                     <div className="w-full bg-gray-200 dark:bg-[#404040] rounded-full h-2.5 overflow-hidden">
                       <div
-                        className="bg-[#8CD955] h-full rounded-full transition-all duration-300 ease-out"
+                        className="bg-[#E86A24] h-full rounded-full transition-all duration-300 ease-out"
                         style={{ width: `${uploadProgress}%` }}
                       />
                     </div>
@@ -2355,7 +2355,7 @@ const ActivationsPage = () => {
                       !formData.title.trim() || 
                       (formData.message_type !== 'audio' && formData.message_type !== 'ptv' && formData.message_type !== 'video' && !formData.content.trim())
                     }
-                    className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-xl font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[120px] justify-center"
+                    className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-xl font-medium transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[120px] justify-center"
                   >
                     {isUploading ? (
                       <>
@@ -2430,7 +2430,7 @@ const ActivationsPage = () => {
                     placeholder="Buscar por título"
                     value={scheduleSearchTitle}
                     onChange={(e) => setScheduleSearchTitle(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm"
+                    className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 text-sm"
                   />
                 </div>
                 {/* Linha 2: Filtros em grid responsivo */}
@@ -2442,21 +2442,21 @@ const ActivationsPage = () => {
                         type="date"
                         value={scheduleFilterCreatedFrom}
                         onChange={(e) => setScheduleFilterCreatedFrom(e.target.value)}
-                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
+                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
                       />
                       <span className="text-gray-400 dark:text-gray-500 text-sm flex-shrink-0">até</span>
                       <input
                         type="date"
                         value={scheduleFilterCreatedTo}
                         onChange={(e) => setScheduleFilterCreatedTo(e.target.value)}
-                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
+                        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm max-w-full"
                       />
                     </div>
                   </div>
                   <select
                     value={scheduleFilterStatus}
                     onChange={(e) => setScheduleFilterStatus(e.target.value as 'all' | 'sent' | 'failed')}
-                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
+                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                   >
                     <option value="all">Todos os status</option>
                     <option value="sent">Executado</option>
@@ -2465,7 +2465,7 @@ const ActivationsPage = () => {
                   <select
                     value={scheduleFilterType}
                     onChange={(e) => setScheduleFilterType(e.target.value as 'all' | 'one_time' | 'recurring')}
-                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
+                    className="w-full sm:w-auto min-w-0 px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] text-sm"
                   >
                     <option value="all">Todos os tipos</option>
                     <option value="one_time">Pontual</option>
@@ -2495,7 +2495,7 @@ const ActivationsPage = () => {
 
             {loadingSchedules ? (
               <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
-                <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin"></div>
+                <div className="inline-block w-8 h-8 border-4 border-[#E86A24] border-t-transparent rounded-full animate-spin"></div>
                 <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando agendamentos...</p>
               </div>
             ) : filteredSchedules.length === 0 ? (
@@ -2542,7 +2542,7 @@ const ActivationsPage = () => {
                         <div className="flex flex-col items-end gap-1 max-w-[min(100%,14rem)]">
                           <div className="flex flex-wrap justify-end items-center gap-2">
                             {agg.badge === 'active' && (
-                              <span className="px-2 py-1 bg-[#8CD955] text-white rounded-full text-xs font-medium">
+                              <span className="px-2 py-1 bg-[#E86A24] text-white rounded-full text-xs font-medium">
                                 • ATIVO
                               </span>
                             )}
@@ -2673,7 +2673,7 @@ const ActivationsPage = () => {
                         {agg.showResume && (
                           <button
                             onClick={() => handleResumeScheduleGroup(scheduleIds)}
-                            className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                            className="w-full sm:flex-1 min-w-0 px-3 py-2 sm:px-4 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
                           >
                             <Play className="w-4 h-4 shrink-0" />
                             Retomar
@@ -2708,7 +2708,7 @@ const ActivationsPage = () => {
             {/* Card: Criar disparo em massa */}
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-4 sm:p-6">
               <h3 className="text-base font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
-                <Megaphone className="w-5 h-5 text-[#8CD955]" />
+                <Megaphone className="w-5 h-5 text-[#E86A24]" />
                 Criar disparo em massa
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -2718,7 +2718,7 @@ const ActivationsPage = () => {
                 <select
                   value={massSendSelectedMessageId}
                   onChange={(e) => setMassSendSelectedMessageId(e.target.value)}
-                  className="flex-1 min-w-0 px-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] text-gray-900 dark:text-white text-sm"
+                  className="flex-1 min-w-0 px-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#E86A24] text-gray-900 dark:text-white text-sm"
                 >
                   <option value="">Selecione uma mensagem</option>
                   {messages.map((m) => (
@@ -2737,7 +2737,7 @@ const ActivationsPage = () => {
                     setShowSendModal(true);
                   }}
                   disabled={!massSendSelectedMessageId}
-                  className="px-4 py-2.5 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+                  className="px-4 py-2.5 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
                 >
                   <Megaphone className="w-4 h-4" />
                   Iniciar campanha
@@ -2752,7 +2752,7 @@ const ActivationsPage = () => {
             </div>
             {loadingMassSendJobs ? (
               <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md border border-gray-200 dark:border-[#404040] p-12 text-center">
-                <div className="inline-block w-8 h-8 border-4 border-[#8CD955] border-t-transparent rounded-full animate-spin" />
+                <div className="inline-block w-8 h-8 border-4 border-[#E86A24] border-t-transparent rounded-full animate-spin" />
                 <p className="mt-4 text-gray-600 dark:text-gray-400">Carregando campanhas...</p>
               </div>
             ) : massSendJobs.length === 0 ? (
@@ -2818,7 +2818,7 @@ const ActivationsPage = () => {
                             <button
                               type="button"
                               onClick={() => setMassSendDetailJobId(job.id)}
-                              className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 font-semibold text-sm hover:ring-2 hover:ring-green-400/50 focus:outline-none focus:ring-2 focus:ring-[#8CD955]"
+                              className="inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 font-semibold text-sm hover:ring-2 hover:ring-green-400/50 focus:outline-none focus:ring-2 focus:ring-[#E86A24]"
                               title="Ver lista de grupos com sucesso e falhas"
                             >
                               {sent}
@@ -2828,7 +2828,7 @@ const ActivationsPage = () => {
                             <button
                               type="button"
                               onClick={() => setMassSendDetailJobId(job.id)}
-                              className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md font-semibold text-sm hover:ring-2 focus:outline-none focus:ring-2 focus:ring-[#8CD955] ${failed > 0 ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200 hover:ring-red-400/50' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:ring-gray-400/40'}`}
+                              className={`inline-flex items-center justify-center min-w-[2.5rem] px-2 py-1 rounded-md font-semibold text-sm hover:ring-2 focus:outline-none focus:ring-2 focus:ring-[#E86A24] ${failed > 0 ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200 hover:ring-red-400/50' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:ring-gray-400/40'}`}
                               title="Ver lista de grupos com sucesso e falhas"
                             >
                               {failed}
@@ -2841,7 +2841,7 @@ const ActivationsPage = () => {
                             <button
                               type="button"
                               onClick={() => setMassSendDetailJobId(job.id)}
-                              className="p-2 rounded-lg text-[#8CD955] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                              className="p-2 rounded-lg text-[#E86A24] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
                               title="Ver grupos (sucesso e falhas) · repetir só falhas"
                             >
                               <Eye className="w-4 h-4 mx-auto" />
@@ -2919,7 +2919,7 @@ const ActivationsPage = () => {
                                       showToast('Erro ao retomar campanha.', 'error');
                                     }
                                   }}
-                                  className="p-2 rounded-lg text-[#8CD955] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                                  className="p-2 rounded-lg text-[#E86A24] hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
                                   title="Retomar envio"
                                 >
                                   <Play className="w-4 h-4" />

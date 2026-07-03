@@ -15,14 +15,14 @@
   --input-border: #d1d5db;
   --muted: #6b7280;
   --muted-foreground: #9ca3af;
-  --zaploto-green: #8CD955;
-  --zaploto-green-hover: #7BC84A;
-  --zaploto-green-light: #A8E677;
-  --zaploto-green-dark: #6AB83D;
-  --zaploto-green-bg: #8CD95515;
-  --zaploto-green-bg-hover: #8CD95525;
-  --zaploto-green-border: #8CD95540;
-  --zaploto-green-border-hover: #8CD95560;
+  --zaploto-green: #E86A24;
+  --zaploto-green-hover: #D95E1B;
+  --zaploto-green-light: #EF9057;
+  --zaploto-green-dark: #C9531A;
+  --zaploto-green-bg: #E86A2415;
+  --zaploto-green-bg-hover: #E86A2425;
+  --zaploto-green-border: #E86A2440;
+  --zaploto-green-border-hover: #E86A2460;
 }
 
 /* Dark mode: paleta ZAP AFILIADOS */
@@ -42,14 +42,14 @@
   --input-border: #555555;
   --muted: #888888;
   --muted-foreground: #aaaaaa;
-  --zaploto-green: #8CD955;
-  --zaploto-green-hover: #7BC84A;
-  --zaploto-green-light: #A8E677;
-  --zaploto-green-dark: #6AB83D;
-  --zaploto-green-bg: #8CD95515;
-  --zaploto-green-bg-hover: #8CD95525;
-  --zaploto-green-border: #8CD95540;
-  --zaploto-green-border-hover: #8CD95560;
+  --zaploto-green: #E86A24;
+  --zaploto-green-hover: #D95E1B;
+  --zaploto-green-light: #EF9057;
+  --zaploto-green-dark: #C9531A;
+  --zaploto-green-bg: #E86A2415;
+  --zaploto-green-bg-hover: #E86A2425;
+  --zaploto-green-border: #E86A2440;
+  --zaploto-green-border-hover: #E86A2460;
 }
 
 @theme inline {
@@ -65,10 +65,42 @@ html {
 }
 
 body {
-  background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
   overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Fundo escuro com brilho laranja (light e dark), FIXO e com animação leve.
+   Aplicado ao body (telas fora do shell, ex.: login) e ao shell do app
+   (.app-bg-gradient no Layout) — assim o fundo fica igual em TODAS as telas,
+   atrás da sidebar, sem piscar (background-attachment: fixed = estável no scroll). */
+body,
+.app-bg-gradient {
+  background-color: #0b0806;
+  background-image:
+    radial-gradient(85% 75% at 88% 12%, rgba(232, 106, 36, 0.22), rgba(232, 106, 36, 0.05) 38%, transparent 66%),
+    linear-gradient(118deg, #070504 0%, #140b07 55%, #271209 100%);
+  background-size: 180% 180%;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  animation: bgDrift 24s ease-in-out infinite alternate;
+}
+
+@keyframes bgDrift {
+  0% {
+    background-position: 18% 22%;
+  }
+  100% {
+    background-position: 82% 42%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body,
+  .app-bg-gradient {
+    animation: none;
+  }
 }
 
 /* Scrollbar styling */
@@ -156,6 +188,98 @@ body {
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #d1d5db;
+  }
+
+  /* Cards e painéis — tema Zaploto (escuro + laranja) */
+  .zap-card {
+    position: relative;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(232, 106, 36, 0.25);
+    background-image: linear-gradient(to bottom right, #2a2a2a, #262220, #1f1a18);
+    box-shadow: 0 10px 15px -3px rgba(232, 106, 36, 0.1), 0 4px 6px -4px rgba(232, 106, 36, 0.08);
+  }
+
+  .zap-card-muted {
+    border-radius: 0.75rem;
+    border: 1px solid #404040;
+    background-color: #2a2a2a;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .zap-card-inner {
+    border-radius: 1rem;
+    border: 1px solid #404040;
+    background-color: #2a2a2a;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .zap-card-inner:hover {
+    border-color: rgba(232, 106, 36, 0.3);
+    box-shadow: 0 4px 24px -4px rgba(232, 106, 36, 0.15);
+  }
+
+  .zap-panel {
+    background-image: linear-gradient(180deg, #1c1410 0%, #160f0a 100%);
+  }
+
+  .zap-card-client {
+    border-radius: 14px;
+    border: 1px solid rgba(120, 80, 55, 0.45);
+    background-image: linear-gradient(to bottom right, #2a1f18, #231912, #1c1410);
+    box-shadow:
+      inset 1px 1px 0 rgba(255, 255, 255, 0.08),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.4),
+      0 6px 16px rgba(0, 0, 0, 0.45);
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .zap-card-client:hover {
+    border-color: rgba(232, 106, 36, 0.45);
+    box-shadow:
+      inset 1px 1px 0 rgba(255, 255, 255, 0.1),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.4),
+      0 8px 20px rgba(232, 106, 36, 0.15);
+  }
+
+  /* Chat — mesma família cromática da sidebar (#160f0a + blur) */
+  .chat-shell {
+    background: transparent;
+  }
+
+  .chat-messages-pane {
+    background: linear-gradient(
+      165deg,
+      rgba(18, 12, 8, 0.72) 0%,
+      rgba(11, 8, 6, 0.45) 55%,
+      rgba(7, 5, 4, 0.25) 100%
+    );
+  }
+
+  .zap-chat-panel {
+    background: linear-gradient(
+      180deg,
+      rgba(28, 20, 14, 0.9) 0%,
+      rgba(22, 15, 10, 0.82) 100%
+    );
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-color: rgba(232, 106, 36, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .zap-stat {
+    border-radius: 0.75rem;
+    border: 1px solid #404040;
+    background-color: #2a2a2a;
+    padding: 1rem;
+  }
+
+  .zap-stat-accent {
+    border-radius: 0.75rem;
+    border: 1px solid rgba(232, 106, 36, 0.3);
+    background-color: rgba(232, 106, 36, 0.1);
+    padding: 1rem;
   }
 }
 
@@ -276,13 +400,13 @@ body {
 
 .dark .react-flow__edge.selected path,
 [data-theme="dark"] .react-flow__edge.selected path {
-  stroke: #8CD955;
+  stroke: #E86A24;
   stroke-width: 2.5px;
 }
 
 .dark .react-flow__connection-path,
 [data-theme="dark"] .react-flow__connection-path {
-  stroke: #8CD955 !important;
+  stroke: #E86A24 !important;
   stroke-width: 2px;
   stroke-dasharray: 6 4;
 }
@@ -327,13 +451,13 @@ body {
 
 .dark .react-flow__nodesselection-rect,
 [data-theme="dark"] .react-flow__nodesselection-rect {
-  border-color: #8CD955;
+  border-color: #E86A24;
   background-color: rgba(140, 217, 85, 0.05);
 }
 
 .dark .react-flow__selection,
 [data-theme="dark"] .react-flow__selection {
-  border-color: #8CD955;
+  border-color: #E86A24;
   background-color: rgba(140, 217, 85, 0.05);
 }
 

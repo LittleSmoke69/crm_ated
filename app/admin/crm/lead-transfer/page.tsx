@@ -155,10 +155,10 @@ function LeadTransferEmailSearchHistoryPanel({
         aria-expanded={open}
       >
         <span className="flex items-center gap-2 min-w-0">
-          <History className="w-5 h-5 text-[#8CD955] shrink-0" />
+          <History className="w-5 h-5 text-[#E86A24] shrink-0" />
           <span className="font-bold text-gray-900 dark:text-white text-sm">Histórico de buscas (e-mail do cliente)</span>
           {items.length > 0 ? (
-            <span className="text-[11px] font-semibold tabular-nums px-2 py-0.5 rounded-full bg-[#8CD955]/20 text-[#5a7a35] dark:text-[#b8e86e] shrink-0">
+            <span className="text-[11px] font-semibold tabular-nums px-2 py-0.5 rounded-full bg-[#E86A24]/20 text-[#5a7a35] dark:text-[#b8e86e] shrink-0">
               {items.length}
             </span>
           ) : null}
@@ -216,7 +216,7 @@ function LeadTransferEmailSearchHistoryPanel({
                       type="button"
                       disabled={loading}
                       onClick={() => onApply(it.email)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#8CD955]/20 text-[#5a7a35] dark:text-[#b8e86e] hover:bg-[#8CD955]/30 border border-[#8CD955]/40 disabled:opacity-50"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#E86A24]/20 text-[#5a7a35] dark:text-[#b8e86e] hover:bg-[#E86A24]/30 border border-[#E86A24]/40 disabled:opacity-50"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       Buscar de novo
@@ -701,7 +701,7 @@ function ExpiredConversionConsultantBarChart({
             return (
               <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-4 py-3 text-sm min-w-[200px]">
                 <p className="font-semibold text-gray-800 dark:text-white border-b border-gray-200 dark:border-gray-600 pb-1.5 mb-2">{p.name}</p>
-                <p className="text-[#8CD955] font-bold tabular-nums text-base">{conv} convertidos</p>
+                <p className="text-[#E86A24] font-bold tabular-nums text-base">{conv} convertidos</p>
                 <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{tot} transferidos (expirados)</p>
                 {tot > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">Taxa: {taxa}%</p>}
                 {tooltipFootnote ? (
@@ -711,7 +711,7 @@ function ExpiredConversionConsultantBarChart({
             );
           }}
         />
-        <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
+        <Bar dataKey="convertidos" name="Convertidos" fill="#E86A24" radius={[0, 4, 4, 0]}>
           <LabelList dataKey="convertidos" position="insideStart" style={{ fontSize: '12px', fontWeight: 600, fill: '#fff' }} />
         </Bar>
       </BarChart>
@@ -913,9 +913,9 @@ function LeadTransferClientSearchField({
   onChange: (v: string) => void;
 }) {
   return (
-    <div className="rounded-xl border border-[#8CD955]/35 bg-gradient-to-r from-[#8CD955]/10 to-transparent dark:from-[#8CD955]/14 p-4 mb-4 ring-1 ring-[#8CD955]/15">
+    <div className="rounded-xl border border-[#E86A24]/35 bg-gradient-to-r from-[#E86A24]/10 to-transparent dark:from-[#E86A24]/14 p-4 mb-4 ring-1 ring-[#E86A24]/15">
       <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
-        <UserSearch className="w-4 h-4 text-[#8CD955] shrink-0" />
+        <UserSearch className="w-4 h-4 text-[#E86A24] shrink-0" />
         Buscar cliente
       </label>
       <div className="relative max-w-3xl">
@@ -926,7 +926,7 @@ function LeadTransferClientSearchField({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Nome, e-mail, telefone ou ID do lead..."
-          className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+          className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
           aria-label="Buscar cliente na lista"
         />
         {value.trim() !== '' && (
@@ -965,14 +965,14 @@ function LeadTransferHistoryEmailSearchField({
 }) {
   const hasApplied = appliedEmail.trim().length > 0;
   return (
-    <div className="rounded-xl border border-[#8CD955]/35 bg-gradient-to-r from-[#8CD955]/10 to-transparent dark:from-[#8CD955]/14 p-4 sm:p-5 mb-6 ring-1 ring-[#8CD955]/15 shadow-sm">
+    <div className="rounded-xl border border-[#E86A24]/35 bg-gradient-to-r from-[#E86A24]/10 to-transparent dark:from-[#E86A24]/14 p-4 sm:p-5 mb-6 ring-1 ring-[#E86A24]/15 shadow-sm">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
         <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white">
-          <Mail className="w-5 h-5 text-[#8CD955] shrink-0" />
+          <Mail className="w-5 h-5 text-[#E86A24] shrink-0" />
           Buscar no histórico por e-mail do lead
         </label>
         {hasApplied ? (
-          <span className="inline-flex items-center gap-1.5 self-start rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/15 px-2.5 py-1 text-xs font-semibold text-[#5a7a35] dark:text-[#b8e86e]">
+          <span className="inline-flex items-center gap-1.5 self-start rounded-lg border border-[#E86A24]/40 bg-[#E86A24]/15 px-2.5 py-1 text-xs font-semibold text-[#5a7a35] dark:text-[#b8e86e]">
             <span className="opacity-80">Filtro ativo</span>
             <span className="truncate max-w-[min(100vw-8rem,280px)]" title={appliedEmail}>
               {appliedEmail}
@@ -997,7 +997,7 @@ function LeadTransferHistoryEmailSearchField({
             }}
             placeholder="E-mail do lead (ex.: cliente@gmail.com) — mín. 3 caracteres"
             aria-label="E-mail do lead para buscar no histórico"
-            className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+            className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white text-base placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
           />
           {draftValue.trim() !== '' && (
             <button
@@ -1015,7 +1015,7 @@ function LeadTransferHistoryEmailSearchField({
             type="button"
             onClick={onSearch}
             disabled={loading}
-            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold bg-[#8CD955] text-white hover:bg-[#7BC84A] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[120px]"
+            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold bg-[#E86A24] text-white hover:bg-[#D95E1B] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[120px]"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
             Buscar
@@ -7263,7 +7263,7 @@ export default function AdminLeadTransferPage() {
           type="button"
           onClick={() => handleLogsSort(field)}
           title={title ?? `Ordenar por ${label}`}
-          className="flex items-center gap-1 w-full text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white hover:text-[#8CD955] hover:bg-gray-200/50 dark:hover:bg-[#404040] transition-colors rounded"
+          className="flex items-center gap-1 w-full text-left py-3.5 px-4 font-semibold text-gray-700 dark:text-white hover:text-[#E86A24] hover:bg-gray-200/50 dark:hover:bg-[#404040] transition-colors rounded"
         >
           {label}
           {isActive && (logsSortOrder === 'asc' ? <ChevronUp className="w-4 h-4 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 flex-shrink-0" />)}
@@ -7312,7 +7312,7 @@ export default function AdminLeadTransferPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[60vh]">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -7338,7 +7338,7 @@ export default function AdminLeadTransferPage() {
             <button
               type="button"
               onClick={() => router.push(isGerenteLeadTransferViewer ? '/gerente' : '/admin')}
-              className="text-[#8CD955] dark:text-[#00ff00] font-medium hover:underline"
+              className="text-[#E86A24] dark:text-[#00ff00] font-medium hover:underline"
             >
               {isGerenteLeadTransferViewer ? 'Gerência' : 'Admin'}
             </button>
@@ -7349,8 +7349,8 @@ export default function AdminLeadTransferPage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-[#8CD955]/15 border border-[#8CD955]/30">
-                  <ArrowRightLeft className="w-6 h-6 text-[#8CD955]" />
+                <div className="p-2.5 rounded-xl bg-[#E86A24]/15 border border-[#E86A24]/30">
+                  <ArrowRightLeft className="w-6 h-6 text-[#E86A24]" />
                 </div>
                 Transferência de Leads
               </h1>
@@ -7464,7 +7464,7 @@ export default function AdminLeadTransferPage() {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                  <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                   Análise por consultor
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
@@ -7479,7 +7479,7 @@ export default function AdminLeadTransferPage() {
                       value={analysisBancaId}
                       onChange={(e) => setAnalysisBancaId(e.target.value)}
                       disabled={analysisLoading}
-                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm min-w-[200px] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm min-w-[200px] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       <option value="">Selecione a banca</option>
                       {bancas.map((b) => (
@@ -7493,7 +7493,7 @@ export default function AdminLeadTransferPage() {
                       value={analysisDaysInactive}
                       onChange={(e) => setAnalysisDaysInactive(e.target.value)}
                       disabled={analysisLoading}
-                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       {INACTIVITY_PRESETS.map((d) => (
                         <option key={d} value={String(d)}>{d} dias</option>
@@ -7511,7 +7511,7 @@ export default function AdminLeadTransferPage() {
                         value={analysisDaysCustom}
                         onChange={(e) => setAnalysisDaysCustom(e.target.value.replace(/\D/g, '').slice(0, 3) || '90')}
                         disabled={analysisLoading}
-                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm w-20 focus:ring-2 focus:ring-[#8CD955]"
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm w-20 focus:ring-2 focus:ring-[#E86A24]"
                         placeholder="90"
                       />
                     </div>
@@ -7520,7 +7520,7 @@ export default function AdminLeadTransferPage() {
                     type="button"
                     onClick={() => void runAnalysis()}
                     disabled={analysisLoading || !analysisBancaId}
-                    className="px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-[#8CD955]"
+                    className="px-4 py-2 rounded-lg text-sm font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-[#E86A24]"
                   >
                     {analysisLoading ? (
                       <span className="inline-flex items-center gap-2">
@@ -7563,22 +7563,22 @@ export default function AdminLeadTransferPage() {
                           <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{row.consultant_name || '—'}</td>
                           <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.consultant_email}</td>
                           <td className="px-4 py-3 text-right">
-                            <span className={`font-semibold ${row.leads_count > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                            <span className={`font-semibold ${row.leads_count > 0 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                               {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : row.leads_count.toLocaleString('pt-BR')}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <span className={`font-semibold ${(row.not_transferred_count ?? 0) > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                            <span className={`font-semibold ${(row.not_transferred_count ?? 0) > 0 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                               {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : (row.not_transferred_count ?? 0).toLocaleString('pt-BR')}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right" title="Não transferidos que se enquadram nos critérios de redistribuição (1ª página).">
-                            <span className={`font-semibold ${(row.qualifies_count ?? 0) > 0 ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}>
+                            <span className={`font-semibold ${(row.qualifies_count ?? 0) > 0 ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}>
                               {row.status === 'loading' ? '…' : (row.status === 'error' || row.status === 'not_registered') ? '—' : (row.qualifies_count ?? 0).toLocaleString('pt-BR')}
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            {row.status === 'loading' && <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" />}
+                            {row.status === 'loading' && <Loader2 className="w-4 h-4 animate-spin text-[#E86A24]" />}
                             {row.status === 'error' && <span className="text-red-600 dark:text-red-400 text-xs">Erro</span>}
                             {row.status === 'done' && <span className="text-emerald-600 dark:text-emerald-400 text-xs">OK</span>}
                             {row.status === 'not_registered' && <span className="text-amber-600 dark:text-amber-400 text-xs">Não cadastrado</span>}
@@ -7599,7 +7599,7 @@ export default function AdminLeadTransferPage() {
           ) : (
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-8 shadow-sm ring-1 ring-gray-100 dark:ring-transparent text-center">
               <p className="text-gray-600 dark:text-gray-400 font-medium">Aba Análise temporariamente indisponível.</p>
-              <button type="button" onClick={() => setActiveTab('transfer')} className="mt-3 px-4 py-2 rounded-lg bg-[#8CD955] text-white text-sm font-medium hover:bg-[#7BC84A]">Ir para Transferir</button>
+              <button type="button" onClick={() => setActiveTab('transfer')} className="mt-3 px-4 py-2 rounded-lg bg-[#E86A24] text-white text-sm font-medium hover:bg-[#D95E1B]">Ir para Transferir</button>
             </div>
           )
           ) : activeTab === 'solicitations' ? (
@@ -7607,7 +7607,7 @@ export default function AdminLeadTransferPage() {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  <ClipboardList className="w-5 h-5 text-[#8CD955]" />
+                  <ClipboardList className="w-5 h-5 text-[#E86A24]" />
                   Solicitações de leads
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Solicitações feitas por gerentes. Aprove e defina o consultor doador (origem dos leads).</p>
@@ -7618,7 +7618,7 @@ export default function AdminLeadTransferPage() {
                       <select
                         value={solicitationStatusFilter}
                         onChange={(e) => { setSolicitationStatusFilter(e.target.value); setSolicitationPage(1); }}
-                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                       >
                         <option value="all">Todos</option>
                         <option value="pending">Pendente</option>
@@ -7633,7 +7633,7 @@ export default function AdminLeadTransferPage() {
                         <select
                           value={solicitationBancaFilter}
                           onChange={(e) => { setSolicitationBancaFilter(e.target.value); setSolicitationPage(1); }}
-                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                         >
                           <option value="all">Todas</option>
                           {solicitationBancaOptions.map((b) => (
@@ -7647,7 +7647,7 @@ export default function AdminLeadTransferPage() {
                       <select
                         value={solicitationPageSize}
                         onChange={(e) => { setSolicitationPageSize(Number(e.target.value)); setSolicitationPage(1); }}
-                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                        className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                       >
                         <option value={50}>50</option>
                         <option value={100}>100</option>
@@ -7670,7 +7670,7 @@ export default function AdminLeadTransferPage() {
               </div>
               {loadingLeadRequests ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : leadRequests.length === 0 ? (
                 <div className="py-12 text-center text-gray-500 dark:text-gray-400 text-sm">Nenhuma solicitação no momento.</div>
@@ -7761,7 +7761,7 @@ export default function AdminLeadTransferPage() {
                                       className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                                         req.status === 'partial'
                                           ? 'bg-amber-500 text-white hover:bg-amber-600'
-                                          : 'bg-[#8CD955] text-white hover:bg-[#7BC84A]'
+                                          : 'bg-[#E86A24] text-white hover:bg-[#D95E1B]'
                                       }`}
                                     >
                                       <CheckCircle2 className="w-4 h-4" />
@@ -7837,7 +7837,7 @@ export default function AdminLeadTransferPage() {
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
               <div className="mb-4">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                  <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                   {activeTab === 'transfer_problems' ? 'Panorama e transferências (TP)' : 'Histórico e conversão'}
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
@@ -8489,16 +8489,16 @@ export default function AdminLeadTransferPage() {
               />
 
               {historyLeadEmailApplied.trim().length >= 3 && (
-                <div className="mb-6 rounded-xl border border-[#8CD955]/35 bg-[#8CD955]/10 dark:bg-[#8CD955]/12 px-4 py-3.5 ring-1 ring-[#8CD955]/15">
+                <div className="mb-6 rounded-xl border border-[#E86A24]/35 bg-[#E86A24]/10 dark:bg-[#E86A24]/12 px-4 py-3.5 ring-1 ring-[#E86A24]/15">
                   {loadingLogs ? (
                     <p className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#8CD955]" />
+                      <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#E86A24]" />
                       Carregando transferências para indicar em qual pacote este e-mail apareceu por último…
                     </p>
                   ) : lastTransferForSearchedLeadEmail ? (
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap items-center gap-2">
-                        <History className="w-4 h-4 text-[#8CD955] shrink-0" />
+                        <History className="w-4 h-4 text-[#E86A24] shrink-0" />
                         <span className="text-sm font-bold text-gray-900 dark:text-white">
                           Última transferência com este e-mail
                         </span>
@@ -8565,7 +8565,7 @@ export default function AdminLeadTransferPage() {
                                   <span className="text-gray-500 dark:text-gray-400 font-medium">Destino (quem recebeu):</span>{' '}
                                   <span className="font-medium text-gray-900 dark:text-white">{destino}</span>
                                 </span>
-                                <span className="block pt-0.5 border-t border-[#8CD955]/25 mt-1.5">
+                                <span className="block pt-0.5 border-t border-[#E86A24]/25 mt-1.5">
                                   <span className="text-gray-500 dark:text-gray-400 font-medium">Estado do pacote:</span>{' '}
                                   <span className="text-[#6B8E3F] dark:text-[#c8f090] font-semibold">{estadoPacote}</span>
                                 </span>
@@ -8574,7 +8574,7 @@ export default function AdminLeadTransferPage() {
                           );
                         })()}
                       </p>
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 pl-6 pt-1 border-t border-[#8CD955]/20 mt-2">
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 pl-6 pt-1 border-t border-[#E86A24]/20 mt-2">
                         Ordenar a tabela por outra coluna não muda este resumo: ele sempre usa a data mais recente entre as linhas que passaram nos filtros atuais.
                       </p>
                     </div>
@@ -8603,7 +8603,7 @@ export default function AdminLeadTransferPage() {
                         setHistoryBancaFilter(e.target.value);
                         setHistoryBancaFromSolicitation(null);
                       }}
-                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       {!isGerenteLeadTransferViewer && <option value="">Todas as Bancas</option>}
                       {historyBancaFromSolicitation && historyBancaFilter === historyBancaFromSolicitation.id && !bancas.some((b) => b.id === historyBancaFromSolicitation.id) && (
@@ -8651,7 +8651,7 @@ export default function AdminLeadTransferPage() {
                     <select
                       value={managementTransferType}
                       onChange={(e) => setManagementTransferType(e.target.value)}
-                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       <option value="">Todos</option>
                       <option value="TF">TF</option>
@@ -8668,7 +8668,7 @@ export default function AdminLeadTransferPage() {
                     <select
                       value={managementTransferKind}
                       onChange={(e) => setManagementTransferKind(e.target.value)}
-                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       <option value="">Todos</option>
                       <option value="standard">Padrão</option>
@@ -8686,7 +8686,7 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       onClick={openConversionConsultantModal}
                       disabled={!(historyBancaFilter || bancaId) || loadingConsultants}
-                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <span className="truncate text-gray-800 dark:text-white">
                         {!(historyBancaFilter || bancaId) ? 'Selecione a banca' : loadingConsultants ? 'Carregando...' : consultants.length === 0 ? 'Nenhum consultor' : conversionConsultant ? (consultants.find((c) => c.email === conversionConsultant)?.full_name || conversionConsultant) : 'Selecionar consultor'}
@@ -8704,7 +8704,7 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       onClick={openDonorConsultantModal}
                       disabled={!(historyBancaFilter || bancaId) || (showDonorConsultantModal && loadingDonorModalConsultants)}
-                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full flex items-center gap-2 border border-gray-300 dark:border-[#555] rounded-lg px-3 py-2 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <span className="truncate text-gray-800 dark:text-white">
                         {!(historyBancaFilter || bancaId) ? 'Selecione a banca' : (showDonorConsultantModal && loadingDonorModalConsultants) ? 'Carregando...' : historyDonorConsultantFilter ? (donorModalConsultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || consultants.find((c) => c.email === historyDonorConsultantFilter)?.full_name || historyDonorConsultantFilter) : 'Selecionar consultor'}
@@ -8719,7 +8719,7 @@ export default function AdminLeadTransferPage() {
                     <select
                       value={managementStatusFilter}
                       onChange={(e) => setManagementStatusFilter(e.target.value as 'all' | 'normal' | 'expiradas' | 'resolvidas' | 'devolvidos' | 'reverse')}
-                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                      className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                     >
                       <option value="all">Todos</option>
                       <option value="normal">Normal (no prazo)</option>
@@ -8739,7 +8739,7 @@ export default function AdminLeadTransferPage() {
                       <select
                         value={managementPrazoFilter}
                         onChange={(e) => setManagementPrazoFilter(e.target.value as 'all' | '1' | '5' | '10' | 'custom' | 'expired')}
-                        className="flex-1 min-w-0 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                        className="flex-1 min-w-0 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                       >
                         <option value="all">Todos</option>
                         <option value="1">1 dia</option>
@@ -8756,7 +8756,7 @@ export default function AdminLeadTransferPage() {
                             max={365}
                             value={managementPrazoCustomDays}
                             onChange={(e) => setManagementPrazoCustomDays(e.target.value.replace(/\D/g, '').slice(0, 3) || '1')}
-                            className="w-12 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#8CD955]"
+                            className="w-12 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-2 text-sm text-center tabular-nums focus:ring-2 focus:ring-[#E86A24]"
                             title="Faltando até quantos dias para expirar"
                           />
                           <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">dias</span>
@@ -8771,7 +8771,7 @@ export default function AdminLeadTransferPage() {
                     <button
                       type="button"
                       onClick={() => void applyHistoryFilters()}
-                      className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] border border-[#8CD955]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a] disabled:opacity-70 disabled:cursor-wait"
+                      className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B] border border-[#E86A24]/50 transition-colors shadow-sm focus:ring-2 focus:ring-[#E86A24] focus:ring-offset-1 dark:focus:ring-offset-[#2a2a2a] disabled:opacity-70 disabled:cursor-wait"
                     >
                       Aplicar filtros
                     </button>
@@ -9177,8 +9177,8 @@ export default function AdminLeadTransferPage() {
                 </div>
               )}
               {historyBancaFilter === '' && (loadingLogs || loadingStats) && (
-                <div className="mb-4 flex items-center gap-2 rounded-lg border border-[#8CD955]/40 bg-[#8CD955]/10 dark:bg-[#8CD955]/15 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
-                  <Loader2 className="w-4 h-4 animate-spin text-[#8CD955] flex-shrink-0" />
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-[#E86A24]/40 bg-[#E86A24]/10 dark:bg-[#E86A24]/15 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#E86A24] flex-shrink-0" />
                   <span>Buscando dados de todas as bancas em segundo plano. Os resultados aparecerão abaixo quando estiverem prontos.</span>
                 </div>
               )}
@@ -9192,7 +9192,7 @@ export default function AdminLeadTransferPage() {
                     </div>
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Transferidos (total)</p>
-                      <p className="text-2xl font-bold text-[#8CD955] mt-1">{transferStats?.totalTransferred ?? 0}</p>
+                      <p className="text-2xl font-bold text-[#E86A24] mt-1">{transferStats?.totalTransferred ?? 0}</p>
                     </div>
                     <div className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-4 shadow-sm">
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Com saldo</p>
@@ -9248,7 +9248,7 @@ export default function AdminLeadTransferPage() {
                         <p className="text-xs text-gray-500 mb-3">Bancas com transferências aparecem primeiro, ordenadas pela quantidade de leads.</p>
                         <div className="min-h-[420px] h-[32rem] max-h-[520px] w-full">
                           {loadingStatsByBanca ? (
-                            <div className="flex items-center justify-center h-full min-h-[320px]"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                            <div className="flex items-center justify-center h-full min-h-[320px]"><Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" /></div>
                           ) : chartDataByBanca.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full min-h-[320px] text-gray-500 text-sm">Nenhum dado no período</div>
                           ) : (
@@ -9264,7 +9264,7 @@ export default function AdminLeadTransferPage() {
                                     return (
                                       <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-3 py-2 text-sm">
                                         <p className="font-semibold text-gray-800 dark:text-white">{label}</p>
-                                        <p className="text-[#8CD955] font-bold tabular-nums">{Number(value).toLocaleString('pt-BR')} leads</p>
+                                        <p className="text-[#E86A24] font-bold tabular-nums">{Number(value).toLocaleString('pt-BR')} leads</p>
                                       </div>
                                     );
                                   }}
@@ -9272,7 +9272,7 @@ export default function AdminLeadTransferPage() {
                                 <Bar
                                   dataKey="total_leads"
                                   name="Leads"
-                                  fill="#8CD955"
+                                  fill="#E86A24"
                                   radius={[0, 4, 4, 0]}
                                   label={{ position: 'right', formatter: (v: unknown) => (typeof v === 'number' && v > 0 ? v.toLocaleString('pt-BR') : ''), style: { fontSize: '12px', fill: '#374151', fontWeight: 600 } }}
                                 />
@@ -9311,7 +9311,7 @@ export default function AdminLeadTransferPage() {
                       )}
                       <div className="h-64 min-h-[240px]">
                         {loadingExpiredConversion ? (
-                          <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                          <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" /></div>
                         ) : historyBancaFilter === '' ? (() => {
                           const byBancaId = new Map<string, { banca_name: string; total_transferidos: number; convertidos: number }>();
                           for (const row of expiredConversionByBanca) {
@@ -9355,14 +9355,14 @@ export default function AdminLeadTransferPage() {
                                     return (
                                       <div className="bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg px-4 py-3 text-sm min-w-[180px]">
                                         <p className="font-semibold text-gray-800 dark:text-white border-b border-gray-200 dark:border-gray-600 pb-1.5 mb-2">{p?.name}</p>
-                                        <p className="text-[#8CD955] font-bold tabular-nums text-base">{conv} convertidos</p>
+                                        <p className="text-[#E86A24] font-bold tabular-nums text-base">{conv} convertidos</p>
                                         <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">{tot} transferidos (expirados)</p>
                                         {tot > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">Taxa: {taxa}%</p>}
                                       </div>
                                     );
                                   }}
                                 />
-                                <Bar dataKey="convertidos" name="Convertidos" fill="#8CD955" radius={[0, 4, 4, 0]}>
+                                <Bar dataKey="convertidos" name="Convertidos" fill="#E86A24" radius={[0, 4, 4, 0]}>
                                   <LabelList dataKey="convertidos" position="insideStart" style={{ fontSize: '12px', fontWeight: 600, fill: '#fff' }} />
                                 </Bar>
                               </BarChart>
@@ -9388,7 +9388,7 @@ export default function AdminLeadTransferPage() {
                           };
                           return (
                             <div
-                              className="h-full min-h-[240px] rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#8CD955] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#2a2a2a] cursor-pointer"
+                              className="h-full min-h-[240px] rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#E86A24] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#2a2a2a] cursor-pointer"
                               role="button"
                               tabIndex={0}
                               aria-label="Abrir gráfico detalhado com todos os consultores desta banca"
@@ -9428,7 +9428,7 @@ export default function AdminLeadTransferPage() {
                         </p>
                         <div className="h-64 min-h-[240px]">
                           {loadingExpiredConversion ? (
-                            <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                            <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" /></div>
                           ) : (() => {
                             const sortedFull = [...expiredConversionByConsultantAllBancas]
                               .sort((a, b) => b.convertidos - a.convertidos)
@@ -9449,7 +9449,7 @@ export default function AdminLeadTransferPage() {
                             };
                             return (
                               <div
-                                className="h-full min-h-[240px] rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#8CD955] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#2a2a2a] cursor-pointer"
+                                className="h-full min-h-[240px] rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#E86A24] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#2a2a2a] cursor-pointer"
                                 role="button"
                                 tabIndex={0}
                                 aria-label="Abrir gráfico detalhado de todos os consultores em todas as bancas"
@@ -9548,7 +9548,7 @@ export default function AdminLeadTransferPage() {
                   </thead>
                   <tbody>
                     {loadingLogs ? (
-                      <tr><td colSpan={historyTransferTableColSpan} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#8CD955]" /></td></tr>
+                      <tr><td colSpan={historyTransferTableColSpan} className="p-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-[#E86A24]" /></td></tr>
                     ) : !managementLoaded && !loadingLogs ? (
                       <tr><td colSpan={historyTransferTableColSpan} className="p-8 text-center text-gray-500 dark:text-white">Selecione a banca (ou &quot;Todas as Bancas&quot;) e clique em Aplicar filtros para carregar o histórico.</td></tr>
                     ) : transferLogs.length === 0 ? (
@@ -9809,7 +9809,7 @@ export default function AdminLeadTransferPage() {
                                       setModalSearch('');
                                     }
                                   }}
-                                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-[#8CD955]/15 text-[#6B8E3F] dark:text-[#B8E986] hover:bg-[#8CD955]/25 border border-[#8CD955]/40 transition-colors w-full"
+                                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold bg-[#E86A24]/15 text-[#6B8E3F] dark:text-[#B8E986] hover:bg-[#E86A24]/25 border border-[#E86A24]/40 transition-colors w-full"
                                   title="Ver detalhes dos leads transferidos"
                                 >
                                   <Eye className="w-4 h-4 flex-shrink-0" />
@@ -10103,8 +10103,8 @@ export default function AdminLeadTransferPage() {
                 </table>
               </div>
               {loadingMoreLogs && (
-                <div className="mt-2 flex items-center justify-center gap-2 rounded-lg border border-[#8CD955]/30 bg-[#8CD955]/5 dark:bg-[#8CD955]/10 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200">
-                  <Loader2 className="w-4 h-4 animate-spin text-[#8CD955] flex-shrink-0" />
+                <div className="mt-2 flex items-center justify-center gap-2 rounded-lg border border-[#E86A24]/30 bg-[#E86A24]/5 dark:bg-[#E86A24]/10 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#E86A24] flex-shrink-0" />
                   <span>Carregando mais registros em segundo plano. A tabela será atualizada automaticamente.</span>
                 </div>
               )}
@@ -10273,7 +10273,7 @@ export default function AdminLeadTransferPage() {
                           placeholder="Nome, e-mail, telefone, ID… Use também expirado ou resolvido para filtrar."
                           value={modalSearch}
                           onChange={(e) => setModalSearch(e.target.value)}
-                          className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] transition-all"
+                          className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] transition-all"
                           aria-describedby="modal-leads-search-hint"
                         />
                         <p id="modal-leads-search-hint" className="text-[10px] text-gray-500 dark:text-gray-400 mt-1.5 leading-snug">
@@ -10292,7 +10292,7 @@ export default function AdminLeadTransferPage() {
                         <div className="flex flex-col">
                           <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Total saldo antes</span>
                           <span className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">(no momento da transferência)</span>
-                          <span className="text-xl font-bold text-[#8CD955] tabular-nums">
+                          <span className="text-xl font-bold text-[#E86A24] tabular-nums">
                             R$ {modalEntriesFiltered.reduce((s, e) => s + (e.saldo_snapshot != null ? Number(e.saldo_snapshot) : 0), 0).toFixed(2).replace('.', ',')}
                           </span>
                         </div>
@@ -10333,7 +10333,7 @@ export default function AdminLeadTransferPage() {
                                 onClick={runRecalcBalanceForLog}
                                 disabled={backfillingBalances}
                                 title="Busca o saldo atual dos leads no CRM e grava no banco como snapshot para futura verificação"
-                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#8CD955]/10 text-[#6B8E3F] hover:bg-[#8CD955]/20 border border-[#8CD955]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-[#E86A24]/10 text-[#6B8E3F] hover:bg-[#E86A24]/20 border border-[#E86A24]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
                               >
                                 {backfillingBalances ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                                 {backfillingBalances ? 'Salvando…' : 'Salvar saldo atual'}
@@ -10383,7 +10383,7 @@ export default function AdminLeadTransferPage() {
                     </div>
                     <div className="flex-1 min-h-0 overflow-auto p-4">
                       {loadingModalEntries ? (
-                        <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" /></div>
+                        <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" /></div>
                       ) : modalEntries.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12 px-4">
                           <div className="rounded-full bg-gray-100 dark:bg-[#404040] p-4 mb-3">
@@ -10625,7 +10625,7 @@ export default function AdminLeadTransferPage() {
                                           </span>
                                         )}
                                       </td>
-                                      <td className="py-3 px-4 text-right tabular-nums text-sm font-bold text-[#8CD955]">{entry.saldo_snapshot != null ? fmt(entry.saldo_snapshot) : <span className="text-gray-500 dark:text-gray-400 font-normal">Sem saldo</span>}</td>
+                                      <td className="py-3 px-4 text-right tabular-nums text-sm font-bold text-[#E86A24]">{entry.saldo_snapshot != null ? fmt(entry.saldo_snapshot) : <span className="text-gray-500 dark:text-gray-400 font-normal">Sem saldo</span>}</td>
                                       <td className="py-3 px-4 text-right">
                                         <div className="flex flex-col items-end">
                                           {semDadosAntesDep ? (
@@ -10747,7 +10747,7 @@ export default function AdminLeadTransferPage() {
                             <select
                               value={moveTargetEmail}
                               onChange={(e) => setMoveTargetEmail(e.target.value)}
-                              className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-[#8CD955]"
+                              className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-[#E86A24]"
                             >
                               <option value="">Selecionar consultor</option>
                               {moveModalConsultants
@@ -10763,7 +10763,7 @@ export default function AdminLeadTransferPage() {
                           <select
                             value={moveToNextTransferType}
                             onChange={(e) => setMoveToNextTransferType(e.target.value as 'TF' | 'TF1' | 'TF2' | 'TF3')}
-                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-[#8CD955]"
+                            className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm mb-4 focus:ring-2 focus:ring-[#E86A24]"
                           >
                             <option value="TF">TF</option>
                             <option value="TF1">TF1</option>
@@ -10782,7 +10782,7 @@ export default function AdminLeadTransferPage() {
                               type="button"
                               onClick={runMoveToNext}
                               disabled={!moveTargetEmail?.trim() || movingLeads}
-                              className="px-4 py-2 rounded-lg text-sm font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              className="px-4 py-2 rounded-lg text-sm font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             >
                               {movingLeads ? (
                                 <>
@@ -10826,7 +10826,7 @@ export default function AdminLeadTransferPage() {
                       <button
                         type="button"
                         onClick={() => canGo && setCurrentStep(step.id)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${isActive ? 'bg-[#8CD955] text-white' : isPast ? 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-[#555]' : 'bg-gray-100 dark:bg-[#333] text-gray-400 dark:text-gray-500 cursor-default'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${isActive ? 'bg-[#E86A24] text-white' : isPast ? 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-[#555]' : 'bg-gray-100 dark:bg-[#333] text-gray-400 dark:text-gray-500 cursor-default'}`}
                       >
                         <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs bg-white/20">{step.id}</span>
                         <span className="hidden sm:inline">{step.short}</span>
@@ -10840,11 +10840,11 @@ export default function AdminLeadTransferPage() {
               {currentStep === 1 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent">
                   <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
-                    <Building2 className="w-4 h-4 text-[#8CD955]" />
+                    <Building2 className="w-4 h-4 text-[#E86A24]" />
                     Banca
                   </label>
                   <div className="relative max-w-md">
-                    <div className="flex items-center border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#333] focus-within:ring-2 focus-within:ring-[#8CD955] focus-within:border-[#8CD955]">
+                    <div className="flex items-center border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#333] focus-within:ring-2 focus-within:ring-[#E86A24] focus-within:border-[#E86A24]">
                       <Search className="w-4 h-4 text-gray-500 flex-shrink-0 ml-3 pointer-events-none" />
                       <input
                         type="text"
@@ -11024,7 +11024,7 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       onClick={() => setCurrentStep(2)}
                       disabled={!bancaId || !canExecuteTransfer || !!selectedBanca?.lead_transfer_locked}
-                      className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50"
+                      className="px-4 py-2 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50"
                     >
                       Próximo
                     </button>
@@ -11035,14 +11035,14 @@ export default function AdminLeadTransferPage() {
               {/* Step 2: Apenas consultor origem */}
               {currentStep === 2 && (
                 <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl border border-gray-200 dark:border-[#404040] p-5 shadow-sm ring-1 ring-gray-100 dark:ring-transparent space-y-4">
-                  <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white"><User className="w-4 h-4 text-[#8CD955]" />Consultor origem</label>
+                  <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white"><User className="w-4 h-4 text-[#E86A24]" />Consultor origem</label>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Todos os usuários atribuídos à banca (cargo, gerente e consultores vinculados)</p>
                   <div className="flex flex-wrap gap-3 items-end">
                     <button
                       type="button"
                       onClick={openConsultantOriginModal}
                       disabled={!bancaId || loadingConsultants}
-                      className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <User className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
                       <span className="truncate text-gray-800 dark:text-white">
@@ -11063,7 +11063,7 @@ export default function AdminLeadTransferPage() {
                   )}
                   <div className="flex gap-2 pt-2">
                     <button type="button" onClick={() => setCurrentStep(1)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
-                    <button type="button" onClick={() => { setDaysInactivePreset('90'); setDaysInactive('90'); setCurrentStep(3); loadLeads('90'); }} disabled={!sourceEmail?.trim()} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Próximo: filtros e buscar</button>
+                    <button type="button" onClick={() => { setDaysInactivePreset('90'); setDaysInactive('90'); setCurrentStep(3); loadLeads('90'); }} disabled={!sourceEmail?.trim()} className="px-4 py-2 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50">Próximo: filtros e buscar</button>
                   </div>
                 </div>
               )}
@@ -11165,27 +11165,27 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Inatividade (dias)</label>
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => { setDaysInactivePreset('all'); setDaysInactive('0'); loadLeads('0'); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'all' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Todos os leads</button>
+                        <button type="button" onClick={() => { setDaysInactivePreset('all'); setDaysInactive('0'); loadLeads('0'); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'all' ? 'bg-[#E86A24] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Todos os leads</button>
                         {INACTIVITY_PRESETS.map((d) => (
-                          <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); loadLeads(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === String(d) ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>{d}d</button>
+                          <button key={d} type="button" onClick={() => { setDaysInactivePreset(String(d)); setDaysInactive(String(d)); loadLeads(String(d)); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === String(d) ? 'bg-[#E86A24] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>{d}d</button>
                         ))}
-                        <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'other' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Outro</button>
+                        <button type="button" onClick={() => setDaysInactivePreset('other')} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${daysInactivePreset === 'other' ? 'bg-[#E86A24] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#404040] border border-transparent dark:border-[#555]'}`}>Outro</button>
                       </div>
-                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45 ou 0 (todos)" className="mt-2 w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />}
+                      {daysInactivePreset === 'other' && <input type="number" min={0} value={daysInactive} onChange={(e) => setDaysInactive(e.target.value)} placeholder="Ex: 45 ou 0 (todos)" className="mt-2 w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />}
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total na Carteira</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                           {BALANCE_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {balanceFilter === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
@@ -11193,16 +11193,16 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total Depositado</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalDepositado === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
@@ -11210,7 +11210,7 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total apostado</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                           <option value="all">Todos</option>
                           <option value="with_bet">Com valor</option>
                           <option value="without_bet">Sem valor</option>
@@ -11218,9 +11218,9 @@ export default function AdminLeadTransferPage() {
                         </select>
                         {leadFilterAposta === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
@@ -11228,16 +11228,16 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Saque disponível</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterSaqueDisponivel === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
@@ -11245,34 +11245,34 @@ export default function AdminLeadTransferPage() {
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Total Prêmio</label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalPremio === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Valor mínimo (soma saldo) R$</label>
-                      <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                      <input type="text" inputMode="decimal" placeholder="Ex: 100" value={minSumBalance} onChange={(e) => setMinSumBalance(e.target.value)} className="w-28 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Leads até somar este valor</p>
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1">Auto-selecionar (N leads)</label>
-                      <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                      <input type="number" min={1} max={MAX_LEADS_SELECT} value={quantity} onChange={(e) => setQuantity(String(Math.min(MAX_LEADS_SELECT, Math.max(1, parseInt(e.target.value, 10) || 1))))} className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Máx. {MAX_LEADS_SELECT}</p>
                     </div>
                   </div>
                   {loadingLeads && (
                     <div className="flex flex-col items-center justify-center py-10 px-4 rounded-xl border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1f1f1f]">
-                      <Loader2 className="w-10 h-10 text-[#8CD955] animate-spin mb-3" aria-hidden />
+                      <Loader2 className="w-10 h-10 text-[#E86A24] animate-spin mb-3" aria-hidden />
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Buscando leads...</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Aguarde enquanto carregamos os resultados.</p>
                     </div>
@@ -11430,7 +11430,7 @@ export default function AdminLeadTransferPage() {
                   )}
                   <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-[#404040]">
                     <button type="button" onClick={() => setCurrentStep(2)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Anterior</button>
-                    <button type="button" onClick={() => setCurrentStep(4)} disabled={!hasSearchedLeads || filteredLeads.length === 0} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 transition-colors">Ir para seleção de leads</button>
+                    <button type="button" onClick={() => setCurrentStep(4)} disabled={!hasSearchedLeads || filteredLeads.length === 0} className="px-4 py-2 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50 transition-colors">Ir para seleção de leads</button>
                   </div>
                 </div>
               )}
@@ -11461,7 +11461,7 @@ export default function AdminLeadTransferPage() {
                     </div>
                   )}
                   <div className="text-center mt-4 pt-4 border-t border-gray-100 dark:border-[#404040]">
-                    <button type="button" onClick={() => setCurrentStep(3)} className="text-[#8CD955] font-medium hover:underline">
+                    <button type="button" onClick={() => setCurrentStep(3)} className="text-[#E86A24] font-medium hover:underline">
                       Voltar aos filtros
                     </button>
                   </div>
@@ -11486,12 +11486,12 @@ export default function AdminLeadTransferPage() {
                       <label className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-white mb-2">
                         {activeTab === 'transfer_stock' ? (
                           <>
-                            <Package className="w-4 h-4 text-[#8CD955]" />
+                            <Package className="w-4 h-4 text-[#E86A24]" />
                             Destino: estoque do gerente
                           </>
                         ) : (
                           <>
-                            <Users className="w-4 h-4 text-[#8CD955]" />
+                            <Users className="w-4 h-4 text-[#E86A24]" />
                             Destino: consultor
                           </>
                         )}
@@ -11499,7 +11499,7 @@ export default function AdminLeadTransferPage() {
                       {activeTab === 'transfer' && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">
                           Transferência direta para a carteira do consultor na banca. Para enviar ao estoque CRM do gerente, use a aba{' '}
-                          <button type="button" className="text-[#8CD955] hover:underline font-medium" onClick={() => setActiveTab('transfer_stock')}>
+                          <button type="button" className="text-[#E86A24] hover:underline font-medium" onClick={() => setActiveTab('transfer_stock')}>
                             Transferir estoque
                           </button>
                           .
@@ -11535,7 +11535,7 @@ export default function AdminLeadTransferPage() {
                             type="button"
                             onClick={openConsultantDestinoModal}
                             disabled={!bancaId || loadingConsultants}
-                            className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="flex items-center gap-2 min-w-[280px] max-w-full border border-gray-300 dark:border-[#555] rounded-xl px-3 py-2.5 text-sm text-left bg-white dark:bg-[#333] dark:text-white hover:bg-gray-50 dark:hover:bg-[#404040] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <User className="w-4 h-4 text-gray-500 flex-shrink-0" />
                             <span className="truncate text-gray-800 dark:text-white">
@@ -11549,7 +11549,7 @@ export default function AdminLeadTransferPage() {
                             <select
                               value={transferDeadlineDays}
                               onChange={(e) => setTransferDeadlineDays(Number(e.target.value))}
-                              className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                              className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                               title="Número de dias até o lead expirar (após esse prazo pode ser repassado ao próximo consultor)"
                             >
                               <option value={10}>10 dias</option>
@@ -11568,7 +11568,7 @@ export default function AdminLeadTransferPage() {
                               (!targetEmail?.trim() || sourceEmail?.trim()?.toLowerCase() === targetEmail?.trim()?.toLowerCase())) ||
                             (destinoModo === 'estoque_gerente' && !estoqueGerenteId.trim())
                           }
-                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <CheckSquare className="w-4 h-4" />
                           Revisar e confirmar ({selectedCount} lead(s))
@@ -11578,12 +11578,12 @@ export default function AdminLeadTransferPage() {
                   )}
                   {/* Barra fixa quando há seleção */}
                   {selectedLeadIds.size > 0 && (
-                    <div className="mb-4 p-3 rounded-xl bg-[#8CD955]/10 border border-[#8CD955]/30 flex flex-wrap items-center justify-between gap-3">
+                    <div className="mb-4 p-3 rounded-xl bg-[#E86A24]/10 border border-[#E86A24]/30 flex flex-wrap items-center justify-between gap-3">
                       <span className="font-semibold text-gray-800 dark:text-white">{selectedLeadIds.size} lead(s) selecionado(s)</span>
                       <div className="flex gap-2">
                         <button type="button" onClick={() => setSelectedLeadIds(new Set())} className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Limpar</button>
                         <button type="button" onClick={() => setShowSelectedModal(true)} className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Ver selecionados</button>
-                        <button type="button" onClick={() => setCurrentStep(5)} disabled={!canExecuteTransfer} className="px-4 py-1.5 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50">Transferir {selectedLeadIds.size} lead(s)</button>
+                        <button type="button" onClick={() => setCurrentStep(5)} disabled={!canExecuteTransfer} className="px-4 py-1.5 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50">Transferir {selectedLeadIds.size} lead(s)</button>
                       </div>
                     </div>
                   )}
@@ -11641,13 +11641,13 @@ export default function AdminLeadTransferPage() {
                           Verificar IDs na tabela
                         </button>
                       </div>
-                      <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                      <select value={leadFilterStatus} onChange={(e) => setLeadFilterStatus(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                         <option value="">Status: Todos</option>
                         {uniqueStatuses.map((s) => (
                           <option key={s} value={s}>{getStatusLabel(s)}</option>
                         ))}
                       </select>
-                      <select value={leadFilterTemperature} onChange={(e) => setLeadFilterTemperature(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[140px]">
+                      <select value={leadFilterTemperature} onChange={(e) => setLeadFilterTemperature(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[140px]">
                         <option value="">Temperatura: Todas</option>
                         {uniqueTemperatures.map((t) => (
                           <option key={t} value={t}>{getTemperatureLabel(t)}</option>
@@ -11655,37 +11655,37 @@ export default function AdminLeadTransferPage() {
                       </select>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total na Carteira:</span>
-                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[120px]">
                           {BALANCE_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {balanceFilter === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMin} onChange={(e) => setLeadFilterSaldoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaldoMax} onChange={(e) => setLeadFilterSaldoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total Depositado:</span>
-                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <select value={leadFilterTotalDepositado} onChange={(e) => setLeadFilterTotalDepositado(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalDepositado === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMin} onChange={(e) => setLeadFilterTotalDepositadoMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalDepositadoMax} onChange={(e) => setLeadFilterTotalDepositadoMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total apostado:</span>
-                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <select value={leadFilterAposta} onChange={(e) => setLeadFilterAposta(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[120px]">
                           <option value="all">Todos</option>
                           <option value="with_bet">Com valor</option>
                           <option value="without_bet">Sem valor</option>
@@ -11693,39 +11693,39 @@ export default function AdminLeadTransferPage() {
                         </select>
                         {leadFilterAposta === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMin} onChange={(e) => setLeadFilterApostaMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterApostaMax} onChange={(e) => setLeadFilterApostaMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Saque disponível:</span>
-                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <select value={leadFilterSaqueDisponivel} onChange={(e) => setLeadFilterSaqueDisponivel(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterSaqueDisponivel === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMin} onChange={(e) => setLeadFilterSaqueDisponivelMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterSaqueDisponivelMax} onChange={(e) => setLeadFilterSaqueDisponivelMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Total Prêmio:</span>
-                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955] min-w-[120px]">
+                        <select value={leadFilterTotalPremio} onChange={(e) => setLeadFilterTotalPremio(e.target.value)} className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24] min-w-[120px]">
                           {NUMERIC_FILTER_OPTIONS.map((o) => (
                             <option key={o.value} value={o.value}>{o.label}</option>
                           ))}
                         </select>
                         {leadFilterTotalPremio === 'range' && (
                           <>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMin} onChange={(e) => setLeadFilterTotalPremioMin(e.target.value)} placeholder="Mín (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                             <span className="text-gray-500 dark:text-gray-400">–</span>
-                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]" />
+                            <input type="text" inputMode="decimal" value={leadFilterTotalPremioMax} onChange={(e) => setLeadFilterTotalPremioMax(e.target.value)} placeholder="Máx (R$)" className="w-24 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]" />
                           </>
                         )}
                       </div>
@@ -11734,7 +11734,7 @@ export default function AdminLeadTransferPage() {
                         <select
                           value={leadsPageSize}
                           onChange={(e) => setLeadsPageSize(Number(e.target.value))}
-                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                          className="border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]"
                         >
                           <option value={10}>10</option>
                           <option value={25}>25</option>
@@ -11754,7 +11754,7 @@ export default function AdminLeadTransferPage() {
                             value={customPageSizeInput}
                             onChange={(e) => setCustomPageSizeInput(e.target.value.replace(/\D/g, '').slice(0, 5) || '')}
                             placeholder="Qtd"
-                            className="w-20 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#8CD955]"
+                            className="w-20 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-2 py-1.5 text-sm text-gray-800 focus:ring-2 focus:ring-[#E86A24]"
                           />
                         )}
                       </div>
@@ -11899,7 +11899,7 @@ export default function AdminLeadTransferPage() {
                                 type="button"
                                 onClick={() => setLeadsPage(p)}
                                 className={`min-w-[2rem] px-2 py-1.5 rounded-lg text-sm font-medium transition-colors ${p === currentPage
-                                  ? 'bg-[#8CD955] text-white'
+                                  ? 'bg-[#E86A24] text-white'
                                   : 'border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]'
                                   }`}
                               >
@@ -13319,7 +13319,7 @@ export default function AdminLeadTransferPage() {
                             key={row.email}
                             className={`flex w-full items-start gap-2 px-3 py-2 sm:px-4 sm:py-3 text-left transition-all ${
                               isNeon
-                                ? 'hover:bg-[#8CD955]/15 dark:hover:bg-[#8CD955]/10'
+                                ? 'hover:bg-[#E86A24]/15 dark:hover:bg-[#E86A24]/10'
                                 : allProblematic
                                 ? 'bg-red-50/40 dark:bg-red-950/20 hover:bg-red-100/50 dark:hover:bg-red-900/30 opacity-80'
                                 : picked
@@ -13339,7 +13339,7 @@ export default function AdminLeadTransferPage() {
                               type="button"
                               disabled={originRowDisabled}
                               className={`min-w-0 flex-1 flex flex-col items-start text-left outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-md disabled:cursor-not-allowed disabled:opacity-60 ${
-                                isNeon ? 'focus-visible:ring-[#8CD955]' : ''
+                                isNeon ? 'focus-visible:ring-[#E86A24]' : ''
                               }`}
                               onClick={() => {
                                 if (originRowDisabled) return;
@@ -13351,10 +13351,10 @@ export default function AdminLeadTransferPage() {
                               }}
                             >
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`text-sm font-semibold break-all ${isNeon ? 'text-[#8CD955]' : allProblematic ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
+                              <span className={`text-sm font-semibold break-all ${isNeon ? 'text-[#E86A24]' : allProblematic ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
                                 {titleLine}
                               </span>
-                              <span className={`text-[11px] px-1.5 py-0.5 rounded-md font-medium ${isNeon ? 'bg-[#8CD955]/20 text-[#8CD955]' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'}`}>
+                              <span className={`text-[11px] px-1.5 py-0.5 rounded-md font-medium ${isNeon ? 'bg-[#E86A24]/20 text-[#E86A24]' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'}`}>
                                 {bancaHint}
                               </span>
                               {hasProblematic && (
@@ -13367,7 +13367,7 @@ export default function AdminLeadTransferPage() {
                                   key={tf}
                                   className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded border ${
                                     isNeon
-                                      ? 'border-[#8CD955]/50 bg-[#8CD955]/10 text-[#8CD955]'
+                                      ? 'border-[#E86A24]/50 bg-[#E86A24]/10 text-[#E86A24]'
                                       : 'border-teal-500/35 bg-teal-500/10 text-teal-800 dark:text-teal-200'
                                   }`}
                                   title="Tipo de transferência (TF)"
@@ -13376,7 +13376,7 @@ export default function AdminLeadTransferPage() {
                                 </span>
                               ))}
                             </div>
-                            <span className={`text-xs mt-0.5 ${isNeon ? 'text-[#8CD955]/80' : 'text-gray-600 dark:text-gray-400'}`}>
+                            <span className={`text-xs mt-0.5 ${isNeon ? 'text-[#E86A24]/80' : 'text-gray-600 dark:text-gray-400'}`}>
                               {row.totalDisponivel} lead(s) disponível(is)
                               {moveLeadsEstoqueGerenteMode
                                 ? row.logCount > 1
@@ -13428,18 +13428,18 @@ export default function AdminLeadTransferPage() {
                           {highlightedRows.length > 0 && (
                             <div className="mb-3">
                               <div className="flex items-center gap-2 mb-1.5">
-                                <span className="text-[11px] font-bold uppercase tracking-widest text-[#8CD955]">
+                                <span className="text-[11px] font-bold uppercase tracking-widest text-[#E86A24]">
                                   ✦ Banca da solicitação
                                 </span>
-                                <span className="text-[10px] text-[#8CD955]/70 font-medium">
+                                <span className="text-[10px] text-[#E86A24]/70 font-medium">
                                   {bancas.find((b) => b.id === selectedReqBancaId)?.name || bancas.find((b) => b.id === selectedReqBancaId)?.url || selectedReqBancaId}
                                 </span>
                               </div>
                               <div
-                                className="rounded-xl overflow-hidden divide-y divide-[#8CD955]/20"
+                                className="rounded-xl overflow-hidden divide-y divide-[#E86A24]/20"
                                 style={{
-                                  border: '2px solid #8CD955',
-                                  boxShadow: '0 0 16px 2px #8CD95540, 0 0 4px 1px #8CD95560',
+                                  border: '2px solid #E86A24',
+                                  boxShadow: '0 0 16px 2px #E86A2440, 0 0 4px 1px #E86A2460',
                                   background: 'rgba(140,217,85,0.04)',
                                 }}
                               >
@@ -13735,7 +13735,7 @@ export default function AdminLeadTransferPage() {
             className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-3 px-4 py-3 bg-[#8CD955]/20 dark:bg-[#8CD955]/10 border-b border-gray-200 dark:border-[#404040]">
+            <div className="flex items-start justify-between gap-3 px-4 py-3 bg-[#E86A24]/20 dark:bg-[#E86A24]/10 border-b border-gray-200 dark:border-[#404040]">
               <div className="min-w-0">
                 <h2 id="modal-consultant-conversion-chart-title" className="font-bold text-lg text-gray-900 dark:text-white">
                   {consultantConversionChartModalScope === 'all_bancas'
@@ -13765,7 +13765,7 @@ export default function AdminLeadTransferPage() {
             <div className="p-4 overflow-y-auto flex-1 min-h-0">
               {loadingExpiredConversion ? (
                 <div className="flex justify-center py-16">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : (
                 (() => {
@@ -13892,7 +13892,7 @@ export default function AdminLeadTransferPage() {
       {showDonorConsultantModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowDonorConsultantModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-donor-consultant-title">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 bg-[#8CD955] text-white rounded-t-2xl">
+            <div className="flex items-center justify-between px-4 py-3 bg-[#E86A24] text-white rounded-t-2xl">
               <div className="flex items-center gap-2">
                 <User className="w-5 h-5 flex-shrink-0" />
                 <h2 id="modal-donor-consultant-title" className="font-bold text-lg">Consultor Doador</h2>
@@ -13913,7 +13913,7 @@ export default function AdminLeadTransferPage() {
                   value={donorConsultantSearchQuery}
                   onChange={(e) => setDonorConsultantSearchQuery(e.target.value)}
                   placeholder="Nome ou email..."
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] shadow-sm"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] shadow-sm"
                 />
               </div>
               <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto flex-1 min-h-[200px]" style={{ maxHeight: '320px' }}>
@@ -13925,7 +13925,7 @@ export default function AdminLeadTransferPage() {
                       <button
                         type="button"
                         onClick={() => setDonorConsultantPendingEmail(null)}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${donorConsultantPendingEmail === null ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${donorConsultantPendingEmail === null ? 'bg-[#E86A24]/10 dark:bg-[#E86A24]/20 ring-1 ring-[#E86A24]/30' : ''}`}
                       >
                         <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400 flex items-center justify-center text-sm font-semibold">—</span>
                         <div className="flex-1 min-w-0">
@@ -13942,7 +13942,7 @@ export default function AdminLeadTransferPage() {
                           <button
                             type="button"
                             onClick={() => setDonorConsultantPendingEmail(c.email ?? '')}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#8CD955]/10 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/30' : ''}`}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#E86A24]/10 dark:bg-[#E86A24]/20 ring-1 ring-[#E86A24]/30' : ''}`}
                           >
                             <span className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
                               {initial}
@@ -13963,7 +13963,7 @@ export default function AdminLeadTransferPage() {
               <button type="button" onClick={() => setShowDonorConsultantModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] font-medium">
                 Cancelar
               </button>
-              <button type="button" onClick={confirmDonorConsultant} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A]">
+              <button type="button" onClick={confirmDonorConsultant} className="px-4 py-2 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B]">
                 Selecionar
               </button>
             </div>
@@ -13975,7 +13975,7 @@ export default function AdminLeadTransferPage() {
       {showVerifierDetailsModal && verifierDetailsConsultant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowVerifierDetailsModal(false)} role="dialog" aria-modal="true" aria-labelledby="modal-verifier-details-title">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-[#404040]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 bg-[#8CD955]/20 dark:bg-[#8CD955]/10 border-b border-gray-200 dark:border-[#404040] rounded-t-2xl">
+            <div className="flex items-center justify-between px-4 py-3 bg-[#E86A24]/20 dark:bg-[#E86A24]/10 border-b border-gray-200 dark:border-[#404040] rounded-t-2xl">
               <h2 id="modal-verifier-details-title" className="font-bold text-lg text-gray-900 dark:text-white">
                 Detalhe: {verifierDetailsConsultant.name} — Depositaram ou sacaram depois
               </h2>
@@ -13986,7 +13986,7 @@ export default function AdminLeadTransferPage() {
             <div className="p-4 overflow-y-auto flex-1 min-h-0">
               {loadingVerifierDetails ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : verifierDetailsLeads.length === 0 ? (
                 <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum lead com depósito ou saque depois da transferência.</p>
@@ -14097,7 +14097,7 @@ export default function AdminLeadTransferPage() {
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Esta ação será registrada em auditoria.</p>
             <div className="flex gap-3 justify-end">
               <button type="button" onClick={() => { setShowConfirmModal(false); setConfirmAcknowledged(false); }} disabled={transferring} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-[#555] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040]">Cancelar</button>
-              <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#8CD955] text-white font-medium hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2">
+              <button type="button" onClick={confirmTransfer} disabled={transferring || !canExecuteTransfer || (selectedCount > 50 && !confirmAcknowledged)} className="px-4 py-2 rounded-lg bg-[#E86A24] text-white font-medium hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2">
                 {transferring ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 {destinoModo === 'estoque_gerente' ? 'Confirmar reserva no estoque' : 'Confirmar transferência'}
               </button>
@@ -14116,7 +14116,7 @@ export default function AdminLeadTransferPage() {
               scheduleApproveModalDonorSearchSync();
             }}
           >
-            <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+            <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white">
               <h2 className="text-lg font-bold">Aprovar solicitação</h2>
               <button type="button" onClick={closeApproveModal} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
                 <X className="w-5 h-5" />
@@ -14161,7 +14161,7 @@ export default function AdminLeadTransferPage() {
                       Divisão direto × estoque
                     </p>
                     <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
-                      Total: <span className="text-[#6FA344] dark:text-[#A8E677]">{solicitacaoLeadTotalApprove}</span> leads
+                      Total: <span className="text-[#6FA344] dark:text-[#EF9057]">{solicitacaoLeadTotalApprove}</span> leads
                     </p>
                   </div>
                   <p className="text-xs leading-relaxed text-gray-600 dark:text-gray-400">
@@ -14174,10 +14174,10 @@ export default function AdminLeadTransferPage() {
                     aria-label="Modo de divisão direto ou estoque"
                   >
                     <label
-                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#8CD955]/50 ${
+                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#E86A24]/50 ${
                         approveDestinoPureDirect
-                          ? 'border-[#8CD955] bg-[#8CD955]/14 dark:bg-[#8CD955]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
-                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#8CD955]/45'
+                          ? 'border-[#E86A24] bg-[#E86A24]/14 dark:bg-[#E86A24]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
+                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#E86A24]/45'
                       }`}
                     >
                       <input
@@ -14194,7 +14194,7 @@ export default function AdminLeadTransferPage() {
                       />
                       <div
                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                          approveDestinoPureDirect ? 'bg-[#8CD955]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                          approveDestinoPureDirect ? 'bg-[#E86A24]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                         }`}
                       >
                         <ArrowRight className="h-5 w-5" aria-hidden />
@@ -14206,15 +14206,15 @@ export default function AdminLeadTransferPage() {
                         </span>
                       </div>
                       {approveDestinoPureDirect && (
-                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#A8E677]" aria-hidden />
+                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#EF9057]" aria-hidden />
                       )}
                     </label>
 
                     <label
-                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#8CD955]/50 ${
+                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#E86A24]/50 ${
                         approveDestinoPureStock
-                          ? 'border-[#8CD955] bg-[#8CD955]/14 dark:bg-[#8CD955]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
-                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#8CD955]/45'
+                          ? 'border-[#E86A24] bg-[#E86A24]/14 dark:bg-[#E86A24]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
+                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#E86A24]/45'
                       }`}
                     >
                       <input
@@ -14230,7 +14230,7 @@ export default function AdminLeadTransferPage() {
                       />
                       <div
                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                          approveDestinoPureStock ? 'bg-[#8CD955]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                          approveDestinoPureStock ? 'bg-[#E86A24]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                         }`}
                       >
                         <Package className="h-5 w-5" aria-hidden />
@@ -14242,15 +14242,15 @@ export default function AdminLeadTransferPage() {
                         </span>
                       </div>
                       {approveDestinoPureStock && (
-                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#A8E677]" aria-hidden />
+                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#EF9057]" aria-hidden />
                       )}
                     </label>
 
                     <label
-                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#8CD955]/50 ${
+                      className={`relative flex cursor-pointer gap-3 rounded-2xl border-2 p-3 text-left transition-all duration-150 outline-none focus-within:ring-2 focus-within:ring-[#E86A24]/50 ${
                         approveDestinoCustom
-                          ? 'border-[#8CD955] bg-[#8CD955]/14 dark:bg-[#8CD955]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
-                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#8CD955]/45'
+                          ? 'border-[#E86A24] bg-[#E86A24]/14 dark:bg-[#E86A24]/20 shadow-[inset_0_0_0_1px_rgba(140,217,85,0.25)]'
+                          : 'border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-[#333]/90 hover:border-[#E86A24]/45'
                       }`}
                     >
                       <input
@@ -14272,7 +14272,7 @@ export default function AdminLeadTransferPage() {
                       />
                       <div
                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                          approveDestinoCustom ? 'bg-[#8CD955]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                          approveDestinoCustom ? 'bg-[#E86A24]/30 text-[#3d6b1f] dark:text-[#C8F0A8]' : 'bg-gray-200/80 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                         }`}
                       >
                         <SlidersHorizontal className="h-5 w-5" aria-hidden />
@@ -14284,7 +14284,7 @@ export default function AdminLeadTransferPage() {
                         </span>
                       </div>
                       {approveDestinoCustom && (
-                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#A8E677]" aria-hidden />
+                        <CheckCircle2 className="absolute right-2 top-2 h-4 w-4 shrink-0 text-[#6FA344] dark:text-[#EF9057]" aria-hidden />
                       )}
                     </label>
                   </div>
@@ -14337,7 +14337,7 @@ export default function AdminLeadTransferPage() {
                           setApproveDirectQty(d);
                           setApproveStockQty(Math.max(0, t - d));
                         }}
-                        className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm tabular-nums text-gray-900 shadow-sm transition-colors focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/35 dark:border-[#555] dark:bg-[#333] dark:text-white dark:focus:border-[#8CD955]"
+                        className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm tabular-nums text-gray-900 shadow-sm transition-colors focus:border-[#E86A24] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/35 dark:border-[#555] dark:bg-[#333] dark:text-white dark:focus:border-[#E86A24]"
                       />
                     </div>
                     <div>
@@ -14365,8 +14365,8 @@ export default function AdminLeadTransferPage() {
                       type="button"
                       className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                         approveDestinoPureDirect
-                          ? 'border-[#8CD955] bg-[#8CD955]/20 text-[#2d5016] dark:text-[#C8F0A8]'
-                          : 'border-gray-300 bg-white text-gray-700 hover:border-[#8CD955]/60 dark:border-gray-600 dark:bg-[#383838] dark:text-gray-200'
+                          ? 'border-[#E86A24] bg-[#E86A24]/20 text-[#2d5016] dark:text-[#C8F0A8]'
+                          : 'border-gray-300 bg-white text-gray-700 hover:border-[#E86A24]/60 dark:border-gray-600 dark:bg-[#383838] dark:text-gray-200'
                       }`}
                       onClick={() => {
                         setApproveDirectQty(solicitacaoLeadTotalApprove);
@@ -14479,7 +14479,7 @@ export default function AdminLeadTransferPage() {
                           }
                         }}
                         placeholder="Buscar por nome ou e-mail (Enter ou clique no modal para filtrar)"
-                        className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white dark:placeholder:text-gray-400 rounded-lg text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                       />
                     </div>
                     <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-y-auto" style={{ maxHeight: '220px' }}>
@@ -14496,7 +14496,7 @@ export default function AdminLeadTransferPage() {
                                 <button
                                   type="button"
                                   onClick={() => setApproveFormSourceConsultantId(c.id)}
-                                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#8CD955]/15 dark:bg-[#8CD955]/20 ring-1 ring-[#8CD955]/40' : ''}`}
+                                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${isSelected ? 'bg-[#E86A24]/15 dark:bg-[#E86A24]/20 ring-1 ring-[#E86A24]/40' : ''}`}
                                 >
                                   <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-gray-300 flex items-center justify-center text-sm font-semibold">
                                     {initial}
@@ -14560,7 +14560,7 @@ export default function AdminLeadTransferPage() {
                     approveModalMixed ||
                     (approveStockQty > 0 && approveDirectQty === 0 && !approveEstoqueGerenteId.trim())
                   }
-                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   Ir para transferir
                 </button>

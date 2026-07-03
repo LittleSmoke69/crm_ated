@@ -73,10 +73,56 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const [loadingRoute, setLoadingRoute] = useState<string | null>(null);
   const [isImpersonating, setIsImpersonating] = useState(false);
 
-  // Detecta modo impersonação (admin acessando conta de outro usuário)
+  // Detecta impersonação via cookie no servidor (fonte de verdade) + limpa sessionStorage obsoleto
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setIsImpersonating(!!sessionStorage.getItem('admin_original_id'));
+
+    let cancelled = false;
+
+    const syncImpersonationState = async () => {
+      const currentUserId =
+        sessionStorage.getItem('user_id') ||
+        sessionStorage.getItem('profile_id') ||
+        localStorage.getItem('profile_id');
+      const adminOriginalId = sessionStorage.getItem('admin_original_id');
+
+      if (adminOriginalId && currentUserId && adminOriginalId === currentUserId) {
+        sessionStorage.removeItem('admin_original_id');
+        sessionStorage.removeItem('admin_original_email');
+      }
+
+      try {
+        const res = await fetch('/api/admin/users/impersonation-status', {
+          credentials: 'include',
+        });
+        const result = await res.json().catch(() => ({}));
+        if (cancelled) return;
+
+        if (res.ok && result.success && result.data?.impersonating) {
+          setIsImpersonating(true);
+          if (result.data.adminUserId) {
+            sessionStorage.setItem('admin_original_id', result.data.adminUserId);
+          }
+          return;
+        }
+
+        setIsImpersonating(false);
+        sessionStorage.removeItem('admin_original_id');
+        sessionStorage.removeItem('admin_original_email');
+      } catch {
+        if (cancelled) return;
+        const stale =
+          !!sessionStorage.getItem('admin_original_id') &&
+          !!currentUserId &&
+          sessionStorage.getItem('admin_original_id') !== currentUserId;
+        setIsImpersonating(stale);
+      }
+    };
+
+    syncImpersonationState();
+    return () => {
+      cancelled = true;
+    };
   }, [pathname]);
 
   // Verifica se está nas páginas que devem mostrar o botão Sair
@@ -128,12 +174,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
 
       if (!res.ok || !result.success) {
         console.error('[RestoreAdmin] Erro:', result);
+        sessionStorage.removeItem('admin_original_id');
+        sessionStorage.removeItem('admin_original_email');
+        setIsImpersonating(false);
         alert(result.error || 'Não foi possível restaurar a sessão de admin.');
         return;
       }
 
       const restoredAdminId = result.data?.adminUserId || adminId;
       const restoredAdminEmail = result.data?.adminEmail || adminEmail;
+      const restoredAdminStatus = result.data?.adminStatus as string | undefined;
 
       sessionStorage.setItem('user_id', restoredAdminId);
       sessionStorage.setItem('profile_id', restoredAdminId);
@@ -141,11 +191,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         sessionStorage.setItem('profile_email', restoredAdminEmail);
         localStorage.setItem('profile_email', restoredAdminEmail);
       }
+      if (restoredAdminStatus) {
+        sessionStorage.setItem('profile_status', restoredAdminStatus);
+      }
       localStorage.setItem('profile_id', restoredAdminId);
       sessionStorage.removeItem('profile_status');
       sessionStorage.removeItem('zaploto_v1_admin_profile_session_ok_uid');
       sessionStorage.removeItem('admin_original_id');
       sessionStorage.removeItem('admin_original_email');
+      setIsImpersonating(false);
 
       window.location.href = withTenantSlug('/admin');
     } catch (error) {
@@ -271,18 +325,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
               submenu: sub,
             };
           };
-          let items = json.data!.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
-          /** Garante Estoque de leads para gerente/super_admin quando o tenant ainda não tem o item na sidebar inteligente */
-          if (userStatus === 'gerente' || userStatus === 'super_admin' || userStatus === 'admin') {
-            const hasLeadStock = items.some(
-              (it) => typeof it.href === 'string' && it.href.includes('/gerente/crm/lead-stock-transfer')
-            );
-            if (!hasLeadStock) {
-              const gestIdx = items.findIndex((it) => it.href === '/gerente');
-              const insertAt = gestIdx >= 0 ? gestIdx + 1 : Math.min(1, items.length);
-              items = [...items.slice(0, insertAt), itemLeadStockGerente, ...items.slice(insertAt)];
-            }
-          }
+          const items = json.data!.items.map((it: unknown) => toMenuItem(it as Parameters<typeof toMenuItem>[0]));
           setDynamicSidebar({ items, useLegacy: false });
         } else {
           setDynamicSidebar({ items: [], useLegacy: true });
@@ -660,7 +703,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       {/* Sidebar */}
       <aside
         className={`
-          fixed left-0 top-0 h-full max-h-[100dvh] bg-gray-100 dark:bg-[#2a2a2a] shadow-lg z-40 border-r border-gray-200 dark:border-[#404040]
+          fixed left-0 top-0 h-full max-h-[100dvh] bg-[#160f0a]/70 backdrop-blur-md shadow-lg z-40 border-r border-[#E86A24]/15
           transform transition-all duration-300 ease-in-out
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}
           lg:translate-x-0
@@ -671,9 +714,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         data-collapsed={isCollapsed}
       >
         {/* Logo e Botão de Toggle */}
-        <div className="p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
+        <div
+          className={`flex items-center border-b border-gray-200 p-4 dark:border-[#404040] ${
+            !isMobileOpen && isCollapsed ? 'flex-col gap-2' : 'justify-between'
+          }`}
+        >
           {(isMobileOpen || !isCollapsed) && (
-            <Logo size="lg" />
+            <Logo size="lg" className="min-w-0 flex-1" />
           )}
           {/* Botão X no mobile para fechar a sidebar */}
           {isMobileOpen && (
@@ -687,8 +734,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
             </button>
           )}
           {!isMobileOpen && isCollapsed && (
-            <div className="flex items-center justify-center w-full">
-              <Logo size="sm" />
+            <div className="flex w-full items-center justify-center">
+              <Logo size="sm" className="w-full" />
             </div>
           )}
           <button
@@ -767,7 +814,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                         ${
                           active && !isExpanded
                             ? 'text-white shadow-md'
-                            : 'text-gray-700 dark:text-[#ccc] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'
+                            : 'text-gray-700 dark:text-[#ccc] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 hover:text-[#E86A24] dark:hover:text-[#E86A24]'
                         }
                       `}
                       style={active && !isExpanded ? { backgroundColor: 'var(--zaploto-green)' } : {}}
@@ -785,7 +832,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                     </button>
                     
                     {isExpanded && (isMobileOpen || !isCollapsed) && (
-                      <div className="mt-1 ml-4 pl-4 border-l-2 space-y-1" style={{ borderColor: '#8CD95540' }}>
+                      <div className="mt-1 ml-4 pl-4 border-l-2 space-y-1" style={{ borderColor: '#E86A2440' }}>
                         {item.submenu?.map((sub) => {
                           const SubIcon = sub.icon;
                           const subHref = sub.href ?? '/';
@@ -801,7 +848,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                               }}
                               className={`
                                 flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200
-                                ${subActive ? 'font-semibold' : 'text-gray-600 dark:text-[#aaa] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'}
+                                ${subActive ? 'font-semibold' : 'text-gray-600 dark:text-[#aaa] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 hover:text-[#E86A24] dark:hover:text-[#E86A24]'}
                               `}
                               style={subActive ? { 
                                 color: 'var(--zaploto-green)', 
@@ -850,7 +897,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                     ${
                       active
                         ? 'text-white shadow-md'
-                        : 'text-gray-700 dark:text-[#ccc] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 hover:text-[#8CD955] dark:hover:text-[#8CD955]'
+                        : 'text-gray-700 dark:text-[#ccc] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 hover:text-[#E86A24] dark:hover:text-[#E86A24]'
                     }
                     ${isLoadingDonoBanca ? 'opacity-75 cursor-wait' : ''}
                   `}
@@ -880,7 +927,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
                   ${isMobileOpen ? '' : isCollapsed ? 'justify-center' : ''}
                   text-white shadow-md
                 `}
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
                 title={isMobileOpen ? undefined : isCollapsed ? 'Voltar ao admin' : undefined}
               >
                 <ArrowLeftToLine className="w-5 h-5 flex-shrink-0" />

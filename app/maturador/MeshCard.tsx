@@ -287,7 +287,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
   return (
     <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-slate-200 dark:border-[#404040] p-4 md:p-6">
       <div className="flex items-center gap-2 mb-2">
-        <Network className="w-5 h-5 text-[#8CD955]" />
+        <Network className="w-5 h-5 text-[#E86A24]" />
         <h2 className="text-base font-semibold text-slate-800 dark:text-white">
           Maturador Mesh (auto-conversa contínua)
         </h2>
@@ -330,7 +330,7 @@ export default function MeshCard({ eligibleInstances, apiHeaders, viewerProfileS
             type="button"
             onClick={handleStart}
             disabled={starting || eligibleInstances.length < 2}
-            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium bg-[#8CD955] text-white hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-base"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium bg-[#E86A24] text-white hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed text-base"
             title={
               eligibleInstances.length < 2
                 ? 'Pelo menos 2 instâncias conectadas com telefone são necessárias'
@@ -497,7 +497,7 @@ function NetworkAnimation({
         <defs>
           <radialGradient id="chipGradActive" cx="50%" cy="40%" r="60%">
             <stop offset="0%" stopColor="#a8e878" />
-            <stop offset="100%" stopColor="#8CD955" />
+            <stop offset="100%" stopColor="#E86A24" />
           </radialGradient>
           <radialGradient id="chipGradIdle" cx="50%" cy="40%" r="60%">
             <stop offset="0%" stopColor="#94a3b8" />
@@ -526,7 +526,7 @@ function NetworkAnimation({
                 y1={from.y}
                 x2={to.x}
                 y2={to.y}
-                stroke="#8CD955"
+                stroke="#E86A24"
                 strokeOpacity={0.08}
                 strokeWidth={1}
               />
@@ -561,11 +561,11 @@ function NetworkAnimation({
                 y1={from.y}
                 x2={to.x}
                 y2={to.y}
-                stroke="#8CD955"
+                stroke="#E86A24"
                 strokeOpacity={0.25}
                 strokeWidth={1.2}
               />
-              <circle r={6} fill="#8CD955" opacity={0.95}>
+              <circle r={6} fill="#E86A24" opacity={0.95}>
                 <animateMotion dur="1.4s" begin="0s" fill="freeze" repeatCount="1">
                   <mpath href={`#mesh-path-${m.key}`} />
                 </animateMotion>
@@ -593,7 +593,7 @@ function NetworkAnimation({
           return (
             <g key={`mesh-chip-${chipIdx}-${p.id}`} filter="url(#chipShadow)">
               {active && (
-                <circle cx={p.x} cy={p.y} r={26} fill="#8CD955" opacity={0.18}>
+                <circle cx={p.x} cy={p.y} r={26} fill="#E86A24" opacity={0.18}>
                   <animate
                     attributeName="r"
                     values="22;30;22"
@@ -645,8 +645,8 @@ function NetworkAnimation({
 
       <div className="absolute top-2 right-3 text-[10px] uppercase tracking-wider font-semibold">
         {active ? (
-          <span className="inline-flex items-center gap-1 text-[#8CD955]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#8CD955] animate-pulse" />
+          <span className="inline-flex items-center gap-1 text-[#E86A24]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#E86A24] animate-pulse" />
             Maturando
           </span>
         ) : (
@@ -669,7 +669,7 @@ function NetworkAnimation({
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 shrink-0 text-[#8CD955]" />
+                <Play className="h-4 w-4 shrink-0 text-[#E86A24]" />
                 Retomar
               </>
             )}
@@ -831,7 +831,7 @@ function CampaignRow({
                             <span
                               className={
                                 label === 'agora'
-                                  ? 'text-[#8CD955]'
+                                  ? 'text-[#E86A24]'
                                   : 'text-slate-400 dark:text-[#666]'
                               }
                             >

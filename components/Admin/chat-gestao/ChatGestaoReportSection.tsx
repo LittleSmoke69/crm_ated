@@ -216,7 +216,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
     <div className="max-w-6xl mx-auto space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <BarChart3 className="w-8 h-8 text-[#8CD955]" />
+          <BarChart3 className="w-8 h-8 text-[#E86A24]" />
           <div>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Relatório operacional</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -244,7 +244,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
             type="button"
             onClick={() => fetchOps()}
             disabled={opsLoading}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#8CD955] text-white disabled:opacity-60"
+            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#E86A24] text-white disabled:opacity-60"
           >
             {opsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Atualizar
@@ -358,7 +358,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
         <ul className="list-disc pl-5 space-y-1">
           <li>
             <strong>Gerente:</strong>{' '}
-            <Link href="/gerente/atendimento-chat" className="text-[#8CD955] underline">
+            <Link href="/gerente/atendimento-chat" className="text-[#E86A24] underline">
               Instâncias de atendimento (Evolution)
             </Link>{' '}
             — criar instância e atribuir consultor ao vínculo.
@@ -366,7 +366,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
           {isAdminFull && (
             <li>
               <strong>Admin / super admin:</strong>{' '}
-              <Link href="/admin/chat-atendimento-instancias" className="text-[#8CD955] underline">
+              <Link href="/admin/chat-atendimento-instancias" className="text-[#E86A24] underline">
                 Gerir instâncias em nome dos gerentes
               </Link>{' '}
               (escolha o gerente responsável ao criar).
@@ -383,7 +383,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
             className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#333] text-left"
           >
             <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100">
-              <Users className="w-5 h-5 text-[#8CD955]" />
+              <Users className="w-5 h-5 text-[#E86A24]" />
               Equipe de suporte — acessos e atendimentos
             </span>
             {supOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
@@ -409,7 +409,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                   type="button"
                   onClick={() => fetchSupport()}
                   disabled={supLoading}
-                  className="px-3 py-1.5 text-sm rounded-lg bg-[#8CD955] text-white disabled:opacity-60 flex items-center gap-2"
+                  className="px-3 py-1.5 text-sm rounded-lg bg-[#E86A24] text-white disabled:opacity-60 flex items-center gap-2"
                 >
                   {supLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                   Atualizar
@@ -530,7 +530,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
             className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#333] text-left"
           >
             <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100">
-              <Headphones className="w-5 h-5 text-[#8CD955]" />
+              <Headphones className="w-5 h-5 text-[#E86A24]" />
               Resolução por atendente (WhatsApp Oficial)
             </span>
             {attOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
@@ -555,7 +555,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                   type="button"
                   onClick={() => fetchAttendance()}
                   disabled={attLoading}
-                  className="px-3 py-1.5 text-sm rounded-lg bg-[#8CD955] text-white disabled:opacity-60"
+                  className="px-3 py-1.5 text-sm rounded-lg bg-[#E86A24] text-white disabled:opacity-60"
                 >
                   {attLoading ? '...' : 'Carregar'}
                 </button>

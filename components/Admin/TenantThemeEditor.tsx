@@ -12,7 +12,7 @@ import { Palette, RotateCcw } from 'lucide-react';
 
 /** Presets rápidos — marcas comuns + neutros (barra de paleta). */
 const PRESET_PALETTE = [
-  '#8CD955',
+  '#E86A24',
   '#22c55e',
   '#10b981',
   '#14b8a6',
@@ -66,9 +66,9 @@ function ColorPaletteBar(props: {
                 type="button"
                 title={hex}
                 aria-label={`Cor ${hex}`}
-                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 shadow-sm transition hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#8CD955] dark:focus:ring-offset-gray-900 ${
+                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 shadow-sm transition hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#E86A24] dark:focus:ring-offset-gray-900 ${
                   active
-                    ? 'border-white dark:border-white ring-2 ring-[#8CD955]/70 scale-105'
+                    ? 'border-white dark:border-white ring-2 ring-[#E86A24]/70 scale-105'
                     : 'border-black/10 dark:border-white/10'
                 }`}
                 style={{ backgroundColor: hex }}
@@ -352,12 +352,12 @@ export function TenantThemeEditor({
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2">
-        <Palette className="w-5 h-5 text-[#8CD955] shrink-0 mt-0.5" />
+        <Palette className="w-5 h-5 text-[#E86A24] shrink-0 mt-0.5" />
         <div>
           <p className="text-sm font-medium text-gray-800 dark:text-gray-100">Tema do white label</p>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Use a barra de cores para escolher rápido ou &quot;Personalizar&quot; para qualquer tom. Cada bloco mostra um
-            preview do efeito no layout. Campo vazio restaura o padrão (marca + tabela ZapLoto).
+            preview do efeito no layout. Campo vazio restaura o padrão (marca + tabela crm-atendimento).
           </p>
         </div>
       </div>
@@ -373,7 +373,7 @@ export function TenantThemeEditor({
               onClick={() => setPreviewMode('light')}
               className={`px-3 py-1 text-xs font-medium rounded-md transition ${
                 previewMode === 'light'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
               }`}
             >
@@ -384,7 +384,7 @@ export function TenantThemeEditor({
               onClick={() => setPreviewMode('dark')}
               className={`px-3 py-1 text-xs font-medium rounded-md transition ${
                 previewMode === 'dark'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
               }`}
             >

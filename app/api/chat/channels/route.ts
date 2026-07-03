@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 type EvolutionChannelRow = {
   id: string;
@@ -207,9 +208,10 @@ export async function GET(req: NextRequest) {
       .single();
 
     const userStatus = (profile as { status?: string } | null)?.status || 'user';
+    const evolutionEnabled = isEvolutionStackEnabled();
 
     const [evolutionInstances, waOfficialConfigs] = await Promise.all([
-      buildEvolutionChannels(userId, userStatus),
+      evolutionEnabled ? buildEvolutionChannels(userId, userStatus) : Promise.resolve([] as EvolutionChannelRow[]),
       buildWhatsAppOfficialChannels(userId, userStatus),
     ]);
 

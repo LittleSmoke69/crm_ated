@@ -104,7 +104,7 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
     <div className="max-w-6xl mx-auto space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Send className="w-8 h-8 text-[#8CD955]" />
+          <Send className="w-8 h-8 text-[#E86A24]" />
           <div>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Disparo em Massa — Chat</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -142,7 +142,7 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
             type="button"
             onClick={() => fetchReport()}
             disabled={loading}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#8CD955] text-white disabled:opacity-60"
+            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#E86A24] text-white disabled:opacity-60"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Atualizar

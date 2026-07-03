@@ -51,7 +51,7 @@ export function MassSendJobCountdownCell({ job }: { job: JobSlice }) {
         )}
       </div>
       {active && showCountdown && remainingSec != null && (
-        <div className="text-[#6AB83D] dark:text-[#8CD955] font-semibold tabular-nums mt-0.5">
+        <div className="text-[#C9531A] dark:text-[#E86A24] font-semibold tabular-nums mt-0.5">
           {remainingSec > 0 ? `Próximo ~${remainingSec}s` : 'Disparando…'}
         </div>
       )}

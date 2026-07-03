@@ -231,15 +231,15 @@ export default function EditVslPagePage() {
     );
   }
 
-  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955] outline-none transition scroll-mt-4';
+  const inputClass = 'w-full border border-gray-300 rounded-xl px-4 py-2.5 text-gray-800 placeholder:text-gray-500 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24] outline-none transition scroll-mt-4';
   const labelClass = 'block text-sm font-medium text-gray-700 mb-1.5';
   const hintClass = 'text-xs text-gray-500 mt-1.5';
 
   const Section = ({ icon: Icon, title, subtitle, children }: { icon: React.ElementType; title: string; subtitle?: string; children: React.ReactNode }) => (
     <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100 bg-gray-50/60">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#8CD955]/15">
-          <Icon className="w-5 h-5 text-[#8CD955]" />
+        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#E86A24]/15">
+          <Icon className="w-5 h-5 text-[#E86A24]" />
         </div>
         <div>
           <h2 className="font-semibold text-gray-800">{title}</h2>
@@ -274,7 +274,7 @@ export default function EditVslPagePage() {
               href={`/vsl/${form.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#8CD955] bg-[#8CD955]/10 rounded-xl hover:bg-[#8CD955]/20 transition"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#E86A24] bg-[#E86A24]/10 rounded-xl hover:bg-[#E86A24]/20 transition"
             >
               <ExternalLink className="w-4 h-4" />
               Abrir VSL em nova aba
@@ -287,14 +287,14 @@ export default function EditVslPagePage() {
           <button
             type="button"
             onClick={() => setActiveTab('conteudo')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition ${activeTab === 'conteudo' ? 'bg-white border border-b-0 border-gray-200 text-[#8CD955]' : 'text-gray-600 hover:text-gray-800'}`}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition ${activeTab === 'conteudo' ? 'bg-white border border-b-0 border-gray-200 text-[#E86A24]' : 'text-gray-600 hover:text-gray-800'}`}
           >
             Conteúdo
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('design')}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition flex items-center gap-2 ${activeTab === 'design' ? 'bg-white border border-b-0 border-gray-200 text-[#8CD955]' : 'text-gray-600 hover:text-gray-800'}`}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition flex items-center gap-2 ${activeTab === 'design' ? 'bg-white border border-b-0 border-gray-200 text-[#E86A24]' : 'text-gray-600 hover:text-gray-800'}`}
           >
             <LayoutGrid className="w-4 h-4" />
             Design (Builder)
@@ -309,7 +309,7 @@ export default function EditVslPagePage() {
                 type="button"
                 onClick={() => saveContent(buildPayload())}
                 disabled={saving || !form.title.trim() || !form.redirect_slug.trim()}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Salvar alterações
@@ -446,7 +446,7 @@ export default function EditVslPagePage() {
                   <button
                     type="button"
                     onClick={addTestimonial}
-                    className="flex items-center gap-1.5 text-sm font-medium text-[#8CD955] hover:text-[#7BC84A] transition"
+                    className="flex items-center gap-1.5 text-sm font-medium text-[#E86A24] hover:text-[#D95E1B] transition"
                   >
                     <Plus className="w-4 h-4" /> Adicionar
                   </button>
@@ -460,14 +460,14 @@ export default function EditVslPagePage() {
                           <button
                             type="button"
                             onClick={() => setTestimonialType(i, 'text')}
-                            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition ${t.type === 'text' ? 'bg-[#8CD955] text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition ${t.type === 'text' ? 'bg-[#E86A24] text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
                           >
                             <FileText className="w-3.5 h-3.5" /> Texto
                           </button>
                           <button
                             type="button"
                             onClick={() => setTestimonialType(i, 'video')}
-                            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition ${t.type === 'video' ? 'bg-[#8CD955] text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
+                            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition ${t.type === 'video' ? 'bg-[#E86A24] text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
                           >
                             <Video className="w-3.5 h-3.5" /> Vídeo
                           </button>
@@ -510,7 +510,7 @@ export default function EditVslPagePage() {
                               if (file) uploadTestimonialVideo(i, file);
                               e.target.value = '';
                             }}
-                            className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#8CD955]/20 file:text-[#8CD955] file:font-medium hover:file:bg-[#8CD955]/30"
+                            className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#E86A24]/20 file:text-[#E86A24] file:font-medium hover:file:bg-[#E86A24]/30"
                           />
                           {uploadingVideoIdx === i && <p className="text-xs text-gray-500 mt-1 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Enviando...</p>}
                         </div>
@@ -537,7 +537,7 @@ export default function EditVslPagePage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#8CD955] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
+                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#E86A24] text-white font-medium rounded-xl hover:opacity-90 disabled:opacity-50 transition shadow-sm"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Salvar alterações
@@ -558,8 +558,8 @@ export default function EditVslPagePage() {
             <div className="xl:sticky xl:top-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50/60">
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-[#8CD955]/15">
-                    <Smartphone className="w-4 h-4 text-[#8CD955]" />
+                  <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-[#E86A24]/15">
+                    <Smartphone className="w-4 h-4 text-[#E86A24]" />
                   </div>
                   <div>
                     <h2 className="font-semibold text-gray-800">Preview da VSL</h2>
@@ -570,7 +570,7 @@ export default function EditVslPagePage() {
                   <button
                     type="button"
                     onClick={refreshPreview}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-[#8CD955] hover:bg-[#8CD955]/10 rounded-lg transition"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-[#E86A24] hover:bg-[#E86A24]/10 rounded-lg transition"
                     title="Atualizar preview"
                   >
                     <RefreshCw className="w-4 h-4" />

@@ -43,7 +43,7 @@ const SendMessageChoiceModal: React.FC<SendMessageChoiceModalProps> = ({
         <div className="p-4 sm:p-6 space-y-4">
           <button
             onClick={onSendNow}
-            className="w-full p-4 py-3.5 sm:py-4 bg-[#8CD955] hover:bg-[#7BC84A] active:scale-[0.99] text-white font-bold rounded-xl transition-all shadow-lg shadow-[#8CD955]/20 flex items-center justify-center gap-3"
+            className="w-full p-4 py-3.5 sm:py-4 bg-[#E86A24] hover:bg-[#D95E1B] active:scale-[0.99] text-white font-bold rounded-xl transition-all shadow-lg shadow-[#E86A24]/20 flex items-center justify-center gap-3"
           >
             <Send className="w-5 h-5" />
             Enviar agora
@@ -61,7 +61,7 @@ const SendMessageChoiceModal: React.FC<SendMessageChoiceModalProps> = ({
 
           <button
             onClick={onSchedule}
-            className="w-full p-4 py-3.5 sm:py-4 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] active:scale-[0.99] border-2 border-[#8CD955] text-[#8CD955] font-bold rounded-xl transition-all flex items-center justify-center gap-3"
+            className="w-full p-4 py-3.5 sm:py-4 bg-white dark:bg-[#333] hover:bg-gray-50 dark:hover:bg-[#404040] active:scale-[0.99] border-2 border-[#E86A24] text-[#E86A24] font-bold rounded-xl transition-all flex items-center justify-center gap-3"
           >
             <Calendar className="w-5 h-5" />
             Agendar disparo

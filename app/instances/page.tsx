@@ -1481,11 +1481,11 @@ const InstancesPage = () => {
         <div className="space-y-6">
           {/* Banner: grupos sendo processados em segundo plano */}
           {groupsProcessingForInstance && (
-            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[#8CD955]/15 dark:bg-[#8CD955]/20 border border-[#8CD955]/40 dark:border-[#8CD955]/30 text-gray-800 dark:text-gray-100">
-              <Loader2 className="w-5 h-5 flex-shrink-0 animate-spin text-[#8CD955]" />
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[#E86A24]/15 dark:bg-[#E86A24]/20 border border-[#E86A24]/40 dark:border-[#E86A24]/30 text-gray-800 dark:text-gray-100">
+              <Loader2 className="w-5 h-5 flex-shrink-0 animate-spin text-[#E86A24]" />
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm sm:text-base">
-                  Grupos da instância <span className="font-semibold text-[#5a8a2a] dark:text-[#8CD955]">{groupsProcessingForInstance}</span> estão sendo processados em segundo plano.
+                  Grupos da instância <span className="font-semibold text-[#5a8a2a] dark:text-[#E86A24]">{groupsProcessingForInstance}</span> estão sendo processados em segundo plano.
                 </p>
                 <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-0.5">
                   Você será avisado quando a extração e sincronização terminarem. Pode continuar usando a página.
@@ -1521,7 +1521,7 @@ const InstancesPage = () => {
                     setIsMaster(true);
                     setIsCreateModalOpen(true);
                   }}
-                  className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
+                  className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition shadow-md"
                 >
                   <Plus className="w-5 h-5" />
                   Criar Instância
@@ -1534,7 +1534,7 @@ const InstancesPage = () => {
                 {/* Loading State */}
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
-                    <RefreshCw className="w-8 h-8 text-[#8CD955] animate-spin mx-auto mb-4" />
+                    <RefreshCw className="w-8 h-8 text-[#E86A24] animate-spin mx-auto mb-4" />
                     <p className="text-gray-600 dark:text-[#aaa] font-medium">Carregando instâncias...</p>
                   </div>
                 </div>
@@ -1547,7 +1547,7 @@ const InstancesPage = () => {
                     onClick={() => setInstanceFilter('todas')}
                     className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                       instanceFilter === 'todas'
-                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white'
+                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white'
                         : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-[#ccc] hover:bg-gray-200 dark:hover:bg-[#404040]'
                     }`}
                   >
@@ -1557,8 +1557,8 @@ const InstancesPage = () => {
                     onClick={() => setInstanceFilter('connected')}
                     className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                       instanceFilter === 'connected'
-                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white'
-                        : 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00] hover:bg-[#8CD95525] dark:hover:bg-[#00ff0025]'
+                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white'
+                        : 'bg-[#E86A2415] dark:bg-[#00ff0015] text-[#C9531A] dark:text-[#00ff00] hover:bg-[#E86A2425] dark:hover:bg-[#00ff0025]'
                     }`}
                   >
                     Conectadas ({instances.filter((i) => instanceListUiStatusIsConnected(i.status)).length})
@@ -1582,7 +1582,7 @@ const InstancesPage = () => {
                     value={instanceSearchQuery}
                     onChange={(e) => setInstanceSearchQuery(e.target.value)}
                     placeholder="Buscar por nome ou telefone…"
-                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white text-sm placeholder:text-gray-400 dark:placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-white text-sm placeholder:text-gray-400 dark:placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24]"
                     aria-label="Buscar instâncias por nome ou telefone"
                   />
                   {instanceSearchQuery.trim() !== '' && (
@@ -1683,7 +1683,7 @@ const InstancesPage = () => {
                         const canManageShare = !sharedMe && (isOwner || isAdmin);
 
                         return (
-                          <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition-all duration-200 bg-white dark:bg-[#333] flex flex-col h-full shadow-sm">
+                          <div key={inst.id || inst.instance_name} className="p-5 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#E86A2440] dark:hover:border-[#00ff0040] hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] transition-all duration-200 bg-white dark:bg-[#333] flex flex-col h-full shadow-sm">
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex gap-2 flex-1 min-w-0">
                                 {canSelectInstanceForMaturationType(inst) && (
@@ -1743,7 +1743,7 @@ const InstancesPage = () => {
                                   <span
                                     className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${
                                       connected
-                                        ? 'bg-[#8CD95515] dark:bg-[#00ff0015] text-[#6AB83D] dark:text-[#00ff00]'
+                                        ? 'bg-[#E86A2415] dark:bg-[#00ff0015] text-[#C9531A] dark:text-[#00ff00]'
                                         : 'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#aaa]'
                                     }`}
                                   >
@@ -1854,7 +1854,7 @@ const InstancesPage = () => {
                               {!sharedMe && (
                                 <div className="flex items-center gap-2 shrink-0">
                                   {maturationTypeSavingKey === instanceStableKey(inst) ? (
-                                    <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" aria-hidden />
+                                    <Loader2 className="w-4 h-4 animate-spin text-[#E86A24]" aria-hidden />
                                   ) : null}
                                   <select
                                     value={inst.maturation_type === 'virgem' ? 'virgem' : 'maturado'}
@@ -1865,7 +1865,7 @@ const InstancesPage = () => {
                                       const v = e.target.value as 'virgem' | 'maturado';
                                       void handleMaturationTypeChange(inst, v);
                                     }}
-                                    className="text-xs font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#2a2a2a] text-gray-800 dark:text-gray-100 px-2 py-1.5 min-w-[11rem] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/40 disabled:opacity-50"
+                                    className="text-xs font-medium rounded-lg border border-gray-200 dark:border-[#555] bg-white dark:bg-[#2a2a2a] text-gray-800 dark:text-gray-100 px-2 py-1.5 min-w-[11rem] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/40 disabled:opacity-50"
                                     aria-label={`Tipo da instância ${inst.instance_name}`}
                                   >
                                     <option value="virgem">Virgem (maturação / rede)</option>
@@ -1896,7 +1896,7 @@ const InstancesPage = () => {
                               <button
                                 onClick={() => handleCheckStatus(inst)}
                                 disabled={checkingInstance === inst.instance_name}
-                                className="flex-1 h-10 px-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm hover:shadow-md active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                                className="flex-1 h-10 px-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm hover:shadow-md active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
                               >
                                 <RefreshCw 
                                   className={`w-4 h-4 ${checkingInstance === inst.instance_name ? 'animate-spin' : ''}`} 
@@ -1984,7 +1984,7 @@ const InstancesPage = () => {
                     setIsMaster(true);
                     setIsCreateModalOpen(true);
                   }}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition shadow-md"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition shadow-md"
                 >
                   <Plus className="w-5 h-5" />
                   Criar Instância
@@ -2031,9 +2031,9 @@ const InstancesPage = () => {
                 {/* Tipo de API (compacto) */}
                 <div className="min-w-0">
                   <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc] mb-2">Tipo de API*</label>
-                  <div className="border-2 border-gray-200 dark:border-[#555] rounded-lg p-3 bg-[#8CD95515] dark:bg-[#00ff0015] cursor-pointer hover:border-[#8CD955] dark:hover:border-[#00ff00] transition">
+                  <div className="border-2 border-gray-200 dark:border-[#555] rounded-lg p-3 bg-[#E86A2415] dark:bg-[#00ff0015] cursor-pointer hover:border-[#E86A24] dark:hover:border-[#00ff00] transition">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 shrink-0 bg-[#8CD955] dark:bg-[#00ff00] rounded-lg flex items-center justify-center">
+                      <div className="w-10 h-10 shrink-0 bg-[#E86A24] dark:bg-[#00ff00] rounded-lg flex items-center justify-center">
                         <MessageSquare className="w-5 h-5 text-white" />
                       </div>
                       <div className="min-w-0">
@@ -2054,7 +2054,7 @@ const InstancesPage = () => {
                     }}
                     placeholder="Ex: teste1, adicione1, consultorjão, teste_teste"
                     disabled={loading}
-                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-[#888] disabled:opacity-50"
+                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-[#888] disabled:opacity-50"
                   />
                   <p className="text-xs text-gray-500 dark:text-[#888] mt-1">Apenas letras, números e underscore (_)</p>
                 </div>
@@ -2073,11 +2073,11 @@ const InstancesPage = () => {
                         }
                       }}
                       className={`border-2 rounded-lg p-3 transition flex items-center gap-3 min-h-[64px] ${
-                        isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015] cursor-pointer' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer'
+                        isMaster ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A2415] dark:bg-[#00ff0015] cursor-pointer' : 'border-gray-200 dark:border-[#555] hover:border-[#E86A2440] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333] cursor-pointer'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                        isMaster ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A24] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {isMaster && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
@@ -2099,11 +2099,11 @@ const InstancesPage = () => {
                         }
                       }}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                        !isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                        !isMaster ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A2415] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#E86A2440] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        !isMaster ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                        !isMaster ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A24] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {!isMaster && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
@@ -2127,11 +2127,11 @@ const InstancesPage = () => {
                     <div
                       onClick={() => !loading && setMaturationType('maturado')}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                        maturationType === 'maturado' ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A2415] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#E86A2440] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        maturationType === 'maturado' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                        maturationType === 'maturado' ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A24] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {maturationType === 'maturado' && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
@@ -2145,11 +2145,11 @@ const InstancesPage = () => {
                     <div
                       onClick={() => !loading && setMaturationType('virgem')}
                       className={`border-2 rounded-lg p-3 cursor-pointer transition flex items-center gap-3 min-h-[64px] ${
-                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD95515] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#8CD95540] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
+                        maturationType === 'virgem' ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A2415] dark:bg-[#00ff0015]' : 'border-gray-200 dark:border-[#555] hover:border-[#E86A2440] dark:hover:border-[#00ff0040] hover:bg-gray-50 dark:hover:bg-[#333]'
                       } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
-                        maturationType === 'virgem' ? 'border-[#8CD955] dark:border-[#00ff00] bg-[#8CD955] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
+                        maturationType === 'virgem' ? 'border-[#E86A24] dark:border-[#00ff00] bg-[#E86A24] dark:bg-[#00ff00]' : 'border-gray-300 dark:border-[#555]'
                       }`}>
                         {maturationType === 'virgem' && <div className="w-3 h-3 rounded-full bg-white" />}
                       </div>
@@ -2168,7 +2168,7 @@ const InstancesPage = () => {
               <button
                 onClick={handleCreateInstance}
                 disabled={loading || !instanceName}
-                className="w-full py-3 bg-[#8CD955] dark:bg-[#00ff00] hover:bg-[#7BC84A] dark:hover:bg-[#00e600] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full py-3 bg-[#E86A24] dark:bg-[#00ff00] hover:bg-[#D95E1B] dark:hover:bg-[#00e600] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {loading ? (
                   <>
@@ -2207,7 +2207,7 @@ const InstancesPage = () => {
             {extractGroupsModalExtracting ? (
               <>
                 <div className="text-center mb-6">
-                  <Loader2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4 animate-spin" />
+                  <Loader2 className="w-16 h-16 text-[#E86A24] dark:text-[#00ff00] mx-auto mb-4 animate-spin" />
                   <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Extraindo grupos em segundo plano</h2>
                   <p className="text-gray-600 dark:text-[#ccc] mb-4">
                     Os grupos estão sendo puxados e salvos. Você pode continuar na página da instância; será avisado quando terminar.
@@ -2230,7 +2230,7 @@ const InstancesPage = () => {
             ) : (
               <>
                 <div className="text-center mb-6">
-                  <CheckCircle2 className="w-16 h-16 text-[#8CD955] dark:text-[#00ff00] mx-auto mb-4" />
+                  <CheckCircle2 className="w-16 h-16 text-[#E86A24] dark:text-[#00ff00] mx-auto mb-4" />
                   <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">Instância Conectada!</h2>
                   <p className="text-gray-600 dark:text-[#ccc]">Deseja extrair e salvar todos os grupos desta instância?</p>
                 </div>
@@ -2248,7 +2248,7 @@ const InstancesPage = () => {
                   </button>
                   <button
                     onClick={() => newlyConnectedInstance && handleExtractAndSaveAllInModal(newlyConnectedInstance)}
-                    className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition flex items-center justify-center gap-2"
+                    className="flex-1 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition flex items-center justify-center gap-2"
                   >
                     Extrair e salvar todos
                   </button>
@@ -2431,7 +2431,7 @@ const InstancesPage = () => {
           <div className="relative bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col z-10 border border-gray-200 dark:border-[#404040]">
             <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-[#404040]">
               <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
-                <Info className="w-5 h-5 text-[#8CD955]" />
+                <Info className="w-5 h-5 text-[#E86A24]" />
                 Resumo das instâncias
               </h2>
               <button
@@ -2444,7 +2444,7 @@ const InstancesPage = () => {
             <div className="flex-1 overflow-auto p-4">
               {summaryLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : summaryData.length === 0 ? (
                 <p className="text-gray-500 dark:text-[#aaa] text-center py-8">Nenhuma instância ou dados não disponíveis.</p>
@@ -2466,7 +2466,7 @@ const InstancesPage = () => {
                           <td className="py-2 px-2 text-gray-600 dark:text-[#aaa]">{row.phone || '-'}</td>
                           <td className="py-2 px-2">
                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                              row.status === 'Conectada' ? 'bg-[#8CD955]/20 text-[#6AB83D] dark:text-[#00ff00]' :
+                              row.status === 'Conectada' ? 'bg-[#E86A24]/20 text-[#C9531A] dark:text-[#00ff00]' :
                               row.status === 'Conectando' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' :
                               'bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-[#aaa]'
                             }`}>
@@ -2509,7 +2509,7 @@ const InstancesPage = () => {
               </p>
               {shareLoading ? (
                 <div className="flex justify-center py-6">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                 </div>
               ) : (
                 <>
@@ -2532,7 +2532,7 @@ const InstancesPage = () => {
                         type="button"
                         disabled={!sharePickUserId || shareLoading}
                         onClick={() => void addShareUser()}
-                        className="px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white rounded-lg font-medium text-sm"
+                        className="px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 text-white rounded-lg font-medium text-sm"
                       >
                         Adicionar
                       </button>

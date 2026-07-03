@@ -10,6 +10,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { normalizeConsultorUserIdsColumn } from '@/lib/utils/atendimento-consultores';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 type AssignmentRow = {
   id: string;
@@ -51,6 +52,18 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado.', 403);
     }
 
+    const emptyPayload = (from: string, to: string) => ({
+      period: { from, to },
+      byBanca: [],
+      summary: {
+        assignments: 0,
+        instances: 0,
+        conversationsTotal: 0,
+        conversationsResolved: 0,
+        messagesInPeriod: 0,
+      },
+    });
+
     const { searchParams } = new URL(req.url);
     let fromDate = searchParams.get('from');
     let toDate = searchParams.get('to');
@@ -64,6 +77,10 @@ export async function GET(req: NextRequest) {
 
     const fromIso = `${fromDate}T00:00:00.000Z`;
     const toIso = `${toDate}T23:59:59.999Z`;
+
+    if (!isEvolutionStackEnabled()) {
+      return successResponse(emptyPayload(fromDate, toDate));
+    }
 
     let assignQuery = supabaseServiceRole
       .from('atendimento_chat_assignments')
@@ -89,17 +106,7 @@ export async function GET(req: NextRequest) {
 
       const gids = (gerentesTenant || []).map((g: { id: string }) => g.id);
       if (gids.length === 0) {
-        return successResponse({
-          period: { from: fromDate, to: toDate },
-          byBanca: [],
-          summary: {
-            assignments: 0,
-            instances: 0,
-            conversationsTotal: 0,
-            conversationsResolved: 0,
-            messagesInPeriod: 0,
-          },
-        });
+        return successResponse(emptyPayload(fromDate, toDate));
       }
       assignQuery = assignQuery.in('gerente_user_id', gids);
     }

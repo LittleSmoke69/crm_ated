@@ -75,7 +75,7 @@ function authHeaders(userId: string | null): Record<string, string> {
 
 function barColorFor(pct: number): string {
   if (pct > 100) return 'bg-amber-500';
-  if (pct >= 80) return 'bg-[#8CD955]';
+  if (pct >= 80) return 'bg-[#E86A24]';
   return 'bg-emerald-500';
 }
 
@@ -312,7 +312,7 @@ export default function InvestmentRoundsReadonly({
             {showAggregate ? 'Total da equipe' : 'Progresso da meta de gasto'}
             {showAggregate && filterConsultorId ? ' (consultor selecionado)' : ''}
           </span>
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8CD955]" /> : null}
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#E86A24]" /> : null}
         </div>
         <div className="relative h-8 w-full rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
           <div

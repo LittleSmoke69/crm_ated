@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
-import { evolutionBalancer } from '@/lib/services/evolution-balancer';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 export const runtime = 'nodejs';
 
@@ -25,6 +25,10 @@ export async function GET(req: NextRequest) {
     const canAccess = profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'dono_banca' || profile?.status === 'auditoria';
     if (!canAccess) {
       return errorResponse('Acesso negado. Apenas administradores ou auditoria.', 403);
+    }
+
+    if (!isEvolutionStackEnabled()) {
+      return successResponse([], 'Stack Evolution desabilitado neste ambiente');
     }
 
     // Busca todas as instâncias com informações da API Evolution

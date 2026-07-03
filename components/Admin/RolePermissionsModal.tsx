@@ -127,7 +127,7 @@ export function RolePermissionsModal({
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div className="flex items-center gap-2">
-            <ListTree className="w-6 h-6 text-[#8CD955]" />
+            <ListTree className="w-6 h-6 text-[#E86A24]" />
             <h2 className="text-xl font-semibold text-gray-900">
               Permissões da Sidebar — {roleLabel}
             </h2>
@@ -149,7 +149,7 @@ export function RolePermissionsModal({
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
             </div>
           ) : (
             <div className="space-y-1">
@@ -213,7 +213,7 @@ export function RolePermissionsModal({
                       </div>
 
                       {hasChildren && isExpanded && (
-                        <div className="pl-8 pr-3 pb-2 space-y-1 border-l-2 border-[#8CD955]/30 ml-4">
+                        <div className="pl-8 pr-3 pb-2 space-y-1 border-l-2 border-[#E86A24]/30 ml-4">
                           {children
                             .sort((a, b) => a.sort_order - b.sort_order)
                             .map((child) => (
@@ -262,7 +262,7 @@ export function RolePermissionsModal({
           <button
             onClick={handleSave}
             disabled={saving || loading}
-            className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7bc84d] disabled:opacity-50"
           >
             {saving ? (
               <Loader2 className="w-4 h-4 animate-spin" />

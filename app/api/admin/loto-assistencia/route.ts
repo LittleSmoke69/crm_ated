@@ -14,8 +14,8 @@ const KEY_MESSAGE_DISCONNECTED = 'loto_assistencia_message_instance_disconnected
 const KEY_MESSAGE_VERIFICATION_REPORT = 'loto_assistencia_message_verification_report';
 const KEY_NOTIFY_USER_ID = 'loto_assistencia_notify_user_id';
 const KEY_MESSAGE_TRANSFER_EXPIRED = 'loto_assistencia_message_transfer_expired';
-const DEFAULT_MESSAGE = 'Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe.';
-const DEFAULT_MESSAGE_DISCONNECTED = '⚠️ *Zaploto*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar.';
+const DEFAULT_MESSAGE = 'Seu código de recuperação de senha crm-atendimento é: *{{Código}}*. Válido por 15 minutos. Não compartilhe.';
+const DEFAULT_MESSAGE_DISCONNECTED = '⚠️ *crm-atendimento*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar.';
 const DEFAULT_MESSAGE_VERIFICATION_REPORT = '📋 *Relatório de instâncias Zaploto*\n\n{{Relatório}}\n\nVerifique o painel para mais detalhes.';
 const DEFAULT_MESSAGE_TRANSFER_EXPIRED =
   '⏱️ *Zaploto – Prazo de transferência encerrado*\nBanca: {{Banca}}\nData da transferência: {{DataTransferencia}}\nOrigem: {{ConsultorOrigem}}\nDestino: {{ConsultorDestino}}\nLeads: {{QuantidadeLeads}}\n\nAcesse Admin → Transferência de Leads para resolver (vincular ou repassar).';

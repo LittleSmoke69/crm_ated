@@ -57,6 +57,8 @@ const Dashboard = () => {
           const result = await response.json();
           if (result.success && result.data?.status === 'consultor') {
             router.replace('/consultor');
+          } else if (result.success && result.data?.status === 'suporte') {
+            router.replace('/crm/kanban');
           }
         }
       } catch (error) {
@@ -157,7 +159,7 @@ const Dashboard = () => {
           <div
             key={toast.id}
             className={`flex items-center gap-3 min-w-[320px] px-6 py-4 rounded-lg shadow-lg text-white transform transition-all duration-300 ease-out ${
-              toast.type === 'success' ? 'bg-[#8CD955]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
+              toast.type === 'success' ? 'bg-[#E86A24]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
             }`}
             style={{ animation: 'slideIn 0.3s ease-out' }}
           >
@@ -316,28 +318,28 @@ const Dashboard = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
             <Link
               href="/instances"
-              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#E86A24] dark:hover:border-[#00ff00] hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">📱</div>
               <div className="font-medium text-gray-800 dark:text-white">Gerenciar Instâncias</div>
             </Link>
             <Link
               href="/add-to-group"
-              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#E86A24] dark:hover:border-[#00ff00] hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">🚀</div>
               <div className="font-medium text-gray-800 dark:text-white">Adicionar ao Grupo</div>
             </Link>
             <Link
               href="/contacts"
-              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#E86A24] dark:hover:border-[#00ff00] hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">👥</div>
               <div className="font-medium text-gray-800 dark:text-white">Ver Contatos</div>
             </Link>
             <Link
               href="/import-contacts"
-              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#8CD955] dark:hover:border-[#00ff00] hover:bg-[#8CD95515] dark:hover:bg-[#00ff0015] transition text-center"
+              className="p-4 border-2 border-gray-200 dark:border-[#404040] rounded-lg hover:border-[#E86A24] dark:hover:border-[#00ff00] hover:bg-[#E86A2415] dark:hover:bg-[#00ff0015] transition text-center"
             >
               <div className="text-2xl mb-2">➕</div>
               <div className="font-medium text-gray-800 dark:text-white">Importar Contatos</div>

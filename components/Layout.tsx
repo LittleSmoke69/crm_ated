@@ -6,7 +6,6 @@ import Sidebar from './Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { Menu, X, LogOut } from 'lucide-react';
 import Logo from './Logo';
-import TelefoneModal from './TelefoneModal';
 import BancasModal from './BancasModal';
 import { getInternalAppPathname } from '@/lib/utils/white-label-path';
 
@@ -20,9 +19,8 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   const [sidebarWidth, setSidebarWidth] = useState(80);
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const [isMobile, setIsMobile] = useState(false);
-  const [showTelefoneModal, setShowTelefoneModal] = useState(false);
   const [showBancasModal, setShowBancasModal] = useState(false);
-  const [hasCheckedTelefone, setHasCheckedTelefone] = useState(false);
+  const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userStatus, setUserStatus] = useState<'consultor' | 'gerente' | 'gestor' | 'super_admin' | null>(null);
 
@@ -65,9 +63,9 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     };
   }, [isMobile]);
 
-  // Verifica se usuário tem telefone e bancas (consultor/gerente)
+  // Verifica se usuário precisa escolher bancas (consultor/gerente/gestor)
   useEffect(() => {
-    if (typeof window === 'undefined' || hasCheckedTelefone) return;
+    if (typeof window === 'undefined' || hasCheckedProfile) return;
 
     const checkProfile = async () => {
       const uid =
@@ -76,7 +74,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         localStorage.getItem('profile_id');
 
       if (!uid) {
-        setHasCheckedTelefone(true);
+        setHasCheckedProfile(true);
         return;
       }
 
@@ -89,26 +87,24 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
 
         if (response.ok) {
           const text = await response.text();
-          let result: { success?: boolean; data?: { status?: string; telefone?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
+          let result: { success?: boolean; data?: { status?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
           if (text.trim()) {
             try {
               result = JSON.parse(text);
             } catch {
-              setHasCheckedTelefone(true);
+              setHasCheckedProfile(true);
               return;
             }
           }
           if (result.success && result.data) {
             const d = result.data;
             setUserId(uid);
-            const canSeeBancasModal = !!(d.status && ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status));
+            const canSeeBancasModal = !!(d.status && ['consultor', 'gerente', 'gestor'].includes(d.status));
             if (canSeeBancasModal) {
               setUserStatus(d.status as 'consultor' | 'gerente' | 'gestor' | 'super_admin');
             }
 
-            if (!d.telefone) {
-              setShowTelefoneModal(true);
-            } else if (
+            if (
               canSeeBancasModal &&
               (d.needs_bancas_choice === true || (Array.isArray(d.bancas) && d.bancas.length === 0))
             ) {
@@ -119,12 +115,12 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       } catch (error) {
         console.error('Erro ao verificar perfil:', error);
       } finally {
-        setHasCheckedTelefone(true);
+        setHasCheckedProfile(true);
       }
     };
 
     checkProfile();
-  }, [hasCheckedTelefone]);
+  }, [hasCheckedProfile]);
 
   // Heartbeat para rastrear tempo logado (Zaploto e CRM)
   useEffect(() => {
@@ -172,67 +168,6 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       clearInterval(heartbeatInterval);
     };
   }, [pathname]);
-
-  const handleSaveTelefone = async (telefone: string) => {
-    const uid =
-      sessionStorage.getItem('user_id') ||
-      sessionStorage.getItem('profile_id') ||
-      localStorage.getItem('profile_id');
-
-    if (!uid) throw new Error('Usuário não autenticado');
-
-    const response = await fetch('/api/user/telefone', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
-      credentials: 'include',
-      body: JSON.stringify({ telefone }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      let result: { error?: string } = {};
-      if (text.trim()) {
-        try {
-          result = JSON.parse(text);
-        } catch {
-          // ignora
-        }
-      }
-      throw new Error(result.error || 'Erro ao salvar telefone');
-    }
-
-    // Logo após salvar telefone, verifica se precisa do modal de bancas (gerente/consultor sem nenhuma banca)
-    try {
-      const profileRes = await fetch('/api/user/profile', {
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
-        credentials: 'include',
-      });
-      if (profileRes.ok) {
-        const profileText = await profileRes.text();
-        let pr: { success?: boolean; data?: { status?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
-        if (profileText.trim()) {
-          try {
-            pr = JSON.parse(profileText);
-          } catch {
-            // ignora
-          }
-        }
-        const d = pr.success ? pr.data : null;
-        const canSeeBancasModal = d && ['consultor', 'gerente', 'gestor', 'super_admin'].includes(d.status || '');
-        const needsBancas =
-          d?.needs_bancas_choice === true || (Array.isArray(d?.bancas) && d.bancas.length === 0);
-        if (canSeeBancasModal && needsBancas) {
-          setUserId(uid);
-          if (d.status) {
-            setUserStatus(d.status as 'consultor' | 'gerente' | 'gestor' | 'super_admin');
-          }
-          setShowBancasModal(true);
-        }
-      }
-    } catch {
-      // Ignora erro na verificação de bancas
-    }
-  };
 
   const handleSaveBancas = async (bancaIds: string[]) => {
     if (!userId) {
@@ -291,8 +226,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
 
   return (
     <div
-      className={`flex flex-col lg:flex-row ${isFullScreen ? 'h-screen overflow-hidden' : 'min-h-screen'}`}
-      style={{ backgroundColor: 'var(--tenant-surface)' }}
+      className={`app-bg-gradient flex flex-col lg:flex-row ${isFullScreen ? 'h-screen overflow-hidden' : 'min-h-screen'}`}
     >
       {/* Header Mobile — usa tokens do white label quando definidos */}
       <header
@@ -339,14 +273,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         )}
       </main>
 
-      {/* Modal de telefone */}
-      <TelefoneModal
-        isOpen={showTelefoneModal}
-        onClose={() => setShowTelefoneModal(false)}
-        onSave={handleSaveTelefone}
-      />
-
-      {/* Modal de bancas (consultor/gerente/gestor) - após telefone; exibido quando precisa escolher bancas */}
+      {/* Modal de bancas (consultor/gerente/gestor) */}
       {showBancasModal && userId && (
         <BancasModal
           isOpen={showBancasModal}

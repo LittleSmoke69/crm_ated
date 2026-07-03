@@ -75,7 +75,7 @@ export default function ConsultantSearchPicker({
       </div>
 
       {selected && (
-        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#8CD955]/15 border border-[#8CD955]/40 text-sm">
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#E86A24]/15 border border-[#E86A24]/40 text-sm">
           <span className="flex items-center gap-2 min-w-0 text-gray-800 dark:text-white">
             <User className="w-4 h-4 shrink-0 text-[#6fb83d]" aria-hidden />
             <span className="truncate font-medium">{labelFor(selected)}</span>
@@ -109,7 +109,7 @@ export default function ConsultantSearchPicker({
             setQuery('');
           }}
           className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-100 dark:border-[#333] transition ${
-            !value ? 'bg-[#8CD955]/20 font-medium text-gray-900 dark:text-white' : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-50 dark:hover:bg-[#2a2a2a]'
+            !value ? 'bg-[#E86A24]/20 font-medium text-gray-900 dark:text-white' : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-50 dark:hover:bg-[#2a2a2a]'
           }`}
         >
           Nenhum (sem usuário vinculado)
@@ -130,7 +130,7 @@ export default function ConsultantSearchPicker({
               onClick={() => onChange(c.id)}
               className={`w-full text-left px-3 py-2 text-sm border-b border-gray-50 dark:border-[#333] last:border-0 transition ${
                 value === c.id
-                  ? 'bg-[#8CD955]/15 font-medium text-gray-900 dark:text-white'
+                  ? 'bg-[#E86A24]/15 font-medium text-gray-900 dark:text-white'
                   : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-50 dark:hover:bg-[#2a2a2a]'
               }`}
             >

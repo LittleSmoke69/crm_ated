@@ -9,7 +9,7 @@ import { Loader2 } from 'lucide-react';
 export default function ChatTagsRedirectPage() {
   const router = useTenantRouter();
   useEffect(() => {
-    router.replace('/admin/chat-gestao?tab=etiquetas');
+    router.replace('/admin/chat-gestao');
   }, [router]);
   return (
     <Layout>

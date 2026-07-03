@@ -206,7 +206,7 @@ const ImportContactsPage = () => {
           <div
             key={toast.id}
             className={`flex items-center gap-3 min-w-[320px] px-6 py-4 rounded-lg shadow-lg text-white ${
-              toast.type === 'success' ? 'bg-[#8CD955]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
+              toast.type === 'success' ? 'bg-[#E86A24]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
             }`}
           >
             {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
@@ -245,28 +245,28 @@ const ImportContactsPage = () => {
           <h2 className="text-lg font-semibold text-gray-100 mb-4">Importar Contatos via CSV</h2>
 
           {/* Regras do arquivo */}
-          <div className="mb-6 p-4 bg-[#8CD95515] dark:bg-[#8CD95510] border-2 border-[#8CD95540] rounded-lg" data-tour-id="importar-regras">
+          <div className="mb-6 p-4 bg-[#E86A2415] dark:bg-[#E86A2410] border-2 border-[#E86A2440] rounded-lg" data-tour-id="importar-regras">
             <h3 className="font-semibold text-gray-200 mb-3 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-[#8CD955]" />
+              <FileText className="w-5 h-5 text-[#E86A24]" />
               Regras do arquivo:
             </h3>
             <ul className="space-y-2 text-sm text-gray-300">
               <li className="flex items-start gap-2">
-                <span className="text-[#8CD955] mt-1">•</span>
+                <span className="text-[#E86A24] mt-1">•</span>
                 <span><strong>Formato:</strong> .csv (sem limite de linhas)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-[#8CD955] mt-1">•</span>
+                <span className="text-[#E86A24] mt-1">•</span>
                 <span>
                   <strong>Campo obrigatório de telefone</strong> (case-insensitive): telefone, phone, phone_number, number, phone_numbwer_number, phonenumber, celular, mobile, whatsapp, tel, fone
                 </span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-[#8CD955] mt-1">•</span>
+                <span className="text-[#E86A24] mt-1">•</span>
                 <span><strong>Opcional:</strong> name ou nome</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-[#8CD955] mt-1">•</span>
+                <span className="text-[#E86A24] mt-1">•</span>
                 <span><strong>Telefone com DDD:</strong> ex. 81999998888</span>
               </li>
             </ul>
@@ -276,10 +276,10 @@ const ImportContactsPage = () => {
           <div className="space-y-4">
             <div data-tour-id="importar-upload">
               <label className="block w-full">
-                <div className="cursor-pointer flex flex-col items-center justify-center gap-3 px-6 py-8 bg-[#333] border-2 border-dashed border-[#8CD95560] rounded-lg hover:bg-[#404040] hover:border-[#8CD95580] transition text-center">
-                  <Upload className="w-8 h-8 text-[#8CD955]" />
+                <div className="cursor-pointer flex flex-col items-center justify-center gap-3 px-6 py-8 bg-[#333] border-2 border-dashed border-[#E86A2460] rounded-lg hover:bg-[#404040] hover:border-[#E86A2480] transition text-center">
+                  <Upload className="w-8 h-8 text-[#E86A24]" />
                   <div>
-                    <span className="text-[#8CD955] font-medium">Clique para escolher arquivo</span>
+                    <span className="text-[#E86A24] font-medium">Clique para escolher arquivo</span>
                     <span className="text-gray-400"> ou arraste e solte</span>
                   </div>
                   {csvFileName && (
@@ -309,7 +309,7 @@ const ImportContactsPage = () => {
             <button
               onClick={handleImportCSV}
               disabled={csvImporting || csvContacts.length === 0}
-              className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {csvImporting ? (
                 <>
@@ -331,7 +331,7 @@ const ImportContactsPage = () => {
             {csvImporting && importProgress && importProgress.total > 1000 && (
               <div className="w-full bg-[#404040] rounded-full h-2.5">
                 <div
-                  className="bg-[#8CD955] h-2.5 rounded-full transition-all duration-300"
+                  className="bg-[#E86A24] h-2.5 rounded-full transition-all duration-300"
                   style={{
                     width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%`,
                   }}

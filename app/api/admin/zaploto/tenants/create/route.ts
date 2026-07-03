@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
         domain: body.domain?.trim() || null,
         logo_url: body.logo_url?.trim() || null,
         favicon_url: body.favicon_url?.trim() || null,
-        primary_color: body.primary_color || '#8CD955',
+        primary_color: body.primary_color || '#E86A24',
         secondary_color: body.secondary_color?.trim() || null,
         app_title: body.app_title?.trim() || name,
         support_email: body.support_email?.trim() || null,

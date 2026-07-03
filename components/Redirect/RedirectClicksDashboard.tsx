@@ -281,7 +281,7 @@ export default function RedirectClicksDashboard({
               onClick={() => setPreset(p)}
               className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition ${
                 preset === p
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-[#ccc] hover:bg-gray-200 dark:hover:bg-[#404040]'
               }`}
             >
@@ -293,7 +293,7 @@ export default function RedirectClicksDashboard({
               type="checkbox"
               checked={compare}
               onChange={(e) => setCompare(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-gray-300 dark:border-[#555] text-[#8CD955] focus:ring-[#8CD955]"
+              className="w-3.5 h-3.5 rounded border-gray-300 dark:border-[#555] text-[#E86A24] focus:ring-[#E86A24]"
             />
             Comparar período anterior
           </label>
@@ -385,7 +385,7 @@ export default function RedirectClicksDashboard({
                         ]}
                       />
                       <Legend />
-                      <Bar dataKey="atual" name="Período atual" fill="#8CD955" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="atual" name="Período atual" fill="#E86A24" radius={[4, 4, 0, 0]} />
                       {compare && <Bar dataKey="anterior" name="Período anterior" fill="#94a3b8" radius={[4, 4, 0, 0]} />}
                     </BarChart>
                   </ResponsiveContainer>
@@ -421,7 +421,7 @@ export default function RedirectClicksDashboard({
                                   title={`${row.barPct}% do maior dia`}
                                 >
                                   <div
-                                    className="h-full rounded-full bg-[#8CD955]/90"
+                                    className="h-full rounded-full bg-[#E86A24]/90"
                                     style={{ width: `${row.barPct}%` }}
                                   />
                                 </div>
@@ -459,7 +459,7 @@ export default function RedirectClicksDashboard({
                     <XAxis dataKey="hora" tick={{ fontSize: 10 }} interval={2} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                     <Tooltip formatter={(v: number | string) => [Number(v).toLocaleString('pt-BR'), 'Cliques']} />
-                    <Line type="monotone" dataKey="cliques" name="Cliques" stroke="#8CD955" strokeWidth={2} dot={{ r: 2 }} />
+                    <Line type="monotone" dataKey="cliques" name="Cliques" stroke="#E86A24" strokeWidth={2} dot={{ r: 2 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

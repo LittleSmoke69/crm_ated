@@ -573,7 +573,7 @@ const GroupsPage = () => {
                   <select
                     value={selectedInstanceForCreate}
                     onChange={(e) => setSelectedInstanceForCreate(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   >
                     <option value="">Selecione uma instância</option>
@@ -600,7 +600,7 @@ const GroupsPage = () => {
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
                     placeholder="Ex: Grupo de Vendas"
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   />
                 </div>
@@ -615,7 +615,7 @@ const GroupsPage = () => {
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Descrição do grupo..."
                     rows={3}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none resize-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none resize-none text-gray-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-white dark:bg-[#333]"
                     disabled={loadingCreate}
                   />
                 </div>
@@ -630,7 +630,7 @@ const GroupsPage = () => {
                       type="button"
                       onClick={handleAddRandomContact}
                       disabled={loadingCreate || !contacts || contacts.length === 0}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[#8CD95515] text-[#6AB83D] border border-[#8CD95540] rounded-lg hover:bg-[#8CD95525] transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm bg-[#E86A2415] text-[#C9531A] border border-[#E86A2440] rounded-lg hover:bg-[#E86A2425] transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                     >
                       <UserPlus className="w-4 h-4" />
                       + Adicionar Contato Aleatório
@@ -668,7 +668,7 @@ const GroupsPage = () => {
                   <button
                     onClick={handleCreateGroup}
                     disabled={loadingCreate || !isFormValid}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {loadingCreate ? (
                       <>
@@ -702,7 +702,7 @@ const GroupsPage = () => {
                   <select
                     value={selectedInstance}
                     onChange={e => setSelectedInstance(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">Selecione uma Instância</option>
                     {instances.map(inst => (
@@ -719,7 +719,7 @@ const GroupsPage = () => {
             {canExtractContactsCsv && (
               <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-[#404040]">
                 <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-1 flex items-center gap-2">
-                  <Download className="w-5 h-5 text-[#6AB83D]" aria-hidden />
+                  <Download className="w-5 h-5 text-[#C9531A]" aria-hidden />
                   Extrair contatos (CSV)
                 </h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
@@ -735,7 +735,7 @@ const GroupsPage = () => {
                     <select
                       value={selectedInstance}
                       onChange={e => setSelectedInstance(e.target.value)}
-                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                     >
                       <option value="">Selecione uma instância</option>
                       {instances.map(inst => (
@@ -757,14 +757,14 @@ const GroupsPage = () => {
                         onChange={e => setExtractGroupSearch(e.target.value)}
                         placeholder="Pesquisar grupo salvo..."
                         disabled={!selectedInstance || instanceDbGroups.length === 0}
-                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 disabled:opacity-50"
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-sm text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 disabled:opacity-50"
                       />
                     </div>
                     <select
                       value={extractGroupId}
                       onChange={e => setExtractGroupId(e.target.value)}
                       disabled={!selectedInstance || instanceDbGroups.length === 0}
-                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] disabled:opacity-50"
+                      className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] disabled:opacity-50"
                     >
                       <option value="">
                         {!selectedInstance
@@ -821,7 +821,7 @@ const GroupsPage = () => {
                   <select
                     value={selectedInstance}
                     onChange={e => setSelectedInstance(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] mb-2"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] mb-2"
                   >
                     <option value="">Selecione uma instância</option>
                     {instances.map(inst => (
@@ -835,7 +835,7 @@ const GroupsPage = () => {
                   <button
                     onClick={handleLoadGroups}
                     disabled={!selectedInstance || groupsLoading}
-                    className="flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {groupsLoading ? (
                       <span className="inline-flex items-center gap-2">
@@ -865,7 +865,7 @@ const GroupsPage = () => {
                     value={availGroupsSearch}
                     onChange={e => setAvailGroupsSearch(e.target.value)}
                     placeholder="Pesquisar nos grupos da API..."
-                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                   />
                 </div>
               </div>
@@ -887,7 +887,7 @@ const GroupsPage = () => {
                       </div>
                       <button
                         onClick={() => handleSaveGroup(group)}
-                        className="px-3 py-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded text-sm transition"
+                        className="px-3 py-1 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded text-sm transition"
                       >
                         Salvar
                       </button>
@@ -945,7 +945,7 @@ const GroupsPage = () => {
                   pagedSavedGroups.map(group => (
                     <div
                       key={group.group_id}
-                      className="p-3 border rounded-lg cursor-pointer transition border-gray-200 dark:border-[#404040] hover:border-[#8CD95540] dark:hover:border-[#8CD955]/50 hover:bg-[#8CD95515] dark:hover:bg-[#8CD955]/10"
+                      className="p-3 border rounded-lg cursor-pointer transition border-gray-200 dark:border-[#404040] hover:border-[#E86A2440] dark:hover:border-[#E86A24]/50 hover:bg-[#E86A2415] dark:hover:bg-[#E86A24]/10"
                     >
                       <p className="font-medium text-gray-800 dark:text-white">{group.group_subject || 'Sem nome'}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">{group.group_id}</p>

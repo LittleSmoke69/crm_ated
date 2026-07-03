@@ -1,2344 +1,549 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, startTransition } from 'react';
-import { withTenantSlug } from '@/lib/utils/tenant-href';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '@/components/Layout';
-import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Kanban as KanbanIcon, Plus, Users, Target, CheckCircle2, MessageSquare, AlertCircle, Eye, RefreshCw, X, Gift, Loader2, Search, Ticket, Sparkles, Package, Download } from 'lucide-react';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
-import FilterBar from '@/components/CRM/FilterBar';
-import KanbanColumn from '@/components/CRM/KanbanColumn';
-import SortColumnModal from '@/components/CRM/SortColumnModal';
-import { Lead, Column, ThermalStatus } from '@/components/CRM/types';
-import { usePathname, useSearchParams } from 'next/navigation';
-import { COMBO_AVULSO_EMAIL_MARKER } from '@/lib/crm/combo-avulso';
-import { downloadLeadsCsv, canUserExportCrmLeadsCsv, firstNameFromFullName } from '@/lib/crm/export-leads-csv';
-import { buildCrmColumnLabelsMap, filterLeadsAssignedToCrmColumns } from '@/lib/crm/crm-column-export';
-import { isLeadPast90DaysInactivity } from '@/lib/crm/lead-inactivity';
-import { useToast } from '@/hooks/useToast';
-import ToastContainer from '@/components/Toast/ToastContainer';
+import { useRequireAuth } from '@/utils/useRequireAuth';
+import { Plus, Loader2, Phone, Mail, X, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3 } from 'lucide-react';
+import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
 
-type SortField =
-  | 'created_at'
-  | 'last_deposit_at'
-  | 'total_ganho'
-  | 'total_afiliate'
-  | 'total_depositado'
-  | 'total_apostado'
-  | 'total_depositos_count'
-  | 'name'
-  | 'last_interaction'
-  | 'stars'
-  | 'interactions';
-type SortDirection = 'asc' | 'desc';
-
-/** Níveis estrela (aposta mínima/máxima para o nível) - deve bater com LeadCard */
-const STAR_LEVELS = [
-  { level: 1, min: 100, max: 299 },
-  { level: 2, min: 300, max: 699 },
-  { level: 3, min: 700, max: 1199 },
-  { level: 4, min: 1200, max: 4999 },
-  { level: 5, min: 2500, max: 14999 },
-  { level: 6, min: 15000, max: 29999 },
-  { level: 7, min: 30000, max: 50000 },
-] as const;
-
-/** Retorna o valor (em R$) que falta para a próxima estrela, ou null se já está no nível máximo. */
-function getMissingForNextStar(apostaEstrelas: number): number | null {
-  const value = Math.max(0, apostaEstrelas ?? 0);
-  const current = [...STAR_LEVELS].reverse().find((r) => value >= r.min && value <= r.max);
-  if (!current) {
-    if (value < STAR_LEVELS[0].min) {
-      return STAR_LEVELS[0].min - value;
-    }
-    return null; // já no nível máximo
-  }
-  const currentIdx = STAR_LEVELS.findIndex((r) => r.level === current.level);
-  const next = currentIdx < STAR_LEVELS.length - 1 ? STAR_LEVELS[currentIdx + 1] : null;
-  return next ? Math.max(0, next.min - value) : null;
-}
-
-// Função para criar colunas padrão vazias
-const getDefaultColumns = (leads: Lead[] = []): Column[] => {
-  return [
-    { 
-      id: 'novo', 
-      title: '👥 Clientes cadastrados', 
-      color: 'gray', 
-      leads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 0 && 
-        l.status !== 'ativo' && 
-        !(l.has_interaction === true)
-      ).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 0 && 
-        l.status !== 'ativo' && 
-        !(l.has_interaction === true)
-      ).length
-    },
-    { 
-      id: 'contactados', 
-      title: '📞 Clientes Contactados', 
-      color: 'blue', 
-      leads: leads
-        .filter(l => 
-          l.has_interaction === true && 
-          (l.total_depositos_count || 0) === 0
-        )
-        .sort((a, b) => {
-          const timeA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : 
-                        a.last_interaction ? new Date(a.last_interaction).getTime() : 0;
-          const timeB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : 
-                        b.last_interaction ? new Date(b.last_interaction).getTime() : 0;
-          return timeA - timeB;
-        })
-        .slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        l.has_interaction === true && 
-        (l.total_depositos_count || 0) === 0
-      ).length
-    },
-    { 
-      id: 'deposito_sem_aposta', 
-      title: '💰 Com Saldo Disponível', 
-      color: 'red', 
-      leads: leads.filter(l => 
-        (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0
-      ).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        (l.total_depositado || 0) > (l.total_apostado || 0) || (l.balance ?? 0) > 0
-      ).length
-    },
-    { 
-      id: 'saque_disponivel', 
-      title: '💸 Saque Disponível', 
-      color: 'teal', 
-      leads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).slice(0, 100),
-      totalLeads: leads.filter(l => (parseFloat(String(l.available_withdraw ?? 0)) || 0) > 0).length
-    },
-    { 
-      id: 'deposito_1x', 
-      title: '💰 1º Depósito', 
-      color: 'emerald', 
-      leads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 1 && 
-        (l.total_depositado || 0) <= (l.total_apostado || 0)
-      ).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 1 && 
-        (l.total_depositado || 0) <= (l.total_apostado || 0)
-      ).length
-    },
-    { 
-      id: 'deposito_2x', 
-      title: '🔥 2º Depósito', 
-      color: 'orange', 
-      leads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 2 && 
-        (l.total_depositado || 0) <= (l.total_apostado || 0)
-      ).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        (l.total_depositos_count || 0) === 2 && 
-        (l.total_depositado || 0) <= (l.total_apostado || 0)
-      ).length
-    },
-    { 
-      id: 'deposito_3x', 
-      title: '💎 DEPOSITOU 3X', 
-      color: 'indigo', 
-      leads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 3 && count < 5 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 3 && count < 5 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).length
-    },
-    { 
-      id: 'deposito_5x', 
-      title: '⭐ DEPOSITOU 5X', 
-      color: 'amber', 
-      leads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 5 && count < 10 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 5 && count < 10 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).length
-    },
-    { 
-      id: 'deposito_10x', 
-      title: '👑 DEPOSITOU 10X+', 
-      color: 'rose', 
-      leads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 10 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => {
-        const count = l.total_depositos_count || 0;
-        return count >= 10 && 
-               (l.total_depositado || 0) <= (l.total_apostado || 0);
-      }).length
-    },
-    { 
-      id: 'ativo', 
-      title: '✅ CLIENTE ATIVO', 
-      color: 'purple', 
-      leads: leads.filter(l => 
-        l.status === 'ativo'
-      ).slice(0, 100), // Limita a 100 leads
-      totalLeads: leads.filter(l => 
-        l.status === 'ativo'
-      ).length
-    },
-    { 
-      id: 'possivel_transferencia', 
-      title: '🔄 Possível transferência', 
-      color: 'amber', 
-      leads: leads.filter(l => isLeadPast90DaysInactivity(l)).slice(0, 100),
-      totalLeads: leads.filter(l => isLeadPast90DaysInactivity(l)).length
-    }
-  ];
+type Tag = { id: string; label: string; color: string; move_to_column_key?: string | null };
+type Column = { id: string; key: string; title: string; color: string; sort_order: number };
+type Client = {
+  external_id: string;
+  owner_user_id: string | null;
+  owner_name?: string | null;
+  name: string;
+  phone: string;
+  email: string;
+  column_key: string;
+  position: number;
+  tags: Tag[];
 };
+type Attendant = { id: string; name: string };
 
-/** Rótulos das colunas no CSV (mesmas chaves que `colLeads` no useMemo do quadro). */
-const KANBAN_CSV_COLUMN_TITLES: Record<string, string> = {
-  novo: 'Clientes cadastrados',
-  contactados: 'Clientes contactados',
-  deposito_sem_aposta: 'Com Saldo Disponível',
-  saque_disponivel: 'Saque disponível',
-  deposito_1x: '1º Depósito',
-  deposito_2x: '2º Depósito',
-  deposito_3x: 'Depositou 3x',
-  deposito_5x: 'Depositou 5x',
-  deposito_10x: 'Depositou 10x+',
-  ativo: 'Cliente ativo',
-  possivel_transferencia: 'Possível transferência',
+const COLOR_HEX: Record<string, string> = {
+  gray: '#6b7280', blue: '#3b82f6', indigo: '#6366f1', amber: '#f59e0b', orange: '#E86A24',
+  emerald: '#10b981', rose: '#f43f5e', red: '#ef4444', teal: '#14b8a6', purple: '#a855f7',
 };
+const COLOR_OPTIONS = Object.keys(COLOR_HEX);
+const hexFor = (c: string) => COLOR_HEX[c] ?? '#6b7280';
 
-const KanbanContent = () => {
-  const { checking, userId, userStatus } = useRequireAuth();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const targetUserId = searchParams.get('userId');
-  const isComboAvulsoCrm = pathname?.startsWith('/crm/avulsos') ?? false;
-  const { toasts, showToast, removeToast } = useToast();
+export default function KanbanPage() {
+  const { userId } = useRequireAuth();
+  const [columns, setColumns] = useState<Column[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dragId, setDragId] = useState<string | null>(null);
 
-  const canExportLeadsCsv = canUserExportCrmLeadsCsv(userStatus);
+  const [showAdd, setShowAdd] = useState(false);
+  const [addTargetColumn, setAddTargetColumn] = useState('');
+  const [form, setForm] = useState({ name: '', phone: '', email: '' });
+  const [saving, setSaving] = useState(false);
 
-  const [rawLeads, setRawLeads] = useState<Lead[]>([]); // Leads da API (banca+período) - filtros aplicados localmente
-  const [loading, setLoading] = useState(false); // true apenas quando a requisição de leads estiver em andamento
-  const [filterLoading, setFilterLoading] = useState(false); // Loading ao mudar banca/período
-  const [backgroundLoading, setBackgroundLoading] = useState(false); // true quando o resto dos leads está carregando em segundo plano
-  const [backgroundProgress, setBackgroundProgress] = useState<{ currentBanca: number; totalBancas: number; currentPage: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filters, setFilters] = useState<Record<string, any>>(() => {
-    // Predefinido como todo o período: ao entrar no CRM já busca todas as bancas + todo o período
-    return {
-      date: {
-        value: 'todos',
-        label: 'Todo o Período'
-      }
-    };
-  });
-  const [consultorInfo, setConsultorInfo] = useState<{ name: string; email: string } | null>(null);
-  /** Primeiro nome do consultor para nome do arquivo CSV (próprio usuário ou CRM visualizado). */
-  const [csvConsultantFirstName, setCsvConsultantFirstName] = useState('');
+  const [showNewCol, setShowNewCol] = useState(false);
+  const [newCol, setNewCol] = useState({ title: '', color: 'gray' });
+  const [creatingCol, setCreatingCol] = useState(false);
 
-  // Quem está visualizando o CRM do consultor (para exibir aviso quando gerente acessa)
-  const [viewers, setViewers] = useState<{ id: string; name: string }[]>([]);
+  const [editColId, setEditColId] = useState<string | null>(null);
+  const [editColTitle, setEditColTitle] = useState('');
+  const [menuColId, setMenuColId] = useState<string | null>(null);
+  const [tagPickerId, setTagPickerId] = useState<string | null>(null);
 
-  // Estados para o modal de ordenação
-  const [sortModalOpen, setSortModalOpen] = useState(false);
-  const [sortingColumnId, setSortingColumnId] = useState<string | null>(null);
-  const [sortField, setSortField] = useState<SortField | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [columnSorts, setColumnSorts] = useState<Record<string, { field: SortField; direction: SortDirection }>>({});
-  
-  // Estado para controlar quantos leads estão sendo exibidos por coluna
-  const [leadsPerColumn, setLeadsPerColumn] = useState<Record<string, number>>({});
-  
-  // Estado para controlar o modal informativo de status
-  const [showStatusModal, setShowStatusModal] = useState(false);
-  // Modal seleção tipo de bônus (abre antes do modal de Giros)
-  const [showBonusTypeModal, setShowBonusTypeModal] = useState(false);
-  // Modal Enviar Giros (Roleta)
-  const [showSpinModal, setShowSpinModal] = useState(false);
-  const [spinSelectedLeadIds, setSpinSelectedLeadIds] = useState<Set<string>>(new Set());
-  const [spinSearchTerm, setSpinSearchTerm] = useState('');
-  /** Valor digitado na busca do modal de giros; o filtro só é aplicado no onBlur (clicar fora). */
-  const [spinSearchInputValue, setSpinSearchInputValue] = useState('');
-  const [spinQuantity, setSpinQuantity] = useState<number>(5);
-  const [spinHistory, setSpinHistory] = useState<{ quantity: number; date: string }[]>([]);
-  const [spinHistoryLoading, setSpinHistoryLoading] = useState(false);
-  const [spinSending, setSpinSending] = useState(false);
-  const [spinError, setSpinError] = useState<string | null>(null);
-  // Modal Enviar Rifas (bilhetes)
-  const [showTicketModal, setShowTicketModal] = useState(false);
-  const [ticketSelectedLeadIds, setTicketSelectedLeadIds] = useState<Set<string>>(new Set());
-  const [ticketSearchTerm, setTicketSearchTerm] = useState('');
-  const [ticketQuantity, setTicketQuantity] = useState<number>(1);
-  const [ticketSending, setTicketSending] = useState(false);
-  const [ticketError, setTicketError] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importColumn, setImportColumn] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importFileName, setImportFileName] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const isInitialLoadRef = useRef<boolean>(true);
-  /** Cancela o carregamento em background quando uma nova busca é iniciada (ex.: mudança de filtro). */
-  const loadIdRef = useRef(0);
+  const [canViewAll, setCanViewAll] = useState(false);
+  const [attendants, setAttendants] = useState<Attendant[]>([]);
+  const [attendantFilter, setAttendantFilter] = useState('all');
 
-  // CRM Bancas precisa carregar por completo antes de carregar Leads (dropdown de bancas define o contexto)
-  const [bancasReady, setBancasReady] = useState(false);
-  /** Listagem exclusiva de bancas do dropdown; em "Todas as Bancas" a API de leads usa só essas URLs. */
-  const [exclusiveBancasList, setExclusiveBancasList] = useState<{ id: string; name: string; url: string }[]>([]);
+  const headers = useMemo(() => ({ 'Content-Type': 'application/json', 'X-User-Id': userId ?? '' }), [userId]);
 
-  // API chamada APENAS quando banca ou período mudam; demais filtros são aplicados localmente
-  const bancaKey = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
-  const dateKey = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : null;
-
-  const csvFilenameBancaLabel = useMemo(() => {
-    const b = filters.banca;
-    if (!b) return 'Todas as bancas';
-    if (typeof b === 'object') {
-      const v = (b as { value?: string }).value;
-      if (v === 'all') return 'Todas as bancas';
-      const label = (b as { label?: string }).label;
-      if (label && String(label).trim()) return String(label).trim();
-      return v && String(v).trim() ? String(v).trim() : 'Todas as bancas';
-    }
-    return String(b);
-  }, [filters.banca]);
-
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!userId) return;
-    if (!bancasReady) return;
-
-    const isInitialLoad = isInitialLoadRef.current;
-    if (isInitialLoad) {
-      isInitialLoadRef.current = false;
-    }
-    loadLeads(!isInitialLoad);
-  }, [userId, targetUserId, bancaKey, dateKey, bancasReady, isComboAvulsoCrm]);
-
-  // Gerente visualizando CRM do consultor: registra sessão, heartbeat e cleanup ao sair
-  const isViewingConsultorCrm = !!targetUserId && targetUserId !== userId;
-  useEffect(() => {
-    if (!userId || !isViewingConsultorCrm || !targetUserId) return;
-
-    const registerSession = async () => {
-      try {
-        const res = await fetch('/api/crm/view-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          body: JSON.stringify({ consultantId: targetUserId }),
-        });
-        if (!res.ok) console.warn('[Kanban] Falha ao registrar visualização');
-      } catch (e) {
-        console.warn('[Kanban] Erro ao registrar visualização:', e);
-      }
-    };
-
-    registerSession();
-    const heartbeat = setInterval(registerSession, 30000); // a cada 30s
-
-    return () => {
-      clearInterval(heartbeat);
-      fetch(`/api/crm/view-session?consultant_id=${targetUserId}`, {
-        method: 'DELETE',
-        headers: { 'X-User-Id': userId },
-        keepalive: true,
-      }).catch(() => {});
-    };
-  }, [userId, targetUserId, isViewingConsultorCrm]);
-
-  // Consultor vendo próprio CRM: polling para ver se gerente está visualizando
-  const isConsultorViewingOwn = !targetUserId || targetUserId === userId;
-  useEffect(() => {
-    if (!userId || !isConsultorViewingOwn) {
-      setViewers([]);
-      return;
-    }
-
-    const fetchViewers = async () => {
-      try {
-        const res = await fetch(`/api/crm/view-session?consultant_id=${userId}`, {
-          headers: { 'X-User-Id': userId },
-        });
-        const data = await res.json();
-        if (data?.success && Array.isArray(data.data?.viewers)) {
-          setViewers(data.data.viewers);
-        }
-      } catch {
-        setViewers([]);
-      }
-    };
-
-    fetchViewers();
-    const interval = setInterval(fetchViewers, 30000); // a cada 30s
-    return () => clearInterval(interval);
-  }, [userId, isConsultorViewingOwn]);
-
-  useEffect(() => {
-    if (consultorInfo?.name) {
-      setCsvConsultantFirstName(firstNameFromFullName(consultorInfo.name));
-      return;
-    }
-    if (!userId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/user/profile', {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-          credentials: 'include',
-        });
-        const text = await res.text();
-        if (cancelled) return;
-        if (!res.ok || !text.trim()) {
-          setCsvConsultantFirstName('');
-          return;
-        }
-        const json = JSON.parse(text) as { success?: boolean; data?: { full_name?: string | null } };
-        const fn = json.success && json.data?.full_name != null ? String(json.data.full_name) : '';
-        setCsvConsultantFirstName(firstNameFromFullName(fn));
-      } catch {
-        if (!cancelled) setCsvConsultantFirstName('');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId, consultorInfo?.name]);
-
-  // Ao abrir o modal de giros, sincroniza o valor do input com o termo de filtro atual
-  useEffect(() => {
-    if (showSpinModal) setSpinSearchInputValue(spinSearchTerm);
-  }, [showSpinModal]);
-
-  // Métricas são calculadas localmente baseadas nos leads filtrados
-  // Não precisa mais da função loadMetrics da API
-
-  /** Converte um lote da API para o formato Lead do Kanban. */
-  const formatApiLeadsToLead = useCallback((leads: any[]): Lead[] => {
-    return (leads || []).map(l => {
-      const firstName = l.name || '';
-      const lastName = (l.last_name && l.last_name !== 'null') ? l.last_name : '';
-      const fullName = `${firstName} ${lastName}`.trim() || 'Sem nome';
-      return {
-        id: l.id,
-        name: fullName,
-        phone: l.phone || '',
-        email: l.email || '',
-        status: l.status || 'novo',
-        createdAt: l.created_at,
-        thermalStatus: (l.temperature as ThermalStatus) || 'cold',
-        tags: l.tags || [],
-        interactions: 0,
-        lastInteractionAt: l.last_interaction || l.created_at,
-        isFavorite: false,
-        alertStatus: 'idle',
-        total_depositado: Math.round((parseFloat(l.total_depositado) || 0) * 100) / 100,
-        total_apostado: Math.round((parseFloat(l.total_apostado) || 0) * 100) / 100,
-        total_ganho: parseFloat(l.total_ganho) || 0,
-        total_depositos_count: parseInt(l.total_depositos_count) || 0,
-        stars: l.user_level ? parseInt(l.user_level) : (l.stars ? parseInt(l.stars) : 0),
-        is_affiliate: !!l.affiliate_name || l.is_affiliate === true || l.affiliate === 'yes' || l.affiliate_filter === 'yes',
-        affiliate_name: l.affiliate_name,
-        temperature: l.temperature,
-        has_interaction: l.has_interaction === true || l.has_interaction === 'true' || l.has_interaction === 1,
-        last_deposit_at: l.last_deposit_at || null,
-        last_deposit_value: l.last_deposit_value || null,
-        created_at: l.created_at,
-        last_winner_value: l.last_winner_value ? parseFloat(l.last_winner_value) : undefined,
-        last_winner_at: l.last_winner_at || null,
-        last_withdraw_at: l.last_withdraw_at || null,
-        last_withdraw_value: l.last_withdraw_value ? parseFloat(l.last_withdraw_value) : undefined,
-        total_saque: l.total_saque ? parseFloat(l.total_saque) : undefined,
-        balance: l.balance ? parseFloat(l.balance) : 0,
-        available_withdraw: l.available_withdraw != null ? Math.round((parseFloat(String(l.available_withdraw)) || 0) * 100) / 100 : undefined,
-        bonus: l.bonus ? parseFloat(l.bonus) : 0,
-        convert: l.convert ? parseFloat(l.convert) : 0,
-        total_afiliate: l.total_afiliate ? parseFloat(l.total_afiliate) : 0,
-        aposta_estrelas: l.aposta_estrelas ? parseInt(l.aposta_estrelas.toString()) || 0 : 0,
-        has_any_tag_association: l.has_any_tag_association === true,
-        banca_id: l.banca_id,
-        banca_name: l.banca_name,
-        banca_url: l.banca_url,
-        consultant_id: l.consultant_id != null ? Number(l.consultant_id) : undefined,
-      };
-    });
-  }, []);
-
-  const loadLeads = useCallback(async (isFilterChange = false) => {
-    loadIdRef.current += 1;
-    const thisLoadId = loadIdRef.current;
-
-    const buildBaseUrl = () => {
-      const url = new URL('/api/crm/leads', window.location.origin);
-      if (targetUserId) url.searchParams.append('userId', targetUserId);
-      const bancaValue = filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : null;
-      if (bancaValue && bancaValue !== 'all') {
-        url.searchParams.append('banca_url', bancaValue);
-      } else if (exclusiveBancasList.length > 0) {
-        url.searchParams.append('banca_urls', exclusiveBancasList.map(b => b.url).join(','));
-      }
-      const dateValue = filters.date ? (typeof filters.date === 'object' ? filters.date.value : filters.date) : 'todos';
-      const nowSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-      const today = nowSP.toISOString().split('T')[0];
-      if (dateValue === 'todos') {
-        // Todo o período: não envia from/to; a API retorna todos os leads
-      } else if (dateValue === 'diario') {
-        url.searchParams.append('from', today);
-        url.searchParams.append('to', today);
-      } else if (dateValue === 'ontem') {
-        const yesterday = new Date(nowSP);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
-        url.searchParams.append('from', yesterdayStr);
-        url.searchParams.append('to', yesterdayStr);
-      } else if (dateValue === '7dias') {
-        const sevenDaysAgo = new Date(nowSP);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        url.searchParams.append('from', sevenDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
-      } else if (dateValue === '15dias') {
-        const fifteenDaysAgo = new Date(nowSP);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14);
-        url.searchParams.append('from', fifteenDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
-      } else if (dateValue === '30dias') {
-        const thirtyDaysAgo = new Date(nowSP);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-        url.searchParams.append('from', thirtyDaysAgo.toISOString().split('T')[0]);
-        url.searchParams.append('to', today);
-      } else if (dateValue?.startsWith('custom_')) {
-        const parts = dateValue.split('_');
-        if (parts.length === 3) {
-          url.searchParams.append('from', parts[1]);
-          url.searchParams.append('to', parts[2]);
-        }
-      }
-      if (isComboAvulsoCrm) {
-        url.searchParams.set('combo_avulso', '1');
-      }
-      return url;
-    };
-
     try {
-      if (isFilterChange) {
-        setFilterLoading(true);
-      } else {
-        setLoading(true);
+      const [boardRes, tagsRes] = await Promise.all([
+        fetch('/api/crm/board', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
+        fetch('/api/crm/tags', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
+      ]);
+      const board = await boardRes.json();
+      const tags = await tagsRes.json();
+      if (board?.success) {
+        setColumns(board.data.columns ?? []);
+        setClients(board.data.clients ?? []);
+        setCanViewAll(!!board.data.meta?.can_view_all);
+        setAttendants(board.data.meta?.attendants ?? []);
       }
-      setError(null);
-      setBackgroundLoading(false);
-
-      const baseUrl = buildBaseUrl();
-      baseUrl.searchParams.append('only_responded', '1');
-
-      const response = await fetch(baseUrl.toString(), {
-        headers: { 'X-User-Id': userId as string }
-      });
-      const result = await response.json();
-
-      if (thisLoadId !== loadIdRef.current) return;
-
-      if (result.success) {
-        const leads: any[] = result.data || [];
-        const formattedLeads = formatApiLeadsToLead(leads);
-        startTransition(() => setRawLeads(formattedLeads));
-
-        if (targetUserId && targetUserId !== userId) {
-          const profileRes = await fetch(`/api/admin/users/${targetUserId}`, {
-            headers: { 'X-User-Id': userId as string }
-          });
-          const profileResult = await profileRes.json();
-          if (thisLoadId === loadIdRef.current && profileResult.success && profileResult.data?.user) {
-            setConsultorInfo({
-              name: profileResult.data.user.full_name || 'Consultor',
-              email: profileResult.data.user.email
-            });
-          }
-        } else {
-          setConsultorInfo(null);
-        }
-
-        const next = result.meta?.next;
-        const totalBancas = result.meta?.total_bancas ?? 0;
-        if (next && typeof next.banca_index === 'number' && typeof next.page === 'number') {
-          setBackgroundLoading(true);
-          setBackgroundProgress({ currentBanca: next.banca_index + 1, totalBancas: totalBancas || 1, currentPage: next.page });
-          (async () => {
-            let current: { banca_index: number; page: number } | null = { banca_index: next.banca_index, page: next.page };
-            const headers = { 'X-User-Id': userId as string };
-            const totalBancasRef = totalBancas || 1;
-            while (current && thisLoadId === loadIdRef.current) {
-              if (thisLoadId === loadIdRef.current) {
-                setBackgroundProgress({ currentBanca: current.banca_index + 1, totalBancas: totalBancasRef, currentPage: current.page });
-              }
-              const chunkUrl = buildBaseUrl();
-              chunkUrl.searchParams.set('banca_index', String(current.banca_index));
-              chunkUrl.searchParams.set('page', String(current.page));
-              try {
-                const chunkRes = await fetch(chunkUrl.toString(), { headers });
-                const chunkResult = await chunkRes.json();
-                if (thisLoadId !== loadIdRef.current) break;
-                if (chunkResult.success && Array.isArray(chunkResult.data)) {
-                  const newLeads = formatApiLeadsToLead(chunkResult.data);
-                  if (newLeads.length > 0) {
-                    startTransition(() => {
-                      setRawLeads(prev => {
-                        const byId = new Map(prev.map(l => [l.id, l]));
-                        newLeads.forEach(l => byId.set(l.id, l));
-                        return Array.from(byId.values());
-                      });
-                    });
-                  }
-                  const meta = chunkResult.meta;
-                  if (meta?.current_banca_index != null && meta?.total_bancas != null && thisLoadId === loadIdRef.current) {
-                    setBackgroundProgress({ currentBanca: meta.current_banca_index + 1, totalBancas: meta.total_bancas, currentPage: meta.current_page ?? current.page });
-                  }
-                }
-                current = chunkResult.meta?.next ?? null;
-              } catch {
-                if (thisLoadId === loadIdRef.current) current = null;
-              }
-            }
-            if (thisLoadId === loadIdRef.current) {
-              setBackgroundLoading(false);
-              setBackgroundProgress(null);
-              showToast('Todos os leads foram carregados.', 'success');
-            }
-          })();
-        }
-      } else {
-        const errorMessage = result.error || 'Erro ao carregar leads';
-        if (errorMessage.includes('404') || errorMessage.includes('No indicateds found') || errorMessage.includes('Nenhum lead')) {
-          setError(null);
-          startTransition(() => setRawLeads([]));
-        } else {
-          setError(errorMessage);
-        }
-      }
-    } catch (err) {
-      console.error('[Kanban] Erro de conexão:', err);
-      if (thisLoadId === loadIdRef.current) setError('Erro de conexão com o servidor');
+      if (tags?.success) setAllTags((tags.data ?? []).map((t: Tag) => ({ id: t.id, label: t.label, color: t.color, move_to_column_key: t.move_to_column_key ?? null })));
     } finally {
-      if (thisLoadId === loadIdRef.current) {
-        setLoading(false);
-        setFilterLoading(false);
-      }
+      setLoading(false);
     }
-  }, [userId, targetUserId, filters, exclusiveBancasList, formatApiLeadsToLead, showToast, isComboAvulsoCrm]);
+  }, [userId]);
 
-  const handleBancasLoaded = useCallback((bancas: { id: string; name: string; url: string }[]) => {
-    setExclusiveBancasList(bancas);
-    setBancasReady(true);
-  }, []);
+  useEffect(() => { load(); }, [load]);
 
-  const handleSignOut = () => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('user_id');
-      sessionStorage.removeItem('profile_id');
-      window.localStorage.removeItem('profile_id');
-      document.cookie = 'user_id=; Path=/; Max-Age=0; SameSite=Lax';
-      window.location.href = withTenantSlug('/login');
+  const visibleClients = useMemo(() => {
+    if (!canViewAll || attendantFilter === 'all') return clients;
+    return clients.filter((c) => c.owner_user_id === attendantFilter);
+  }, [clients, canViewAll, attendantFilter]);
+
+  const byColumn = useMemo(() => {
+    const map = new Map<string, Client[]>();
+    for (const col of columns) map.set(col.key, []);
+    const fallback = columns[0]?.key;
+    for (const c of visibleClients) {
+      const key = map.has(c.column_key) ? c.column_key : fallback;
+      if (!key) continue;
+      (map.get(key) as Client[]).push(c);
     }
-  };
-
-  const handleSearch = (term: string) => {
-    setSearchTerm(term);
-  };
-
-  const handleRefresh = () => {
-    loadLeads();
-  };
-
-  // Função para abrir o modal de ordenação
-  const handleOpenSortModal = (columnId: string) => {
-    const currentSort = columnSorts[columnId];
-    setSortingColumnId(columnId);
-    setSortField(currentSort?.field || null);
-    setSortDirection(currentSort?.direction || 'asc');
-    setSortModalOpen(true);
-  };
-
-  // Função para aplicar a ordenação (useMemo recalcula colunas quando columnSorts muda)
-  const handleApplySort = () => {
-    if (sortingColumnId && sortField) {
-      setColumnSorts(prev => ({
-        ...prev,
-        [sortingColumnId]: { field: sortField, direction: sortDirection }
-      }));
-    }
-    setSortModalOpen(false);
-  };
-
-  // Função para fechar o modal
-  const handleCloseSortModal = () => {
-    setSortModalOpen(false);
-    setSortingColumnId(null);
-    setSortField(null);
-    setSortDirection('asc');
-  };
-
-  // Leads com banca (para listagem do modal)
-  const spinEligibleLeads = useMemo(() => rawLeads.filter(l => l.banca_url), [rawLeads]);
-  // Lista filtrada pela pesquisa (nome ou e-mail)
-  const spinFilteredLeads = useMemo(() => {
-    const term = spinSearchTerm.trim().toLowerCase();
-    if (!term) return spinEligibleLeads;
-    return spinEligibleLeads.filter(l =>
-      (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
-    );
-  }, [spinEligibleLeads, spinSearchTerm]);
-  // Rifas: mesma base de leads, filtro por pesquisa
-  const ticketFilteredLeads = useMemo(() => {
-    const term = ticketSearchTerm.trim().toLowerCase();
-    if (!term) return spinEligibleLeads;
-    return spinEligibleLeads.filter(l =>
-      (l.name || '').toLowerCase().includes(term) || (l.email || '').toLowerCase().includes(term)
-    );
-  }, [spinEligibleLeads, ticketSearchTerm]);
-  // Um único lead selecionado (para exibir histórico)
-  const spinSelectedLead = useMemo(() => {
-    if (spinSelectedLeadIds.size !== 1) return null;
-    const id = Array.from(spinSelectedLeadIds)[0];
-    return rawLeads.find(l => String(l.id) === String(id)) ?? null;
-  }, [rawLeads, spinSelectedLeadIds]);
-
-  /** Id do lead para APIs (mesmo critério do feedback): original_id ou sufixo numérico do id composto. */
-  const getLeadIdForApi = useCallback((lead: Lead): string | number => {
-    if (lead.original_id != null) return typeof lead.original_id === 'number' ? lead.original_id : String(lead.original_id);
-    if (typeof lead.id === 'string' && lead.id.includes('-')) return lead.id.split('-').pop() ?? lead.id;
-    return lead.id;
-  }, []);
-
-  // Carregar histórico de giros ao selecionar lead; resolver consultant_id se necessário
-  const [resolvedConsultantId, setResolvedConsultantId] = useState<number | null>(null);
-  useEffect(() => {
-    if (!showSpinModal || !spinSelectedLead) {
-      setSpinHistory([]);
-      setResolvedConsultantId(null);
-      return;
-    }
-    const lead = spinSelectedLead;
-    const bancaUrl = lead.banca_url;
-    if (!bancaUrl) {
-      setSpinHistory([]);
-      setSpinError('Lead sem banca definida.');
-      return;
-    }
-    setSpinError(null);
-    let consultantId = lead.consultant_id != null ? Number(lead.consultant_id) : null;
-
-    const fetchHistory = async (cid: number) => {
-      setSpinHistoryLoading(true);
-      try {
-        const url = new URL('/api/crm/spin-transfer-history', window.location.origin);
-        url.searchParams.set('consultant_id', String(cid));
-        url.searchParams.set('lead_id', String(getLeadIdForApi(lead)));
-        url.searchParams.set('banca_url', bancaUrl);
-        url.searchParams.set('per_page', '15');
-        url.searchParams.set('page', '1');
-        if (targetUserId) url.searchParams.set('userId', targetUserId);
-        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
-        const data = await res.json();
-        const list = Array.isArray(data?.data?.data) ? data.data.data : (Array.isArray(data?.data) ? data.data : []);
-        if (data?.success && list.length >= 0) {
-          setSpinHistory(list.map((h: any) => ({
-            quantity: h.quantity ?? h.spins_count ?? 0,
-            date: h.created_at ?? h.sent_at ?? h.date ?? '',
-          })));
-        } else {
-          setSpinHistory([]);
-        }
-      } catch {
-        setSpinHistory([]);
-      } finally {
-        setSpinHistoryLoading(false);
-      }
-    };
-
-    if (consultantId != null) {
-      setResolvedConsultantId(consultantId);
-      fetchHistory(consultantId);
-      return;
-    }
-    // Buscar consultant_id na API
-    const resolveAndFetch = async () => {
-      try {
-        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
-        url.searchParams.set('userId', targetUserId || (userId as string));
-        url.searchParams.set('banca_url', bancaUrl);
-        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
-        const data = await res.json();
-        if (data?.success && data?.data?.consultant_id != null) {
-          const cid = Number(data.data.consultant_id);
-          setResolvedConsultantId(cid);
-          await fetchHistory(cid);
-        } else {
-          setSpinError('Não foi possível obter o id do consultor para esta banca.');
-          setSpinHistory([]);
-        }
-      } catch {
-        setSpinError('Erro ao obter id do consultor.');
-        setSpinHistory([]);
-      } finally {
-        setSpinHistoryLoading(false);
-      }
-    };
-    setSpinHistoryLoading(true);
-    setResolvedConsultantId(null);
-    setSpinHistory([]);
-    resolveAndFetch();
-  }, [showSpinModal, spinSelectedLeadIds.size, spinSelectedLead, targetUserId, userId]);
-
-  const handleSendSpins = useCallback(async () => {
-    const selectedLeads = spinEligibleLeads.filter(l => spinSelectedLeadIds.has(String(l.id)));
-    if (selectedLeads.length === 0 || spinQuantity < 1) return;
-    setSpinSending(true);
-    setSpinError(null);
-    const consultantIdByBanca = new Map<string, number>();
-    const getConsultantId = async (lead: Lead): Promise<number | null> => {
-      const bancaUrl = lead.banca_url;
-      if (!bancaUrl) return null;
-      if (lead.consultant_id != null) return Number(lead.consultant_id);
-      const cached = consultantIdByBanca.get(bancaUrl);
-      if (cached != null) return cached;
-      try {
-        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
-        url.searchParams.set('userId', targetUserId || (userId as string));
-        url.searchParams.set('banca_url', bancaUrl);
-        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
-        const data = await res.json();
-        if (data?.success && data?.data?.consultant_id != null) {
-          const cid = Number(data.data.consultant_id);
-          consultantIdByBanca.set(bancaUrl, cid);
-          return cid;
-        }
-      } catch {
-        // ignore
-      }
-      return null;
-    };
-    const successfulLeads: Lead[] = [];
-    let err = 0;
-    for (const lead of selectedLeads) {
-      const bancaUrl = lead.banca_url;
-      if (!bancaUrl) {
-        err++;
-        continue;
-      }
-      const consultantId = await getConsultantId(lead);
-      if (consultantId == null) {
-        err++;
-        continue;
-      }
-      try {
-        const res = await fetch('/api/crm/send-spins-to-lead', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
-          body: JSON.stringify({
-            consultant_id: consultantId,
-            lead_id: getLeadIdForApi(lead),
-            quantity: Number(spinQuantity),
-            banca_url: bancaUrl,
-            userId: targetUserId || userId,
-          }),
+    if (canViewAll) {
+      for (const [key, list] of map) {
+        list.sort((a, b) => {
+          const byOwner = (a.owner_name ?? '').localeCompare(b.owner_name ?? '', 'pt-BR');
+          if (byOwner !== 0) return byOwner;
+          return a.name.localeCompare(b.name, 'pt-BR');
         });
-        const data = await res.json();
-        if (data?.success) successfulLeads.push(lead);
-        else err++;
-      } catch {
-        err++;
+        map.set(key, list);
       }
     }
-    const ok = successfulLeads.length;
-    if (ok > 0) {
-      showToast(
-        err > 0
-          ? `${spinQuantity} giro(s) enviados para ${ok} lead(s). ${err} falha(s).`
-          : `${spinQuantity} giro(s) enviado(s) para ${ok} lead(s).`,
-        'success'
-      );
-      if (selectedLeads.length === 1 && spinSelectedLead) {
-        setSpinHistory(prev => [{ quantity: spinQuantity, date: new Date().toISOString() }, ...prev]);
-      }
-      // Aplicar etiqueta "Recebeu bonus de Giro" nos leads que receberam giros com sucesso
-      try {
-        const tagRes = await fetch('/api/crm/tags/ensure-giro-bonus', { headers: { 'X-User-Id': userId as string } });
-        const tagData = await tagRes.json();
-        if (tagData?.success && tagData?.data?.tagId) {
-          const tagId = tagData.data.tagId;
-          const targetUid = targetUserId || userId;
-          for (const lead of successfulLeads) {
-            try {
-              await fetch('/api/crm/leads/tags', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
-                body: JSON.stringify({
-                  leadId: String(lead.id),
-                  tagId,
-                  targetUserId: targetUid,
-                }),
-              });
-            } catch {
-              // ignora falha ao adicionar etiqueta por lead
-            }
-          }
-        }
-      } catch {
-        // ignora se não conseguir obter/criar a etiqueta
-      }
-    }
-    if (err > 0) {
-      setSpinError(err === selectedLeads.length ? 'Falha ao enviar giros.' : `Falha para ${err} de ${selectedLeads.length} lead(s).`);
-    }
-    setSpinSending(false);
-  }, [spinEligibleLeads, spinSelectedLeadIds, spinQuantity, spinSelectedLead, targetUserId, userId, showToast, getLeadIdForApi]);
+    return map;
+  }, [columns, visibleClients, canViewAll]);
 
-  const handleSendTickets = useCallback(async () => {
-    const selectedLeads = spinEligibleLeads.filter(l => ticketSelectedLeadIds.has(String(l.id)));
-    if (selectedLeads.length === 0 || ticketQuantity < 1) return;
-    setTicketSending(true);
-    setTicketError(null);
-    const consultantIdByBanca = new Map<string, number>();
-    const getConsultantId = async (lead: Lead): Promise<number | null> => {
-      const bancaUrl = lead.banca_url;
-      if (!bancaUrl) return null;
-      if (lead.consultant_id != null) return Number(lead.consultant_id);
-      const cached = consultantIdByBanca.get(bancaUrl);
-      if (cached != null) return cached;
-      try {
-        const url = new URL('/api/crm/consultant-external-id', window.location.origin);
-        url.searchParams.set('userId', targetUserId || (userId as string));
-        url.searchParams.set('banca_url', bancaUrl);
-        const res = await fetch(url.toString(), { headers: { 'X-User-Id': userId as string } });
-        const data = await res.json();
-        if (data?.success && data?.data?.consultant_id != null) {
-          const cid = Number(data.data.consultant_id);
-          consultantIdByBanca.set(bancaUrl, cid);
-          return cid;
-        }
-      } catch {
-        // ignore
-      }
-      return null;
-    };
-    const successfulLeads: Lead[] = [];
-    let err = 0;
-    for (const lead of selectedLeads) {
-      const bancaUrl = lead.banca_url;
-      if (!bancaUrl) {
-        err++;
-        continue;
-      }
-      const consultantId = await getConsultantId(lead);
-      if (consultantId == null) {
-        err++;
-        continue;
-      }
-      try {
-        const res = await fetch('/api/crm/send-tickets-to-lead', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': userId as string },
-          body: JSON.stringify({
-            consultant_id: consultantId,
-            lead_id: getLeadIdForApi(lead),
-            quantity: Number(ticketQuantity),
-            banca_url: bancaUrl,
-            userId: targetUserId || userId,
-          }),
-        });
-        const data = await res.json();
-        if (data?.success) successfulLeads.push(lead);
-        else err++;
-      } catch {
-        err++;
-      }
-    }
-    const ok = successfulLeads.length;
-    if (ok > 0) {
-      showToast(
-        err > 0
-          ? `${ticketQuantity} bilhete(s) enviados para ${ok} lead(s). ${err} falha(s).`
-          : `${ticketQuantity} bilhete(s) enviado(s) para ${ok} lead(s).`,
-        'success'
-      );
-    }
-    if (err > 0) {
-      setTicketError(err === selectedLeads.length ? 'Falha ao enviar bilhetes.' : `Falha para ${err} de ${selectedLeads.length} lead(s).`);
-    }
-    setTicketSending(false);
-  }, [spinEligibleLeads, ticketSelectedLeadIds, ticketQuantity, targetUserId, userId, showToast, getLeadIdForApi]);
+  const moveTo = useCallback(async (externalId: string, columnKey: string) => {
+    const client = clients.find((c) => c.external_id === externalId);
+    if (!client || client.column_key === columnKey || !userId) return;
+    setClients((prev) => prev.map((c) => (c.external_id === externalId ? { ...c, column_key: columnKey } : c)));
+    try {
+      await fetch('/api/crm/board', {
+        method: 'PATCH', headers, credentials: 'include',
+        body: JSON.stringify({ lead_external_id: externalId, owner_user_id: client.owner_user_id, column_key: columnKey }),
+      });
+    } catch { load(); }
+  }, [clients, userId, headers, load]);
 
-  // Função para carregar mais leads em uma coluna (apenas atualiza limite local, sem API)
-  const handleLoadMore = (columnId: string) => {
-    setLeadsPerColumn(prev => ({
-      ...prev,
-      [columnId]: (prev[columnId] || 100) + 100
+  const openAddClient = (columnKey: string) => {
+    setAddTargetColumn(columnKey);
+    setForm({ name: '', phone: '', email: '' });
+    setShowAdd(true);
+    setMenuColId(null);
+  };
+
+  const addClient = useCallback(async () => {
+    if (!userId || !form.name.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/crm/board', {
+        method: 'POST', headers, credentials: 'include',
+        body: JSON.stringify({ ...form, column_key: addTargetColumn || undefined }),
+      });
+      const json = await res.json();
+      if (json?.success) {
+        setClients((prev) => [{ ...json.data, tags: json.data.tags ?? [] }, ...prev]);
+        setShowAdd(false);
+      }
+    } finally { setSaving(false); }
+  }, [userId, form, addTargetColumn, headers]);
+
+  const createColumn = useCallback(async () => {
+    if (!userId || !newCol.title.trim()) return;
+    setCreatingCol(true);
+    try {
+      const res = await fetch('/api/crm/columns', { method: 'POST', headers, credentials: 'include', body: JSON.stringify(newCol) });
+      const json = await res.json();
+      if (json?.success) {
+        setColumns((prev) => [...prev, json.data]);
+        setNewCol({ title: '', color: 'gray' });
+        setShowNewCol(false);
+      }
+    } finally { setCreatingCol(false); }
+  }, [userId, newCol, headers]);
+
+  const deleteColumn = useCallback(async (col: Column) => {
+    setMenuColId(null);
+    if (!userId) return;
+    const count = (byColumn.get(col.key) ?? []).length;
+    const msg = count ? `Remover "${col.title}"? Os ${count} cliente(s) voltam para o 1º estágio.` : `Remover a coluna "${col.title}"?`;
+    if (!window.confirm(msg)) return;
+    await fetch(`/api/crm/columns/${col.id}`, { method: 'DELETE', headers: { 'X-User-Id': userId }, credentials: 'include' });
+    load();
+  }, [userId, byColumn, load]);
+
+  const saveColumnTitle = useCallback(async (col: Column) => {
+    const title = editColTitle.trim();
+    setEditColId(null);
+    if (!userId || !title || title === col.title) return;
+    setColumns((prev) => prev.map((c) => (c.id === col.id ? { ...c, title } : c)));
+    await fetch(`/api/crm/columns/${col.id}`, { method: 'PATCH', headers, credentials: 'include', body: JSON.stringify({ title }) });
+  }, [userId, editColTitle, headers]);
+
+  const toggleTag = useCallback(async (client: Client, tag: Tag) => {
+    if (!userId) return;
+    const has = client.tags.some((t) => t.id === tag.id);
+    setClients((prev) => prev.map((c) => {
+      if (c.external_id !== client.external_id) return c;
+      const tags = has
+        ? c.tags.filter((t) => t.id !== tag.id)
+        : [...c.tags, { id: tag.id, label: tag.label, color: tag.color }];
+      // Automação: ao adicionar etiqueta com coluna-alvo, move o card também.
+      const column_key = !has && tag.move_to_column_key ? tag.move_to_column_key : c.column_key;
+      return { ...c, tags, column_key };
     }));
-  };
-
-  // Função para aplicar ordenação em uma lista de leads
-  const applySortToLeads = (leads: Lead[], columnId: string, overrideConfig?: { field: SortField; direction: SortDirection }): Lead[] => {
-    const sortConfig = overrideConfig || columnSorts[columnId];
-    if (!sortConfig) return leads;
-
-    const sorted = [...leads].sort((a, b) => {
-      let valA: number | string;
-      let valB: number | string;
-      let isStringSort = false;
-
-      switch (sortConfig.field) {
-        case 'created_at':
-          valA = new Date(a.created_at || a.createdAt || 0).getTime();
-          valB = new Date(b.created_at || b.createdAt || 0).getTime();
-          break;
-        case 'last_deposit_at':
-          valA = a.last_deposit_at ? new Date(a.last_deposit_at).getTime() : 0;
-          valB = b.last_deposit_at ? new Date(b.last_deposit_at).getTime() : 0;
-          break;
-        case 'last_interaction':
-          valA = (a.last_interaction || a.lastInteractionAt)
-            ? new Date(a.last_interaction || a.lastInteractionAt).getTime()
-            : 0;
-          valB = (b.last_interaction || b.lastInteractionAt)
-            ? new Date(b.last_interaction || b.lastInteractionAt).getTime()
-            : 0;
-          break;
-        case 'total_ganho':
-          valA = a.total_ganho || 0;
-          valB = b.total_ganho || 0;
-          break;
-        case 'total_depositado':
-          valA = a.total_depositado || 0;
-          valB = b.total_depositado || 0;
-          break;
-        case 'total_apostado':
-          valA = a.total_apostado || 0;
-          valB = b.total_apostado || 0;
-          break;
-        case 'total_depositos_count':
-          valA = a.total_depositos_count || 0;
-          valB = b.total_depositos_count || 0;
-          break;
-        case 'stars':
-          valA = a.stars ?? a.aposta_estrelas ?? 0;
-          valB = b.stars ?? b.aposta_estrelas ?? 0;
-          break;
-        case 'interactions':
-          valA = a.interactions ?? 0;
-          valB = b.interactions ?? 0;
-          break;
-        case 'name':
-          valA = (a.name || '').toLowerCase().trim();
-          valB = (b.name || '').toLowerCase().trim();
-          isStringSort = true;
-          break;
-        case 'total_afiliate':
-          valA = a.total_afiliate ?? 0;
-          valB = b.total_afiliate ?? 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (isStringSort) {
-        const cmp = String(valA).localeCompare(String(valB));
-        return sortConfig.direction === 'asc' ? cmp : -cmp;
-      }
-
-      const numA = Number(valA);
-      const numB = Number(valB);
-      if (sortConfig.direction === 'asc') {
-        return numA - numB;
-      }
-      return numB - numA;
-    });
-
-    return sorted;
-  };
-
-  // Aplica filtros locais e monta colunas/métricas (sem chamar API)
-  const { columns, metrics: derivedMetrics, filteredLeadsForCsv, crmCsvColumnLabels } = useMemo(() => {
-    let formattedLeads: Lead[] = [...rawLeads];
-
-    // Filtro: apenas leads em possível transferência (90+ dias sem depósito)
-    if (filters.possivelTransferencia) {
-      const value = typeof filters.possivelTransferencia === 'object' ? filters.possivelTransferencia.value : filters.possivelTransferencia;
-      if (value === 'only') {
-        formattedLeads = formattedLeads.filter(l => isLeadPast90DaysInactivity(l));
-      }
-    }
-
-    // Filtro de Afiliado
-    if (filters.affiliate) {
-      const affiliateValue = typeof filters.affiliate === 'object' ? filters.affiliate.value : filters.affiliate;
-      if (affiliateValue === 'yes') {
-        formattedLeads = formattedLeads.filter(l => l.is_affiliate === true);
-      } else if (affiliateValue === 'no') {
-        formattedLeads = formattedLeads.filter(l => !l.is_affiliate);
-      }
-    }
-
-    // Filtro de Score/Estrelas
-    if (filters.stars) {
-      const starsValue = typeof filters.stars === 'object' ? filters.stars.value : filters.stars;
-      formattedLeads = formattedLeads.filter(l => l.stars === parseInt(starsValue));
-    }
-
-    // Filtro de Valor
-    if (filters.value) {
-      const valueFilter = typeof filters.value === 'object' ? filters.value.value : filters.value;
-      formattedLeads = formattedLeads.filter(l => {
-        const val = l.total_depositado || 0;
-        if (typeof valueFilter === 'object' && valueFilter.type === 'custom') {
-          const min = valueFilter.min !== null && valueFilter.min !== undefined ? parseFloat(valueFilter.min) : null;
-          const max = valueFilter.max !== null && valueFilter.max !== undefined ? parseFloat(valueFilter.max) : null;
-          if (min !== null && max !== null) return val >= min && val <= max;
-          if (min !== null) return val >= min;
-          if (max !== null) return val <= max;
-          return true;
-        }
-        if (valueFilter === 'none') return val === 0;
-        if (valueFilter === 'low') return val > 0 && val < 10;
-        if (valueFilter === 'medium') return val >= 10 && val < 100;
-        if (valueFilter === 'high') return val >= 100 && val < 500;
-        if (valueFilter === 'high_premium') return val >= 500 && val < 1000;
-        if (valueFilter === 'ultra') return val >= 1000;
-        return true;
-      });
-    }
-
-    // Filtro de Valor para próxima estrela
-    if (filters.valueNextStar) {
-      const nextStarFilter = typeof filters.valueNextStar === 'object' ? filters.valueNextStar.value : filters.valueNextStar;
-      formattedLeads = formattedLeads.filter(l => {
-        const missing = getMissingForNextStar(l.aposta_estrelas ?? 0);
-        if (nextStarFilter === 'none') return missing === null;
-        if (missing === null) return false;
-        if (typeof nextStarFilter === 'object' && nextStarFilter.type === 'custom') {
-          const min = nextStarFilter.min != null ? parseFloat(String(nextStarFilter.min)) : null;
-          const max = nextStarFilter.max != null ? parseFloat(String(nextStarFilter.max)) : null;
-          if (min !== null && max !== null) return missing >= min && missing <= max;
-          if (min !== null) return missing >= min;
-          if (max !== null) return missing <= max;
-          return true;
-        }
-        if (nextStarFilter === 'low') return missing > 0 && missing < 50;
-        if (nextStarFilter === 'medium') return missing >= 50 && missing < 200;
-        if (nextStarFilter === 'high') return missing >= 200 && missing < 500;
-        if (nextStarFilter === 'ultra') return missing >= 500;
-        return true;
-      });
-    }
-
-    // Filtro de Data do Último Depósito
-    if (filters.lastDepositDate) {
-      const daysFilter = typeof filters.lastDepositDate === 'object' ? filters.lastDepositDate.value : filters.lastDepositDate;
-      if (daysFilter) {
-        const now = new Date();
-        now.setHours(23, 59, 59, 999);
-        let startDate: Date;
-        let endDate: Date;
-        if (daysFilter === 'hoje') {
-          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-          startDate = new Date(today);
-          startDate.setHours(0, 0, 0, 0);
-          endDate = new Date(today);
-          endDate.setHours(23, 59, 59, 999);
-        } else {
-          const days = parseInt(daysFilter);
-          if (days === 1) {
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 1);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 1);
-            endDate.setHours(23, 59, 59, 999);
-          } else if (days === 2) {
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 5);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 2);
-            endDate.setHours(23, 59, 59, 999);
-          } else if (days === 5) {
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 10);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 5);
-            endDate.setHours(23, 59, 59, 999);
-          } else if (days === 10) {
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 15);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 10);
-            endDate.setHours(23, 59, 59, 999);
-          } else if (days === 15) {
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 30);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 15);
-            endDate.setHours(23, 59, 59, 999);
-          } else if (days === 30) {
-            startDate = new Date(0);
-            endDate = new Date(now);
-            endDate.setDate(now.getDate() - 30);
-            endDate.setHours(23, 59, 59, 999);
-          } else {
-            startDate = new Date(0);
-            endDate = new Date(now);
-          }
-        }
-        formattedLeads = formattedLeads.filter(l => {
-          if (!l.last_deposit_at) return false;
-          const depositDate = new Date(l.last_deposit_at);
-          if (daysFilter === 'hoje') {
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const deposit = new Date(depositDate.getFullYear(), depositDate.getMonth(), depositDate.getDate());
-            return today.getTime() === deposit.getTime();
-          }
-          return depositDate >= startDate && depositDate <= endDate;
-        });
-      }
-    }
-
-    // Filtro de Temperatura
-    if (filters.temperature) {
-      const tempFilter = typeof filters.temperature === 'object' ? filters.temperature.value : filters.temperature;
-      if (tempFilter) {
-        formattedLeads = formattedLeads.filter(l =>
-          (l.temperature || '').toLowerCase() === tempFilter.toLowerCase()
-        );
-      }
-    }
-
-    // Filtro de Classificação
-    if (filters.classification) {
-      const classFilter = typeof filters.classification === 'object' ? filters.classification.value : filters.classification;
-      if (classFilter) {
-        formattedLeads = formattedLeads.filter(l => {
-          const isHighValue = (l.total_depositado || 0) >= 100;
-          const isVIP = (l.total_depositos_count || 0) >= 3;
-          const isOpportunity = (l.total_depositos_count || 0) === 2;
-          const isAlert = l.status === 'deposito_sem_aposta' || l.status === 'deposito_sem_jogo';
-          if (classFilter === 'high_value') return isHighValue;
-          if (classFilter === 'vip') return isVIP;
-          if (classFilter === 'oportunidade') return isOpportunity;
-          if (classFilter === 'alerta') return isAlert;
-          return false;
-        });
-      }
-    }
-
-    // Filtro de Tags (Com etiquetas / Sem etiquetas / etiqueta específica)
-    if (filters.tags) {
-      const tagValue = typeof filters.tags === 'object' ? filters.tags.value : filters.tags;
-      if (tagValue === '__has_any') {
-        formattedLeads = formattedLeads.filter(l => (l.tags || []).length > 0 || l.has_any_tag_association === true);
-      } else if (tagValue === '__none') {
-        formattedLeads = formattedLeads.filter(l => (l.tags || []).length === 0 && l.has_any_tag_association !== true);
-      } else if (tagValue) {
-        formattedLeads = formattedLeads.filter(l =>
-          (l.tags || []).some((t: { id: string }) => t.id === tagValue)
-        );
-      }
-    }
-
-    // Filtro de Busca
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      formattedLeads = formattedLeads.filter(l =>
-        l.name.toLowerCase().includes(searchLower) ||
-        l.email.toLowerCase().includes(searchLower) ||
-        l.phone.includes(searchTerm)
-      );
-    }
-
-    formattedLeads.sort((a, b) => (b.total_ganho || 0) - (a.total_ganho || 0));
-
-    const totalLeads = formattedLeads.length;
-    const totalDeposited = formattedLeads.reduce((sum, l) => sum + (l.total_depositado || 0), 0);
-    const activeLeads = formattedLeads.filter(l =>
-      l.status === 'ativo' || (l.total_depositos_count || 0) >= 2
-    ).length;
-    const conversionRate = totalLeads > 0 ? (activeLeads / totalLeads) * 100 : 0;
-
-    // Uma única passagem para distribuir leads nas colunas (evita 11+ .filter() sobre a lista)
-    const colLeads: Record<string, Lead[]> = {
-      novo: [], contactados: [], deposito_sem_aposta: [], saque_disponivel: [], deposito_1x: [],
-      deposito_2x: [], deposito_3x: [], deposito_5x: [], deposito_10x: [], ativo: [], possivel_transferencia: [],
-    };
-    for (const l of formattedLeads) {
-      const count = l.total_depositos_count || 0;
-      const depositado = l.total_depositado || 0;
-      const apostado = l.total_apostado || 0;
-      const ok = depositado <= apostado;
-      const availWithdraw = parseFloat(String(l.available_withdraw ?? 0)) || 0;
-      if (count === 0 && l.status !== 'ativo' && !(l.has_interaction === true)) colLeads.novo.push(l);
-      if (l.has_interaction === true && count === 0) colLeads.contactados.push(l);
-      if (depositado > apostado || (l.balance ?? 0) > 0) colLeads.deposito_sem_aposta.push(l);
-      if (availWithdraw > 0) colLeads.saque_disponivel.push(l);
-      if (count === 1 && ok) colLeads.deposito_1x.push(l);
-      if (count === 2 && ok) colLeads.deposito_2x.push(l);
-      if (count >= 3 && count < 5 && ok) colLeads.deposito_3x.push(l);
-      if (count >= 5 && count < 10 && ok) colLeads.deposito_5x.push(l);
-      if (count >= 10 && ok) colLeads.deposito_10x.push(l);
-      if (l.status === 'ativo') colLeads.ativo.push(l);
-      if (isLeadPast90DaysInactivity(l)) colLeads.possivel_transferencia.push(l);
-    }
-    colLeads.contactados.sort((a, b) => {
-      const tA = a.lastInteractionAt ? new Date(a.lastInteractionAt).getTime() : (a.last_interaction ? new Date(a.last_interaction).getTime() : 0);
-      const tB = b.lastInteractionAt ? new Date(b.lastInteractionAt).getTime() : (b.last_interaction ? new Date(b.last_interaction).getTime() : 0);
-      return tA - tB;
-    });
-
-    const crmCsvColumnLabels = buildCrmColumnLabelsMap(colLeads, KANBAN_CSV_COLUMN_TITLES);
-    const filteredLeadsForCsv = filterLeadsAssignedToCrmColumns(formattedLeads, crmCsvColumnLabels);
-
-    const baseColumns: Column[] = [
-      { id: 'novo', title: '👥 Clientes cadastrados', color: 'gray', leads: colLeads.novo, totalLeads: colLeads.novo.length },
-      { id: 'contactados', title: '📞 Clientes Contactados', color: 'blue', leads: colLeads.contactados, totalLeads: colLeads.contactados.length },
-      { id: 'deposito_sem_aposta', title: '💰 Com Saldo Disponível', color: 'red', leads: colLeads.deposito_sem_aposta, totalLeads: colLeads.deposito_sem_aposta.length },
-      { id: 'saque_disponivel', title: '💸 Saque Disponível', color: 'teal', leads: colLeads.saque_disponivel, totalLeads: colLeads.saque_disponivel.length },
-      { id: 'deposito_1x', title: '💰 1º Depósito', color: 'emerald', leads: colLeads.deposito_1x, totalLeads: colLeads.deposito_1x.length },
-      { id: 'deposito_2x', title: '🔥 2º Depósito', color: 'orange', leads: colLeads.deposito_2x, totalLeads: colLeads.deposito_2x.length },
-      { id: 'deposito_3x', title: '💎 DEPOSITOU 3X', color: 'indigo', leads: colLeads.deposito_3x, totalLeads: colLeads.deposito_3x.length },
-      { id: 'deposito_5x', title: '⭐ DEPOSITOU 5X', color: 'amber', leads: colLeads.deposito_5x, totalLeads: colLeads.deposito_5x.length },
-      { id: 'deposito_10x', title: '👑 DEPOSITOU 10X+', color: 'rose', leads: colLeads.deposito_10x, totalLeads: colLeads.deposito_10x.length },
-      { id: 'ativo', title: '✅ CLIENTE ATIVO', color: 'purple', leads: colLeads.ativo, totalLeads: colLeads.ativo.length },
-      { id: 'possivel_transferencia', title: '🔄 Possível transferência', color: 'amber', leads: colLeads.possivel_transferencia, totalLeads: colLeads.possivel_transferencia.length },
-    ];
-
-    // Aplica ordenação e limita leads exibidos (padrão 100); contador mostra exibidos/total (ex: 100/700)
-    const sortedColumns = baseColumns.map(col => {
-      const sortedLeads = applySortToLeads(col.leads, col.id);
-      const currentLimit = leadsPerColumn[col.id] ?? 100;
-      return {
-        ...col,
-        leads: sortedLeads.slice(0, currentLimit),
-        totalLeads: col.totalLeads ?? sortedLeads.length
-      };
-    });
-
-    return {
-      columns: sortedColumns,
-      metrics: {
-        total_leads: totalLeads,
-        total_deposited: totalDeposited,
-        active_leads: activeLeads,
-        conversion_rate: conversionRate
-      },
-      filteredLeadsForCsv,
-      crmCsvColumnLabels,
-    };
-  }, [rawLeads, filters, searchTerm, leadsPerColumn, columnSorts]);
-
-  // Usa métricas derivadas (ou null durante loading inicial)
-  const metrics = loading && rawLeads.length === 0 ? null : derivedMetrics;
-
-  const onDragStart = (e: React.DragEvent, leadId: string | number) => {
-    e.dataTransfer.setData('leadId', leadId.toString());
-  };
-
-  const handleStarsChange = (leadId: string | number, newStars: number) => {
-    setRawLeads(prev =>
-      prev.map(l => (l.id === leadId ? { ...l, stars: newStars } : l))
-    );
-    console.log(`Lead ${leadId} atualizado para ${newStars} estrelas`);
-  };
-
-  const handleTagAdded = (leadId: string | number, addedTag: { id: string; label: string; color: string }) => {
-    setRawLeads(prev =>
-      prev.map(l => {
-        if (String(l.id) !== String(leadId)) return l;
-        const already = (l.tags || []).some(t => t.id === addedTag.id);
-        if (already) return l;
-        return { ...l, tags: [...(l.tags || []), addedTag], has_any_tag_association: true };
-      })
-    );
-  };
-
-  const handleTagRemoved = (leadId: string | number, tagId: string) => {
-    setRawLeads(prev =>
-      prev.map(l => (l.id === leadId ? { ...l, tags: (l.tags || []).filter(t => t.id !== tagId) } : l))
-    );
-  };
-
-  const onDrop = (e: React.DragEvent, newStatus: string) => {
-    e.preventDefault();
-    // Coluna "Possível transferência" é apenas vista (90d sem depósito); não altera status do lead
-    if (newStatus === 'possivel_transferencia') return;
-    const leadId = e.dataTransfer.getData('leadId');
-    setRawLeads(prev =>
-      prev.map(l =>
-        l.id.toString() === leadId ? { ...l, status: newStatus as Lead['status'] } : l
-      )
-    );
-    console.log(`Lead ${leadId} movido para ${newStatus}`);
-  };
-
-  const handleFilterChange = (type: string, value: any) => {
-    // Reseta o limite de leads por coluna quando muda qualquer filtro
-    setLeadsPerColumn({});
-    
-    if (type === 'clear') {
-      // Ao limpar, volta para o padrão da página (Todo o Período)
-      setFilters({
-        date: {
-          value: 'todos',
-          label: 'Todo o Período'
-        }
-      });
-    } else if (type === 'date' && value === null) {
-      // Se remover apenas o filtro de data, volta para o padrão
-      setFilters(prev => ({
-        ...prev,
-        date: {
-          value: 'todos',
-          label: 'Todo o Período'
-        }
-      }));
+    const owner = client.owner_user_id ?? userId;
+    if (has) {
+      const qs = new URLSearchParams({ leadId: client.external_id, tagId: tag.id, targetUserId: owner });
+      await fetch(`/api/crm/leads/tags?${qs.toString()}`, { method: 'DELETE', headers: { 'X-User-Id': userId }, credentials: 'include' });
     } else {
-      setFilters(prev => ({ ...prev, [type]: value }));
+      await fetch('/api/crm/leads/tags', { method: 'POST', headers, credentials: 'include',
+        body: JSON.stringify({ leadId: client.external_id, tagId: tag.id, targetUserId: owner }) });
     }
-  };
+  }, [userId, headers]);
 
-  // Full-page spinner apenas durante checagem de auth; depois a página carrega com filtro de bancas em load até as bancas virem
-  if (checking) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
-        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-[#404040] text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955] mx-auto mb-4"></div>
-          <p className="text-gray-700 dark:text-gray-200 font-medium">Carregando CRM...</p>
-        </div>
-      </div>
-    );
-  }
+  const parsedImport = useMemo(() => parseCrmImportContacts(importText), [importText]);
+  const doImport = useCallback(async () => {
+    if (!userId || parsedImport.length === 0) return;
+    setImporting(true);
+    try {
+      const res = await fetch('/api/crm/import', {
+        method: 'POST', headers, credentials: 'include',
+        body: JSON.stringify({ column_key: importColumn || columns[0]?.key, contacts: parsedImport }),
+      });
+      const json = await res.json();
+      if (json?.success) { setShowImport(false); setImportText(''); load(); }
+    } finally { setImporting(false); }
+  }, [userId, parsedImport, importColumn, columns, headers, load]);
 
-  const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
-  };
-
-  const handleDownloadCsv = () => {
-    const prefix = isComboAvulsoCrm ? 'crm-avulsos' : 'crm-kanban';
-    downloadLeadsCsv(filteredLeadsForCsv, {
-      filenamePrefix: prefix,
-      includeTransferredFields: false,
-      crmColumnLabelsByLeadId: crmCsvColumnLabels,
-      filenameBancaLabel: csvFilenameBancaLabel,
-      filenameConsultantFirstName: csvConsultantFirstName || undefined,
-    });
-    showToast(
-      filteredLeadsForCsv.length === 0
-        ? 'CSV gerado sem linhas (nenhum lead com os filtros atuais).'
-        : `CSV com ${filteredLeadsForCsv.length} lead(s) baixado.`,
-      'success'
-    );
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImportText(String(reader.result ?? ''));
+      setImportFileName(file.name);
+    };
+    reader.readAsText(file, 'UTF-8');
+    e.target.value = '';
   };
 
   return (
-    <Layout onSignOut={handleSignOut}>
-      <div className="h-[calc(100vh-30px)] lg:h-[calc(100vh--255px)] flex flex-col overflow-scroll lg:overflow-hidden max-w-full">
-        {/* Header Section */}
-        <div className="flex-none pb-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-            <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-emerald-100 rounded-xl hidden xs:block">
-                <KanbanIcon className="w-5 h-5 md:w-6 md:h-6 text-[#8CD955]" />
-              </div>
-              <div>
-                <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white leading-tight">
-                  {consultorInfo
-                    ? isComboAvulsoCrm
-                      ? `CRM Avulsos: ${consultorInfo.name}`
-                      : `CRM: ${consultorInfo.name}`
-                    : isComboAvulsoCrm
-                      ? 'CRM Avulsos'
-                      : 'Meu Pipeline'}
-                </h1>
-                <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400 font-medium line-clamp-1">
-                  {consultorInfo
-                    ? isComboAvulsoCrm
-                      ? `Leads de ${consultorInfo.email} · somente e-mail ${COMBO_AVULSO_EMAIL_MARKER}`
-                      : `Leads de ${consultorInfo.email}`
-                    : isComboAvulsoCrm
-                      ? `Somente clientes com e-mail ${COMBO_AVULSO_EMAIL_MARKER}`
-                      : 'Gerencie seus leads e maximize conversões'}
-                </p>
-              </div>
-            </div>
-            {viewers.length > 0 && (
-              <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-lg">
-                <Eye className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                <p className="text-xs font-medium text-amber-800 dark:text-amber-200">
-                  {viewers.length === 1
-                    ? `${viewers[0].name} está visualizando seu CRM`
-                    : `${viewers.map(v => v.name).join(', ')} estão visualizando seu CRM`}
-                </p>
-              </div>
-            )}
+    <Layout>
+      <div className="flex h-[calc(100vh-64px)] flex-col p-4 sm:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-white">CRM — Clientes</h1>
+            <p className="text-sm text-gray-400">
+              {canViewAll
+                ? 'Visão de todos os clientes por atendente. Use o filtro para focar em um atendente.'
+                : 'Arraste os clientes entre os estágios do funil.'}
+            </p>
           </div>
-            
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 md:pb-0">
-              {consultorInfo && (
-                <button
-                  onClick={() => setShowStatusModal(true)}
-                  className="whitespace-nowrap px-2.5 py-1.5 bg-amber-50 border border-amber-100 text-amber-700 rounded-lg text-[10px] font-bold flex items-center gap-1.5 flex-shrink-0 hover:bg-amber-100 transition-colors cursor-pointer"
+          <div className="flex flex-wrap items-center gap-2">
+            {canViewAll && attendants.length > 0 && (
+              <label className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-gray-200">
+                <span className="text-gray-400">Atendente</span>
+                <select
+                  value={attendantFilter}
+                  onChange={(e) => setAttendantFilter(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-sm text-white outline-none focus:border-[#E86A24]"
                 >
-                  <Eye className="w-3 h-3" />
-                  <span className="hidden xs:inline">Visualização</span>
-                </button>
-              )}
-              {canExportLeadsCsv && (
-                <button
-                  type="button"
-                  onClick={handleDownloadCsv}
-                  disabled={loading || filterLoading}
-                  title={
-                    loading || filterLoading
-                      ? 'Aguarde o carregamento dos leads'
-                      : 'Baixar CSV com os leads visíveis (filtros e busca aplicados)'
-                  }
-                  className="whitespace-nowrap flex items-center gap-2 bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold transition-all shadow-md flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Baixar CSV</span>
-                </button>
-              )}
-              <button 
-                onClick={() => setShowStatusModal(true)}
-                className="whitespace-nowrap flex items-center gap-2 bg-[#8CD955] text-white px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold hover:bg-[#7BC84A] transition-all shadow-md shadow-gray-100 flex-shrink-0"
-                title="Ver informações sobre status de temperatura dos leads"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Informações <span className="hidden xs:inline">de Status</span></span>
-              </button>
-              <button
-                onClick={() => setShowBonusTypeModal(true)}
-                disabled={loading || filterLoading}
-                className="whitespace-nowrap flex items-center gap-2 bg-orange-500 hover:bg-orange-600 border border-orange-600 px-3 py-2 rounded-xl text-[11px] md:text-sm font-bold text-white shadow-sm flex-shrink-0 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-orange-500 disabled:hover:border-orange-600"
-                title={loading || filterLoading ? 'Aguarde o carregamento dos clientes' : 'Escolher tipo de bônus para enviar'}
-              >
-                <Gift className="w-3.5 h-3.5" />
-                <span>Enviar Bonus</span>
-              </button>
-            </div>
-          </div>
-
-          <CrmSubNav />
-
-          {/* Quick Metrics Header - Sempre mostra os cards; overlay quando leads estão carregando */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 animate-in fade-in slide-in-from-top-2 duration-500 relative">
-            {/* Overlay nas caixas de cima quando requisição de leads está em andamento (inicial ou ao mudar filtro) */}
-            {(loading || filterLoading) && (
-              <div className="absolute inset-0 bg-white/60 dark:bg-[#1a1a1a]/80 backdrop-blur-[2px] rounded-xl z-10 flex items-center justify-center">
-                <div className="flex items-center gap-2 text-[#8CD955]">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span className="text-xs font-semibold">Carregando...</span>
-                </div>
-              </div>
+                  <option value="all">Todos</option>
+                  {attendants.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
-            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Leads</p>
-              <p className="text-lg font-bold text-gray-800 dark:text-white">{metrics?.total_leads || 0}</p>
-            </div>
-            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Depositado</p>
-              <p className="text-lg font-bold text-[#8CD955]">{formatCurrency(metrics?.total_deposited || 0)}</p>
-            </div>
-            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Clientes Ativos</p>
-              <p className="text-lg font-bold text-purple-600 dark:text-purple-400">{metrics?.active_leads || 0}</p>
-            </div>
-            <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-xl border border-gray-100 dark:border-[#404040] shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Conversão</p>
-              <p className="text-lg font-bold text-blue-600 dark:text-blue-400">{(metrics?.conversion_rate || 0).toFixed(1)}%</p>
-            </div>
-          </div>
-
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-2 text-sm animate-in fade-in slide-in-from-top-1">
-              <AlertCircle className="w-4 h-4" /> {error}
-            </div>
-          )}
-
-          {backgroundLoading && (
-            <div className="mb-4 py-3 px-4 bg-[#8CD955]/15 dark:bg-[#8CD955]/10 border-2 border-[#8CD955]/50 text-gray-800 dark:text-gray-200 rounded-xl flex items-center gap-3 text-sm font-medium animate-in fade-in shadow-sm">
-              <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] flex-shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold">Carregando leads em segundo plano</p>
-                {backgroundProgress && backgroundProgress.totalBancas > 0 ? (
-                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">
-                    Banca {backgroundProgress.currentBanca} de {backgroundProgress.totalBancas}
-                    {backgroundProgress.currentPage > 1 ? ` · Página ${backgroundProgress.currentPage}` : ''}
-                  </p>
-                ) : (
-                  <p className="text-xs text-gray-600 dark:text-gray-400 font-normal mt-0.5">Você já pode usar o quadro; novos leads aparecerão automaticamente.</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Mensagem quando não há leads para o dia atual */}
-          {!loading && !filterLoading && !error && columns.every(col => col.leads.length === 0) && filters.date && (
-            <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-200 rounded-xl flex items-center gap-3 text-sm animate-in fade-in slide-in-from-top-1">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              <div>
-                <p className="font-semibold">Nenhum cadastro encontrado</p>
-                <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-                  {filters.date.value === 'diario' 
-                    ? 'Não há leads cadastrados hoje (data de São Paulo).'
-                    : 'Não há leads cadastrados no período selecionado.'}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Filters - Container com z-index alto e sem overflow-x para não cortar dropdowns */}
-          <div className="relative z-30">
-            <FilterBar
-              onSearch={handleSearch}
-              onFilterChange={handleFilterChange}
-              initialDateFilter={filters.date}
-              onBancasLoaded={handleBancasLoaded}
-              targetUserId={targetUserId || undefined}
-              transferredFilter="no"
-            />
-          </div>
-        </div>
-
-        {/* Kanban Board Area */}
-        <div className="flex-1 overflow-x-auto overflow-y-hidden pb-4 custom-scrollbar -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 snap-x snap-mandatory relative min-h-[500px]">
-          {/* Overlay nas colunas quando requisição de leads está em andamento (inicial ou ao mudar filtro) */}
-          {(loading || filterLoading) && (
-            <div className="absolute inset-0 bg-white/50 dark:bg-[#1a1a1a]/80 backdrop-blur-[1px] rounded-xl z-20 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-2 text-[#8CD955]">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <span className="text-xs font-semibold">Carregando leads...</span>
-              </div>
-            </div>
-          )}
-          <div className="flex gap-4 md:gap-6 items-stretch h-full min-h-[500px]">
-            {columns.map(column => (
-              <div key={column.id} className="w-[calc(100vw-3.5rem)] sm:w-96 h-full min-h-[500px] flex-shrink-0 snap-center">
-                <KanbanColumn
-                  id={column.id}
-                  title={column.title}
-                  count={column.leads.length}
-                  leads={column.leads}
-                  color={column.color}
-                  onStarsChange={handleStarsChange}
-                  onDragStart={onDragStart}
-                  onDrop={onDrop}
-                  targetUserId={targetUserId || undefined}
-                  onTagAdded={handleTagAdded}
-                  onTagRemoved={handleTagRemoved}
-                  onRefresh={() => loadLeads(false)}
-                  selectedBancaUrl={filters.banca ? (typeof filters.banca === 'object' ? filters.banca.value : filters.banca) : undefined}
-                  onOpenSortModal={handleOpenSortModal}
-                  totalLeads={column.totalLeads}
-                  onLoadMore={handleLoadMore}
-                  isLoadingMore={false}
-                />
-              </div>
-            ))}
-            {/* Espaçador final maior no mobile para dar respiro */}
-            <div className="w-6 md:w-2 flex-shrink-0 snap-center" />
-          </div>
-        </div>
-      </div>
-
-      <button className="lg:hidden fixed bottom-20 right-6 w-12 h-12 bg-[#8CD955] text-white rounded-full shadow-2xl flex items-center justify-center z-50 animate-bounce-subtle">
-        <MessageSquare className="w-5 h-5 fill-current" />
-      </button>
-
-      {/* Modal de Ordenação */}
-      {sortingColumnId && (
-        <SortColumnModal
-          isOpen={sortModalOpen}
-          onClose={handleCloseSortModal}
-          columnTitle={columns.find(c => c.id === sortingColumnId)?.title || ''}
-          sortField={sortField}
-          sortDirection={sortDirection}
-          onSortChange={(field, direction) => {
-            setSortField(field);
-            setSortDirection(direction);
-          }}
-          onApply={handleApplySort}
-        />
-      )}
-
-      {/* Modal Informativo de Status de Leads */}
-      {showStatusModal && (
-          <div 
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setShowStatusModal(false)}
-          >
-            <div 
-              className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              onClick={() => {
+                setNewCol({ title: '', color: 'gray' });
+                setShowNewCol(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-gray-200 transition hover:border-[#E86A24]/40 hover:bg-[#E86A24]/10 hover:text-[#E86A24]"
             >
-              {/* Header do Modal */}
-              <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-amber-100 rounded-lg">
-                    <Eye className="w-5 h-5 text-amber-600" />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-800">Status de Temperatura dos Leads</h2>
-                    <p className="text-sm text-gray-500">Entenda cada classificação de lead no sistema</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowStatusModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5 text-gray-500" />
-                </button>
-              </div>
-
-              {/* Conteúdo do Modal */}
-              <div className="p-6 space-y-4">
-                {/* Cold */}
-                <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-blue-100 rounded-lg shrink-0">
-                      <span className="text-2xl">🧊</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-blue-800">Frio (Cold)</h3>
-                        <span className="px-2 py-0.5 bg-blue-200 text-blue-800 text-xs font-bold rounded">cold</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead cadastrado há <strong>30 dias ou menos</strong> e que <strong>nunca realizou um depósito</strong>. 
-                        Este é um lead novo que ainda não demonstrou interesse financeiro no produto ou serviço.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Very Cold */}
-                <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-indigo-100 rounded-lg shrink-0">
-                      <span className="text-2xl">❄️</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-indigo-800">Muito Frio (Very Cold)</h3>
-                        <span className="px-2 py-0.5 bg-indigo-200 text-indigo-800 text-xs font-bold rounded">very_cold</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead cadastrado há <strong>mais de 30 dias</strong> e que <strong>nunca realizou um depósito</strong>. 
-                        Este lead está há bastante tempo no sistema sem demonstrar interesse em investir, 
-                        necessitando de uma abordagem mais direcionada para reativá-lo.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Active */}
-                <div className="bg-green-50 border-2 border-green-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-green-100 rounded-lg shrink-0">
-                      <span className="text-2xl">🔥</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-green-800">Ativo (Active)</h3>
-                        <span className="px-2 py-0.5 bg-green-200 text-green-800 text-xs font-bold rounded">active</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que <strong>já realizou depósitos</strong>, possui <strong>menos de 3 depósitos</strong> no total, 
-                        e o <strong>último depósito foi há 30 dias ou menos</strong>. Este lead demonstra interesse ativo 
-                        e está engajado recentemente com o produto.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Hot */}
-                <div className="bg-red-50 border-2 border-red-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-red-100 rounded-lg shrink-0">
-                      <span className="text-2xl">🌶️</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-red-800">Quente (Hot)</h3>
-                        <span className="px-2 py-0.5 bg-red-200 text-red-800 text-xs font-bold rounded">hot</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que possui <strong>3 ou mais depósitos</strong> realizados. Este é um lead de alto valor 
-                        que demonstrou comprometimento consistente com o produto, sendo considerado um cliente 
-                        recorrente e valioso.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Cooling */}
-                <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-orange-100 rounded-lg shrink-0">
-                      <span className="text-2xl">🌡️</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-orange-800">Esfriando (Cooling)</h3>
-                        <span className="px-2 py-0.5 bg-orange-200 text-orange-800 text-xs font-bold rounded">cooling</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que <strong>já realizou depósitos</strong>, mas o <strong>último depósito foi há mais de 30 dias</strong>. 
-                        Este lead estava ativo anteriormente, mas está perdendo engajamento. Requer atenção para 
-                        reativar o interesse e evitar que se torne inativo.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Divisor */}
-                <div className="my-6 border-t border-gray-200"></div>
-
-                {/* Seção de Classificações de Leads */}
-                <div className="mb-4">
-                  <h3 className="text-lg font-bold text-gray-800 mb-4">Classificações Visuais dos Leads</h3>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Os leads também são classificados visualmente no sistema com cores e ícones especiais:
-                  </p>
-                </div>
-
-                {/* Alto Valor */}
-                <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-amber-100 rounded-lg shrink-0">
-                      <span className="text-2xl">💰</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-amber-800">Alto Valor (High Value)</h3>
-                        <span className="px-2 py-0.5 bg-amber-200 text-amber-800 text-xs font-bold rounded">Borda Amarela</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que possui <strong>total depositado de R$ 100 ou mais</strong>. Este lead demonstra 
-                        capacidade financeira significativa e é considerado um cliente de alto valor para o negócio.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* VIP */}
-                <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-indigo-100 rounded-lg shrink-0">
-                      <span className="text-2xl">💎</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-indigo-800">VIP</h3>
-                        <span className="px-2 py-0.5 bg-indigo-200 text-indigo-800 text-xs font-bold rounded">Borda Roxa</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que possui <strong>3 ou mais depósitos</strong> realizados. Este é um cliente recorrente 
-                        e fiel, demonstrando alto engajamento e valor para o negócio. Recebe tratamento especial no sistema.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Oportunidade */}
-                <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-orange-100 rounded-lg shrink-0">
-                      <span className="text-2xl">🎯</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-orange-800">Oportunidade</h3>
-                        <span className="px-2 py-0.5 bg-orange-200 text-orange-800 text-xs font-bold rounded">Borda Laranja</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead que possui <strong>exatamente 2 depósitos</strong> realizados. Este lead está em um momento 
-                        crucial de conversão, mostrando interesse crescente. Requer atenção especial para convertê-lo em 
-                        um cliente recorrente (VIP).
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Alerta */}
-                <div className="bg-red-50 border-2 border-red-200 rounded-xl p-5 hover:shadow-md transition-shadow">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-red-100 rounded-lg shrink-0">
-                      <span className="text-2xl">⚠️</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="text-lg font-bold text-red-800">Alerta</h3>
-                        <span className="px-2 py-0.5 bg-red-200 text-red-800 text-xs font-bold rounded">Borda Vermelha</span>
-                      </div>
-                      <p className="text-gray-700 leading-relaxed">
-                        Lead com status <strong>"Depósito sem aposta"</strong> ou <strong>"Depósito sem jogo"</strong>. 
-                        Este lead depositou dinheiro mas não utilizou o valor para apostar ou jogar. Requer ação imediata 
-                        para reativar o engajamento e evitar churn.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Footer do Modal */}
-              <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-2xl">
-                <button
-                  onClick={() => setShowStatusModal(false)}
-                  className="w-full py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold rounded-xl transition-colors shadow-md"
-                >
-                  Entendi
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-      {/* Modal Seleção tipo de bônus */}
-      {showBonusTypeModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setShowBonusTypeModal(false)}
-        >
-          <div
-            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#404040]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between rounded-t-2xl">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
-                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                </div>
-                <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Bonus</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowBonusTypeModal(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <p className="px-6 pt-3 text-xs text-gray-500 dark:text-gray-400">Selecione o tipo de bônus que deseja enviar:</p>
-            <div className="p-4 space-y-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowBonusTypeModal(false);
-                  setShowSpinModal(true);
-                }}
-                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
-              >
-                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
-                  <Gift className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                </div>
-                <span className="font-semibold text-gray-800 dark:text-white">Giros</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowBonusTypeModal(false);
-                  setShowTicketModal(true);
-                }}
-                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-200 dark:border-[#404040] hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors text-left"
-              >
-                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
-                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                </div>
-                <span className="font-semibold text-gray-800 dark:text-white">Rifa</span>
-              </button>
-              <button
-                type="button"
-                disabled
-                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
-              >
-                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
-                  <Sparkles className="w-5 h-5 text-gray-400" />
-                </div>
-                <div className="flex-1">
-                  <span className="font-semibold text-gray-600 dark:text-gray-400">Raspadinha</span>
-                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
-                </div>
-              </button>
-              <button
-                type="button"
-                disabled
-                className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-gray-100 dark:border-[#353535] bg-gray-50 dark:bg-[#252525] cursor-not-allowed opacity-75 text-left"
-              >
-                <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
-                  <Package className="w-5 h-5 text-gray-400" />
-                </div>
-                <div className="flex-1">
-                  <span className="font-semibold text-gray-600 dark:text-gray-400">Caixa Surpresa</span>
-                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-500">(Em breve)</span>
-                </div>
-              </button>
-            </div>
+              <Columns3 className="h-4 w-4" /> Nova coluna
+            </button>
+            <button onClick={() => { setImportColumn(columns[0]?.key ?? ''); setImportText(''); setImportFileName(''); setShowImport(true); }}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#E86A24]/40 bg-[#E86A24]/10 px-4 py-2 text-sm font-bold text-[#E86A24] transition hover:bg-[#E86A24]/20">
+              <Upload className="h-4 w-4" /> Importar
+            </button>
+            <button onClick={() => openAddClient('')}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#E86A24] px-4 py-2 text-sm font-bold text-white shadow-md transition hover:bg-[#D95E1B]">
+              <Plus className="h-4 w-4" /> Novo cliente
+            </button>
           </div>
         </div>
-      )}
 
-      {/* Modal Enviar Giros (Roleta) */}
-      {showSpinModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => !spinSending && setShowSpinModal(false)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 rounded-lg">
-                  <Gift className="w-5 h-5 text-amber-600" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800">Enviar Giros (Roleta)</h2>
-                  <p className="text-xs text-gray-500">Selecione o lead e a quantidade de giros</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => !spinSending && setShowSpinModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
+        <CrmSubNav />
 
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Pesquisar lead</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={spinSearchInputValue}
-                    onChange={(e) => setSpinSearchInputValue(e.target.value)}
-                    onBlur={() => setSpinSearchTerm(spinSearchInputValue)}
-                    placeholder="Nome ou e-mail... (clique fora para filtrar)"
-                    className="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Leads</label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSpinSelectedLeadIds(new Set(spinFilteredLeads.map(l => String(l.id))))}
-                      className="text-[10px] font-bold text-amber-600 hover:text-amber-700"
-                    >
-                      Selecionar todos
-                    </button>
-                    <span className="text-gray-300">|</span>
-                    <button
-                      type="button"
-                      onClick={() => setSpinSelectedLeadIds(new Set())}
-                      className="text-[10px] font-bold text-gray-500 hover:text-gray-700"
-                    >
-                      Desmarcar
-                    </button>
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center text-gray-400"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-stretch gap-4 overflow-x-auto pb-4">
+            {columns.map((col) => {
+              const list = byColumn.get(col.key) ?? [];
+              const accent = hexFor(col.color);
+              return (
+                <div key={col.id}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => { if (dragId) moveTo(dragId, col.key); setDragId(null); }}
+                  className="relative flex w-72 shrink-0 flex-col rounded-2xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
+                      {editColId === col.id ? (
+                        <input autoFocus value={editColTitle}
+                          onChange={(e) => setEditColTitle(e.target.value)}
+                          onBlur={() => saveColumnTitle(col)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') saveColumnTitle(col); if (e.key === 'Escape') setEditColId(null); }}
+                          className="w-full rounded-md border border-[#E86A24]/50 bg-black/40 px-1.5 py-0.5 text-sm font-bold text-white outline-none" />
+                      ) : (
+                        <span className="truncate text-sm font-bold text-gray-100">{col.title}</span>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-gray-300">{list.length}</span>
+                      <button onClick={() => setMenuColId(menuColId === col.id ? null : col.id)}
+                        className="rounded p-1 text-gray-400 transition hover:bg-white/10 hover:text-white" title="Opções">
+                        <MoreVertical className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="bg-gray-50 border border-gray-200 rounded-xl max-h-44 overflow-y-auto">
-                  {spinFilteredLeads.length === 0 ? (
-                    <p className="p-4 text-sm text-gray-500 text-center">Nenhum lead encontrado.</p>
-                  ) : (
-                    <ul className="divide-y divide-gray-100 py-1">
-                      {spinFilteredLeads.map((lead) => {
-                        const idStr = String(lead.id);
-                        const checked = spinSelectedLeadIds.has(idStr);
-                        return (
-                          <li key={idStr}>
-                            <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setSpinSelectedLeadIds(prev => {
-                                    const next = new Set(prev);
-                                    if (next.has(idStr)) next.delete(idStr);
-                                    else next.add(idStr);
-                                    return next;
-                                  });
-                                }}
-                                className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
-                              />
-                              <span className="text-sm text-gray-800 truncate flex-1">
-                                {lead.name || 'Sem nome'}
-                                {lead.email ? (
-                                  <span className="text-gray-500 font-normal"> — {lead.email}</span>
-                                ) : null}
-                              </span>
-                            </label>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-                {spinSelectedLeadIds.size > 0 && (
-                  <p className="mt-1.5 text-xs text-gray-500">
-                    {spinSelectedLeadIds.size} lead(s) selecionado(s)
-                  </p>
-                )}
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Quantidade de giros (por lead)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={spinQuantity}
-                  onChange={(e) => setSpinQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
-                />
-              </div>
-
-              {spinError && (
-                <div className="p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  {spinError}
-                </div>
-              )}
-
-              {/* Mini histórico de giros (apenas quando um único lead está selecionado) */}
-              {spinSelectedLeadIds.size === 1 && spinSelectedLead && (
-                <div>
-                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Histórico de giros enviados (lead selecionado)</h3>
-                  <div className="bg-gray-50 border border-gray-100 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
-                    {spinHistoryLoading ? (
-                      <div className="p-4 flex items-center justify-center gap-2 text-gray-500 text-sm">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Carregando...
+                  {menuColId === col.id && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setMenuColId(null)} />
+                      <div className="absolute right-3 top-11 z-20 w-48 overflow-hidden rounded-xl border border-white/10 bg-[#1c130d] py-1 shadow-xl">
+                        <MenuItem icon={<Pencilish />} label="Editar nome" onClick={() => { setEditColId(col.id); setEditColTitle(col.title); setMenuColId(null); }} />
+                        <MenuItem icon={<UserPlus className="h-4 w-4" />} label="Adicionar cliente" onClick={() => openAddClient(col.key)} />
+                        <MenuItem icon={<Trash2 className="h-4 w-4" />} label="Deletar coluna" danger onClick={() => deleteColumn(col)} />
                       </div>
-                    ) : spinHistory.length === 0 ? (
-                      <p className="p-4 text-sm text-gray-500 text-center">Nenhum giro enviado ainda para este lead.</p>
-                    ) : (
-                      <ul className="divide-y divide-gray-100">
-                        {spinHistory.map((h, i) => (
-                          <li key={i} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                            <span className="font-medium text-gray-800">{h.quantity} giro(s)</span>
-                            <span className="text-gray-500">
-                              {h.date ? new Date(h.date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '-'}
+                    </>
+                  )}
+
+                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                    {list.map((c) => (
+                      <div key={c.external_id} draggable
+                        onDragStart={() => setDragId(c.external_id)}
+                        onDragEnd={() => setDragId(null)}
+                        className="cursor-grab rounded-xl border border-white/10 bg-[#2a2a2a] p-3 shadow-sm transition hover:shadow-md active:cursor-grabbing"
+                        style={{ borderLeft: `3px solid ${accent}` }}>
+                        {canViewAll && c.owner_name && (
+                          <div className="mb-2 inline-flex max-w-full items-center rounded-full bg-[#E86A24]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#E86A24]">
+                            <span className="truncate">{c.owner_name}</span>
+                          </div>
+                        )}
+                        <div className="mb-1 flex items-center gap-2">
+                          <User className="h-4 w-4 shrink-0 text-gray-400" />
+                          <span className="truncate text-sm font-semibold text-white">{c.name}</span>
+                        </div>
+                        {c.phone && <div className="flex items-center gap-2 text-xs text-gray-400"><Phone className="h-3 w-3 shrink-0" /> <span className="truncate">{c.phone}</span></div>}
+                        {c.email && <div className="flex items-center gap-2 text-xs text-gray-400"><Mail className="h-3 w-3 shrink-0" /> <span className="truncate">{c.email}</span></div>}
+
+                        {/* Etiquetas */}
+                        <div className="relative mt-2 flex flex-wrap items-center gap-1">
+                          {c.tags.map((t) => (
+                            <span key={t.id} className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                              style={{ backgroundColor: `${t.color}22`, color: t.color, border: `1px solid ${t.color}55` }}>
+                              {t.label}
                             </span>
-                          </li>
-                        ))}
-                      </ul>
+                          ))}
+                          <button onClick={() => setTagPickerId(tagPickerId === c.external_id ? null : c.external_id)}
+                            className="inline-flex items-center gap-1 rounded-full border border-dashed border-white/20 px-2 py-0.5 text-[11px] text-gray-400 hover:border-[#E86A24]/50 hover:text-[#E86A24]">
+                            <TagIcon className="h-3 w-3" /> {c.tags.length ? '' : 'Etiqueta'}
+                          </button>
+
+                          {tagPickerId === c.external_id && (
+                            <>
+                              <div className="fixed inset-0 z-10" onClick={() => setTagPickerId(null)} />
+                              <div className="absolute left-0 top-7 z-20 w-52 rounded-xl border border-white/10 bg-[#1c130d] p-2 shadow-xl">
+                                {allTags.length === 0 && <p className="px-1 py-1 text-xs text-gray-500">Nenhuma etiqueta cadastrada.</p>}
+                                <div className="flex flex-wrap gap-1">
+                                  {allTags.map((t) => {
+                                    const active = c.tags.some((x) => x.id === t.id);
+                                    return (
+                                      <button key={t.id} onClick={() => toggleTag(c, t)}
+                                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition"
+                                        style={{
+                                          backgroundColor: active ? t.color : `${t.color}18`,
+                                          color: active ? '#fff' : t.color,
+                                          border: `1px solid ${t.color}${active ? '' : '55'}`,
+                                        }}>
+                                        {active && <Check className="h-3 w-3" />} {t.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {list.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-white/15 py-6 text-center text-xs text-gray-500">Sem clientes</div>
                     )}
                   </div>
                 </div>
-              )}
-            </div>
+              );
+            })}
 
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-2xl flex gap-2">
-              <button
-                type="button"
-                onClick={() => !spinSending && setShowSpinModal(false)}
-                className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-xl transition-colors"
-              >
-                Fechar
-              </button>
-              <button
-                type="button"
-                onClick={handleSendSpins}
-                disabled={spinSending || spinSelectedLeadIds.size === 0 || spinQuantity < 1}
-                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                {spinSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gift className="w-4 h-4" />}
-                {spinSending ? 'Enviando...' : `Enviar giros${spinSelectedLeadIds.size > 0 ? ` (${spinSelectedLeadIds.size})` : ''}`}
-              </button>
+          </div>
+        )}
+      </div>
+
+      {showNewCol && (
+        <Modal title="Nova coluna" onClose={() => setShowNewCol(false)}>
+          <div className="space-y-4">
+            <input
+              autoFocus
+              value={newCol.title}
+              onChange={(e) => setNewCol((s) => ({ ...s, title: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && createColumn()}
+              placeholder="Título da coluna (ex: Aguardando retorno)"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-[#E86A24]"
+            />
+            <div>
+              <p className="mb-2 text-xs font-medium text-gray-400">Cor da coluna</p>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_OPTIONS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setNewCol((s) => ({ ...s, color: c }))}
+                    className="flex h-8 w-8 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-[#1c130d] transition"
+                    style={{
+                      backgroundColor: hexFor(c),
+                      ringColor: newCol.color === c ? hexFor(c) : 'transparent',
+                    }}
+                    title={c}
+                  >
+                    {newCol.color === c && <Check className="h-4 w-4 text-white" />}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+          <ModalActions
+            onCancel={() => setShowNewCol(false)}
+            onConfirm={createColumn}
+            confirmLabel="Criar coluna"
+            loading={creatingCol}
+            disabled={!newCol.title.trim()}
+          />
+        </Modal>
       )}
 
-      {/* Modal Enviar Rifas (bilhetes) */}
-      {showTicketModal && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => !ticketSending && setShowTicketModal(false)}
-        >
-          <div
-            className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-[#404040]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sticky top-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040] px-6 py-4 flex items-center justify-between rounded-t-2xl">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
-                  <Ticket className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-800 dark:text-white">Enviar Rifas</h2>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Selecione o lead e a quantidade de bilhetes</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => !ticketSending && setShowTicketModal(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-[#404040] rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
+      {showAdd && (
+        <Modal title={addTargetColumn ? `Novo cliente — ${columns.find((c) => c.key === addTargetColumn)?.title ?? ''}` : 'Novo cliente'} onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            {(['name', 'phone', 'email'] as const).map((field) => (
+              <input key={field} value={form[field]}
+                onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                placeholder={field === 'name' ? 'Nome *' : field === 'phone' ? 'Telefone' : 'E-mail'}
+                className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-[#E86A24]" />
+            ))}
+          </div>
+          <ModalActions onCancel={() => setShowAdd(false)} onConfirm={addClient} confirmLabel="Salvar" loading={saving} disabled={!form.name.trim()} />
+        </Modal>
+      )}
 
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Pesquisar lead</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={ticketSearchTerm}
-                    onChange={(e) => setTicketSearchTerm(e.target.value)}
-                    placeholder="Nome ou e-mail..."
-                    className="w-full pl-9 pr-4 py-3 bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-800 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Leads</label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTicketSelectedLeadIds(new Set(ticketFilteredLeads.map(l => String(l.id))))}
-                      className="text-[10px] font-bold text-amber-600 hover:text-amber-700"
-                    >
-                      Selecionar todos
-                    </button>
-                    <span className="text-gray-300">|</span>
-                    <button
-                      type="button"
-                      onClick={() => setTicketSelectedLeadIds(new Set())}
-                      className="text-[10px] font-bold text-gray-500 hover:text-gray-700"
-                    >
-                      Desmarcar
-                    </button>
-                  </div>
-                </div>
-                <div className="bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl max-h-44 overflow-y-auto">
-                  {ticketFilteredLeads.length === 0 ? (
-                    <p className="p-4 text-sm text-gray-500 text-center">Nenhum lead encontrado.</p>
-                  ) : (
-                    <ul className="divide-y divide-gray-100 dark:divide-[#404040] py-1">
-                      {ticketFilteredLeads.map((lead) => {
-                        const idStr = String(lead.id);
-                        const checked = ticketSelectedLeadIds.has(idStr);
-                        return (
-                          <li key={idStr}>
-                            <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-[#404040] cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setTicketSelectedLeadIds(prev => {
-                                    const next = new Set(prev);
-                                    if (next.has(idStr)) next.delete(idStr);
-                                    else next.add(idStr);
-                                    return next;
-                                  });
-                                }}
-                                className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
-                              />
-                              <span className="text-sm text-gray-800 dark:text-white truncate flex-1">
-                                {lead.name || 'Sem nome'}
-                                {lead.email ? (
-                                  <span className="text-gray-500 font-normal"> — {lead.email}</span>
-                                ) : null}
-                              </span>
-                            </label>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-                {ticketSelectedLeadIds.size > 0 && (
-                  <p className="mt-1.5 text-xs text-gray-500">
-                    {ticketSelectedLeadIds.size} lead(s) selecionado(s)
-                  </p>
+      {showImport && (
+        <Modal title="Importar contatos" onClose={() => { setShowImport(false); setImportFileName(''); }} wide>
+          <p className="mb-2 text-xs text-gray-400">
+            Envie um <strong className="text-gray-300">.csv</strong> com colunas <code>nome</code> e <code>telefone</code> (também aceita <code>name</code>, <code>phone</code>, <code>email</code>),
+            ou cole linhas no formato <code>Nome, Telefone, E-mail</code>.
+          </p>
+          <textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportFileName(''); }} rows={8}
+            placeholder={'nome,telefone\nJoão Silva,5511999999999\nMaria Santos,5511888888888'}
+            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white outline-none focus:border-[#E86A24]" />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <input ref={fileRef} type="file" accept=".csv,.txt,text/csv" onChange={onFile} className="hidden" />
+            <button onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-gray-300 hover:bg-white/5">
+              <Upload className="h-4 w-4" /> Enviar CSV
+            </button>
+            {importFileName && (
+              <span className="text-xs text-gray-500">Arquivo: {importFileName}</span>
+            )}
+            <label className="flex items-center gap-2 text-sm text-gray-300">Coluna:
+              <select value={importColumn} onChange={(e) => setImportColumn(e.target.value)}
+                className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white outline-none">
+                {columns.map((c) => <option key={c.id} value={c.key}>{c.title}</option>)}
+              </select>
+            </label>
+            <span className="ml-auto text-sm font-semibold text-[#E86A24]">{parsedImport.length} contato(s)</span>
+          </div>
+          {parsedImport.length > 0 && (
+            <div className="mt-3 max-h-32 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-2">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-gray-500">Prévia</p>
+              <ul className="space-y-1 text-xs text-gray-300">
+                {parsedImport.slice(0, 5).map((c, i) => (
+                  <li key={`${c.phone}-${c.name}-${i}`} className="truncate">
+                    <span className="font-semibold text-white">{c.name}</span>
+                    {c.phone ? <span className="text-gray-400"> · {c.phone}</span> : null}
+                    {c.email ? <span className="text-gray-500"> · {c.email}</span> : null}
+                  </li>
+                ))}
+                {parsedImport.length > 5 && (
+                  <li className="text-gray-500">+ {parsedImport.length - 5} contato(s)…</li>
                 )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Quantidade de bilhetes (por lead)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={ticketQuantity}
-                  onChange={(e) => setTicketQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  className="w-full bg-gray-50 dark:bg-[#353535] border border-gray-200 dark:border-[#404040] rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/40"
-                />
-              </div>
-
-              {ticketError && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  {ticketError}
-                </div>
-              )}
+              </ul>
             </div>
-
-            <div className="sticky bottom-0 bg-gray-50 dark:bg-[#252525] border-t border-gray-200 dark:border-[#404040] px-6 py-4 rounded-b-2xl flex gap-2">
-              <button
-                type="button"
-                onClick={() => !ticketSending && setShowTicketModal(false)}
-                className="flex-1 py-3 bg-gray-200 dark:bg-[#404040] hover:bg-gray-300 dark:hover:bg-[#505050] text-gray-800 dark:text-white font-bold rounded-xl transition-colors"
-              >
-                Fechar
-              </button>
-              <button
-                type="button"
-                onClick={handleSendTickets}
-                disabled={ticketSending || ticketSelectedLeadIds.size === 0 || ticketQuantity < 1}
-                className="flex-1 py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                {ticketSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
-                {ticketSending ? 'Enviando...' : `Enviar bilhetes${ticketSelectedLeadIds.size > 0 ? ` (${ticketSelectedLeadIds.size})` : ''}`}
-              </button>
-            </div>
-          </div>
-        </div>
+          )}
+          <ModalActions onCancel={() => setShowImport(false)} onConfirm={doImport} confirmLabel={`Importar ${parsedImport.length || ''}`.trim()} loading={importing} disabled={parsedImport.length === 0} />
+        </Modal>
       )}
-
-      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
-};
+}
 
-const KanbanPage = () => {
+function Pencilish() {
+  // ícone lápis inline (evita import extra)
   return (
-    <Suspense fallback={<div>Carregando...</div>}>
-      <KanbanContent />
-    </Suspense>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+      <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
   );
-};
+}
 
-export default KanbanPage;
+function MenuItem({ icon, label, onClick, danger }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button onClick={onClick}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-white/5 ${danger ? 'text-red-400' : 'text-gray-200'}`}>
+      {icon} {label}
+    </button>
+  );
+}
+
+function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className={`w-full ${wide ? 'max-w-xl' : 'max-w-md'} rounded-2xl border border-white/10 bg-[#1c130d] p-5 shadow-xl`} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-white">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200"><X className="h-5 w-5" /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ModalActions({ onCancel, onConfirm, confirmLabel, loading, disabled }: {
+  onCancel: () => void; onConfirm: () => void; confirmLabel: string; loading?: boolean; disabled?: boolean;
+}) {
+  return (
+    <div className="mt-5 flex justify-end gap-2">
+      <button onClick={onCancel} className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-gray-300">Cancelar</button>
+      <button onClick={onConfirm} disabled={loading || disabled}
+        className="inline-flex items-center gap-2 rounded-xl bg-[#E86A24] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#D95E1B] disabled:opacity-50">
+        {loading && <Loader2 className="h-4 w-4 animate-spin" />} {confirmLabel}
+      </button>
+    </div>
+  );
+}

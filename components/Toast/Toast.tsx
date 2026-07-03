@@ -36,7 +36,7 @@ const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
   };
 
   const bgColor = toast.type === 'success' 
-    ? 'bg-[#8CD955]' 
+    ? 'bg-[#E86A24]' 
     : toast.type === 'error' 
     ? 'bg-red-600' 
     : 'bg-amber-500';

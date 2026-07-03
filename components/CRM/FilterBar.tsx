@@ -261,7 +261,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
 
   return (
     <div className="flex flex-col gap-3 mb-6" ref={containerRef}>
-      <div className="bg-white dark:bg-[#2a2a2a] p-3 rounded-2xl shadow-sm border border-gray-100 dark:border-[#404040] flex flex-wrap items-center gap-3">
+      <div className="zap-card-muted flex flex-wrap items-center gap-3 rounded-2xl border border-[#404040] p-3 shadow-sm">
         {/* Search Field */}
         <div className="relative flex-1 min-w-[250px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -277,7 +277,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                 onSearch((e.target as HTMLInputElement).value);
               }
             }}
-            className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-xl text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:bg-gray-50 dark:focus:bg-[#333] focus:border-[#8CD955]/40 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-xl text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:bg-gray-50 dark:focus:bg-[#333] focus:border-[#E86A24]/40 transition-all"
           />
         </div>
 
@@ -287,7 +287,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
             onClick={() => !bancasLoading && toggleMenu('banca')}
             disabled={bancasLoading}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              bancasLoading ? 'bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-400 cursor-wait' : openMenu === 'banca' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              bancasLoading ? 'bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-400 cursor-wait' : openMenu === 'banca' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             {bancasLoading ? (
@@ -318,7 +318,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         onChange={(e) => setBancaSearchTerm(e.target.value)}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
-                        className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 dark:border-[#555] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 focus:border-[#8CD955] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 bg-gray-100 dark:bg-[#404040] focus:bg-gray-50 dark:focus:bg-[#404040] transition-all"
+                        className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 dark:border-[#555] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:border-[#E86A24] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 bg-gray-100 dark:bg-[#404040] focus:bg-gray-50 dark:focus:bg-[#404040] transition-all"
                       />
                     </div>
                   </div>
@@ -330,8 +330,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         handleFilterSelect('banca', 'all', 'Todas as Bancas');
                         setBancaSearchTerm('');
                       }}
-                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold border-b border-gray-100 dark:border-[#404040] ${
-                        activeFilters.banca?.value === 'all' || !activeFilters.banca?.value ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
+                      className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#E86A24] transition-colors font-bold border-b border-gray-100 dark:border-[#404040] ${
+                        activeFilters.banca?.value === 'all' || !activeFilters.banca?.value ? 'bg-gray-50 dark:bg-[#404040] text-[#E86A24]' : 'text-gray-600 dark:text-gray-300'
                       }`}
                     >
                       Todas as Bancas
@@ -346,8 +346,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                           handleFilterSelect('banca', banca.url, banca.name);
                           setBancaSearchTerm('');
                         }}
-                        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
-                          activeFilters.banca?.value === banca.url ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
+                        className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#E86A24] transition-colors font-bold ${
+                          activeFilters.banca?.value === banca.url ? 'bg-gray-50 dark:bg-[#404040] text-[#E86A24]' : 'text-gray-600 dark:text-gray-300'
                         }`}
                       >
                         {banca.name}
@@ -375,7 +375,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('date')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'date' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'date' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
@@ -397,8 +397,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                   onClick={() => {
                     handleFilterSelect('date', option.value, option.label);
                   }}
-                  className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
-                    activeFilters.date?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#8CD955]' : 'text-gray-600 dark:text-gray-300'
+                  className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#E86A24] transition-colors font-bold ${
+                    activeFilters.date?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#E86A24]' : 'text-gray-600 dark:text-gray-300'
                   }`}
                 >
                   {option.label}
@@ -429,7 +429,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
               }
             }}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'customDate' || activeFilters.date?.value?.startsWith('custom_') ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'customDate' || activeFilters.date?.value?.startsWith('custom_') ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
@@ -446,7 +446,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                     value={customStartDate}
                     onChange={(e) => setCustomStartDate(e.target.value)}
                     max={customEndDate || new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#E86A24] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
                   />
                 </div>
                 <div>
@@ -457,7 +457,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                     onChange={(e) => setCustomEndDate(e.target.value)}
                     min={customStartDate}
                     max={new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#8CD955] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-[#E86A24] focus:border-emerald-500 bg-white dark:bg-[#404040] transition-all"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -491,7 +491,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                       }
                     }}
                     disabled={!customStartDate || !customEndDate}
-                    className="flex-1 px-3 py-2 bg-[#8CD955] text-white rounded-lg text-xs font-bold hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                    className="flex-1 px-3 py-2 bg-[#E86A24] text-white rounded-lg text-xs font-bold hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                   >
                     Aplicar
                   </button>
@@ -506,7 +506,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('affiliate')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'affiliate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'affiliate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
@@ -515,8 +515,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           </button>
           {openMenu === 'affiliate' && (
             <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
-              <button onClick={() => handleFilterSelect('affiliate', 'yes', 'Com Afiliado')} className="w-full text-left px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Com Afiliado</button>
-              <button onClick={() => handleFilterSelect('affiliate', 'no', 'Sem Afiliado')} className="w-full text-left px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Sem Afiliado</button>
+              <button onClick={() => handleFilterSelect('affiliate', 'yes', 'Com Afiliado')} className="w-full text-left px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Com Afiliado</button>
+              <button onClick={() => handleFilterSelect('affiliate', 'no', 'Sem Afiliado')} className="w-full text-left px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Sem Afiliado</button>
             </div>
           )}
         </div>
@@ -526,7 +526,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('stars')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'stars' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'stars' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Star className="w-3.5 h-3.5" />
@@ -558,7 +558,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('value')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'value' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'value' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <DollarSign className="w-3.5 h-3.5" />
@@ -567,19 +567,19 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           </button>
           {openMenu === 'value' && (
             <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
-              <button onClick={() => handleFilterSelect('value', 'none', 'Sem Depósito')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Sem Depósito</button>
-              <button onClick={() => handleFilterSelect('value', 'low', 'Baixo Valor (Menos de R$10)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Baixo Valor (Menos de R$10)</button>
-              <button onClick={() => handleFilterSelect('value', 'medium', 'Médio Valor (R$10 a R$99)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Médio Valor (R$10 a R$99)</button>
-              <button onClick={() => handleFilterSelect('value', 'high', 'Alto Valor (R$100 a R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Alto Valor (R$100 a R$500)</button>
-              <button onClick={() => handleFilterSelect('value', 'high_premium', 'Alto Padrão (R$500 a R$1000)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Alto Padrão (R$500 a R$1000)</button>
-              <button onClick={() => handleFilterSelect('value', 'ultra', 'Ultra Padrão (Maior que R$1000)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Ultra Padrão (Maior que R$1000)</button>
+              <button onClick={() => handleFilterSelect('value', 'none', 'Sem Depósito')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Sem Depósito</button>
+              <button onClick={() => handleFilterSelect('value', 'low', 'Baixo Valor (Menos de R$10)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Baixo Valor (Menos de R$10)</button>
+              <button onClick={() => handleFilterSelect('value', 'medium', 'Médio Valor (R$10 a R$99)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Médio Valor (R$10 a R$99)</button>
+              <button onClick={() => handleFilterSelect('value', 'high', 'Alto Valor (R$100 a R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Alto Valor (R$100 a R$500)</button>
+              <button onClick={() => handleFilterSelect('value', 'high_premium', 'Alto Padrão (R$500 a R$1000)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Alto Padrão (R$500 a R$1000)</button>
+              <button onClick={() => handleFilterSelect('value', 'ultra', 'Ultra Padrão (Maior que R$1000)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Ultra Padrão (Maior que R$1000)</button>
               <div className="border-t border-gray-100 my-1"></div>
               <button 
                 onClick={() => {
                   setShowCustomValueFilter(true);
                   // Não fecha o menu ainda, deixa aberto para mostrar os campos
                 }}
-                className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold"
+                className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold"
               >
                 Personalizado
               </button>
@@ -596,7 +596,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         value={customValueMin}
                         onChange={(e) => setCustomValueMin(e.target.value)}
                         placeholder="0.00"
-                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
                       />
                     </div>
                     <div>
@@ -608,7 +608,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         value={customValueMax}
                         onChange={(e) => setCustomValueMax(e.target.value)}
                         placeholder="0.00"
-                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
                       />
                     </div>
                     <div className="flex gap-2">
@@ -642,7 +642,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                                  (customValueMin && (isNaN(parseFloat(customValueMin)) || parseFloat(customValueMin) < 0)) ||
                                  (customValueMax && (isNaN(parseFloat(customValueMax)) || parseFloat(customValueMax) < 0)) ||
                                  (customValueMin && customValueMax && parseFloat(customValueMin) > parseFloat(customValueMax)))}
-                        className="flex-1 px-3 py-2 bg-[#8CD955] text-white rounded-lg text-xs font-bold hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                        className="flex-1 px-3 py-2 bg-[#E86A24] text-white rounded-lg text-xs font-bold hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                       >
                         Aplicar
                       </button>
@@ -669,7 +669,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('valueNextStar')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'valueNextStar' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'valueNextStar' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Target className="w-3.5 h-3.5" />
@@ -678,15 +678,15 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           </button>
           {openMenu === 'valueNextStar' && (
             <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 py-2 z-[35] animate-in fade-in slide-in-from-top-2 duration-200">
-              <button onClick={() => handleFilterSelect('valueNextStar', 'none', 'Não se aplica (máx.)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Não se aplica (máx.)</button>
-              <button onClick={() => handleFilterSelect('valueNextStar', 'low', 'Pouco (Menos de R$50)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Pouco (Menos de R$50)</button>
-              <button onClick={() => handleFilterSelect('valueNextStar', 'medium', 'Médio (R$50 a R$199)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Médio (R$50 a R$199)</button>
-              <button onClick={() => handleFilterSelect('valueNextStar', 'high', 'Alto (R$200 a R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Alto (R$200 a R$500)</button>
-              <button onClick={() => handleFilterSelect('valueNextStar', 'ultra', 'Muito alto (Acima de R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold">Muito alto (Acima de R$500)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'none', 'Não se aplica (máx.)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Não se aplica (máx.)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'low', 'Pouco (Menos de R$50)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Pouco (Menos de R$50)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'medium', 'Médio (R$50 a R$199)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Médio (R$50 a R$199)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'high', 'Alto (R$200 a R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Alto (R$200 a R$500)</button>
+              <button onClick={() => handleFilterSelect('valueNextStar', 'ultra', 'Muito alto (Acima de R$500)')} className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold">Muito alto (Acima de R$500)</button>
               <div className="border-t border-gray-100 my-1"></div>
               <button 
                 onClick={() => setShowCustomValueNextStarFilter(true)}
-                className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold"
+                className="w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold"
               >
                 Personalizado
               </button>
@@ -702,7 +702,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         value={customValueNextStarMin}
                         onChange={(e) => setCustomValueNextStarMin(e.target.value)}
                         placeholder="0.00"
-                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
                       />
                     </div>
                     <div>
@@ -714,7 +714,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                         value={customValueNextStarMax}
                         onChange={(e) => setCustomValueNextStarMax(e.target.value)}
                         placeholder="0.00"
-                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
+                        className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] outline-none text-gray-800 placeholder:text-gray-400 bg-white focus:bg-white"
                       />
                     </div>
                     <div className="flex gap-2">
@@ -745,7 +745,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                                  (customValueNextStarMin && (isNaN(parseFloat(customValueNextStarMin)) || parseFloat(customValueNextStarMin) < 0)) ||
                                  (customValueNextStarMax && (isNaN(parseFloat(customValueNextStarMax)) || parseFloat(customValueNextStarMax) < 0)) ||
                                  (customValueNextStarMin && customValueNextStarMax && parseFloat(customValueNextStarMin) > parseFloat(customValueNextStarMax)))}
-                        className="flex-1 px-3 py-2 bg-[#8CD955] text-white rounded-lg text-xs font-bold hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                        className="flex-1 px-3 py-2 bg-[#E86A24] text-white rounded-lg text-xs font-bold hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                       >
                         Aplicar
                       </button>
@@ -772,7 +772,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('lastDepositDate')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'lastDepositDate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'lastDepositDate' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
@@ -793,8 +793,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                 <button 
                   key={option.value}
                   onClick={() => handleFilterSelect('lastDepositDate', option.value, option.label)}
-                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
-                    activeFilters.lastDepositDate?.value === option.value ? 'bg-gray-50 text-[#6AB83D]' : ''
+                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold ${
+                    activeFilters.lastDepositDate?.value === option.value ? 'bg-gray-50 text-[#C9531A]' : ''
                   }`}
                 >
                   {option.label}
@@ -809,7 +809,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('temperature')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'temperature' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'temperature' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Thermometer className="w-3.5 h-3.5" />
@@ -828,8 +828,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                 <button 
                   key={option.value}
                   onClick={() => handleFilterSelect('temperature', option.value, option.label)}
-                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold ${
-                    activeFilters.temperature?.value === option.value ? 'bg-gray-50 text-[#6AB83D]' : ''
+                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold ${
+                    activeFilters.temperature?.value === option.value ? 'bg-gray-50 text-[#C9531A]' : ''
                   }`}
                 >
                   {option.label}
@@ -844,7 +844,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('classification')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'classification' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'classification' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
@@ -862,8 +862,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                 <button 
                   key={option.value}
                   onClick={() => handleFilterSelect('classification', option.value, option.label)}
-                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 ${
-                    activeFilters.classification?.value === option.value ? 'bg-gray-50 text-[#6AB83D]' : ''
+                  className={`w-full text-left px-4 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold flex items-center gap-2 ${
+                    activeFilters.classification?.value === option.value ? 'bg-gray-50 text-[#C9531A]' : ''
                   }`}
                 >
                   <div 
@@ -886,7 +886,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('possivelTransferencia')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'possivelTransferencia' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'possivelTransferencia' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <Target className="w-3.5 h-3.5" />
@@ -909,8 +909,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                     }
                     setOpenMenu(null);
                   }}
-                  className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#8CD955] transition-colors font-bold ${
-                    (option.value === null && !activeFilters.possivelTransferencia) || activeFilters.possivelTransferencia?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#6AB83D]' : 'text-gray-600 dark:text-gray-300'
+                  className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 dark:hover:bg-[#404040] hover:text-[#E86A24] transition-colors font-bold ${
+                    (option.value === null && !activeFilters.possivelTransferencia) || activeFilters.possivelTransferencia?.value === option.value ? 'bg-gray-50 dark:bg-[#404040] text-[#C9531A]' : 'text-gray-600 dark:text-gray-300'
                   }`}
                 >
                   {option.label}
@@ -925,7 +925,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
           <button 
             onClick={() => toggleMenu('tags')}
             className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-xs font-semibold transition-all shadow-sm ${
-              openMenu === 'tags' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#8CD955]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
+              openMenu === 'tags' ? 'bg-gray-50 dark:bg-[#333] border-gray-300 dark:border-[#555] text-[#E86A24]' : 'bg-white dark:bg-[#333] border-gray-100 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#404040]'
             }`}
           >
             <TagIcon className="w-3.5 h-3.5" />
@@ -937,8 +937,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
               {/* Opções de presença de etiquetas */}
               <button
                 onClick={() => handleFilterSelect('tags', '__has_any', 'Com etiquetas')}
-                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
-                  activeFilters.tags?.value === '__has_any' ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
+                  activeFilters.tags?.value === '__has_any' ? 'bg-gray-50 text-[#C9531A]' : 'text-gray-600'
                 }`}
               >
                 <TagIcon className="w-3 h-3 shrink-0" />
@@ -946,8 +946,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
               </button>
               <button
                 onClick={() => handleFilterSelect('tags', '__none', 'Sem etiquetas')}
-                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
-                  activeFilters.tags?.value === '__none' ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold flex items-center gap-2 border-b border-gray-100 ${
+                  activeFilters.tags?.value === '__none' ? 'bg-gray-50 text-[#C9531A]' : 'text-gray-600'
                 }`}
               >
                 <TagIcon className="w-3 h-3 shrink-0 opacity-50" />
@@ -961,8 +961,8 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
                   <button 
                     key={tag.id}
                     onClick={() => handleFilterSelect('tags', tag.id, tag.label)}
-                    className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#6AB83D] transition-colors font-bold flex items-center gap-2 ${
-                      activeFilters.tags?.value === tag.id ? 'bg-gray-50 text-[#6AB83D]' : 'text-gray-600'
+                    className={`w-full text-left px-4 py-2.5 text-xs hover:bg-gray-50 hover:text-[#C9531A] transition-colors font-bold flex items-center gap-2 ${
+                      activeFilters.tags?.value === tag.id ? 'bg-gray-50 text-[#C9531A]' : 'text-gray-600'
                     }`}
                   >
                     <div 
@@ -983,7 +983,7 @@ const FilterBar: React.FC<FilterBarProps> = ({ onSearch, onFilterChange, initial
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-gray-500 tracking-wider ml-1">Filtros ativos:</span>
           {Object.entries(activeFilters).map(([type, filter]) => (
-            <div key={type} className="flex items-center gap-1.5 bg-gray-50 dark:bg-[#333] text-[#8CD955] px-2.5 py-1 rounded-lg text-[10px] font-bold border border-gray-200 dark:border-[#404040] transition-all animate-in fade-in zoom-in-95">
+            <div key={type} className="flex items-center gap-1.5 bg-gray-50 dark:bg-[#333] text-[#E86A24] px-2.5 py-1 rounded-lg text-[10px] font-bold border border-gray-200 dark:border-[#404040] transition-all animate-in fade-in zoom-in-95">
               {filter.label}
               <button onClick={() => removeFilter(type)} className="hover:bg-emerald-100 p-0.5 rounded-md transition-colors">
                 <X className="w-3 h-3" />

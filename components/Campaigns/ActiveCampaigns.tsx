@@ -89,10 +89,10 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
     >
         {/* Overlay de loading para campanhas pendentes */}
         {isPending && (
-          <div className="absolute inset-0 backdrop-blur-sm rounded-lg flex items-center justify-center z-10" style={{ backgroundColor: '#8CD95533' }}>
+          <div className="absolute inset-0 backdrop-blur-sm rounded-lg flex items-center justify-center z-10" style={{ backgroundColor: '#E86A2433' }}>
             <div className="flex flex-col items-center gap-3">
-              <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#8CD955' }}></div>
-              <p className="text-sm font-medium" style={{ color: '#6AB83D' }}>Iniciando campanha...</p>
+              <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#E86A24' }}></div>
+              <p className="text-sm font-medium" style={{ color: '#C9531A' }}>Iniciando campanha...</p>
             </div>
           </div>
         )}
@@ -125,7 +125,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
               {isPaused ? (
                 <button
                   onClick={() => onResume?.(campaign.id)}
-                  className="p-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded transition"
+                  className="p-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded transition"
                   title="Retomar"
                 >
                   <Play className="w-4 h-4" />
@@ -158,7 +158,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
           </div>
           <div className="text-center">
             <p className="text-xs text-gray-500 mb-1">Adicionados</p>
-            <p className="text-lg font-bold text-[#8CD955]">{processed}</p>
+            <p className="text-lg font-bold text-[#E86A24]">{processed}</p>
           </div>
           <div className="text-center">
             <p className="text-xs text-gray-500 mb-1">Falhas</p>
@@ -175,7 +175,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
           <div className="w-full bg-gray-200 rounded-full h-2.5">
             <div
               className={`h-2.5 rounded-full transition-all ${
-                isFailed ? 'bg-red-600' : 'bg-[#8CD955]'
+                isFailed ? 'bg-red-600' : 'bg-[#E86A24]'
               }`}
               style={{ width: `${progressPercentage}%` }}
             />
@@ -186,10 +186,10 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
         <div className="grid grid-cols-2 gap-3">
           <div className="p-2 bg-gray-100 rounded">
             <div className="flex items-center gap-2 mb-1">
-              <CheckCircle2 className="w-4 h-4 text-[#8CD955]" />
+              <CheckCircle2 className="w-4 h-4 text-[#E86A24]" />
               <span className="text-xs text-gray-600">Taxa de Sucesso</span>
             </div>
-            <p className="text-sm font-bold text-[#8CD955]">{successPercentage}%</p>
+            <p className="text-sm font-bold text-[#E86A24]">{successPercentage}%</p>
           </div>
           <div className="p-2 bg-red-50 rounded">
             <div className="flex items-center gap-2 mb-1">
@@ -282,7 +282,7 @@ const ActiveCampaigns: React.FC<ActiveCampaignsProps> = ({
         <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
           <button
             onClick={() => setShowHistory(!showHistory)}
-            className="w-full flex items-center justify-between text-lg font-semibold text-gray-800 mb-4 hover:text-[#8CD955] transition"
+            className="w-full flex items-center justify-between text-lg font-semibold text-gray-800 mb-4 hover:text-[#E86A24] transition"
           >
             <div className="flex items-center gap-2">
               <History className="w-5 h-5" />

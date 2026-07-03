@@ -14,6 +14,7 @@ import {
   isWithin24hWindow as isWithin24hWindowInbox,
   sortConversationsForInbox,
 } from '@/lib/chat/conversation-inbox';
+import { zapInput } from '@/lib/zap-card-styles';
 import {
   MessageSquare,
   Send,
@@ -222,15 +223,15 @@ function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void;
   return (
     <div
       ref={ref}
-      className="absolute bottom-full left-0 mb-2 w-72 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-xl z-30 overflow-hidden"
+      className="absolute bottom-full left-0 mb-2 w-72 zap-chat-panel border border-[#E86A24]/12 rounded-xl shadow-xl z-30 overflow-hidden"
     >
-      <div className="flex border-b border-gray-200 dark:border-[#404040]">
+      <div className="flex border-b border-[#E86A24]/10">
         {EMOJI_CATEGORIES.map((cat, i) => (
           <button
             key={i}
             type="button"
             onClick={() => setActiveTab(i)}
-            className={`flex-1 py-2 text-base hover:bg-gray-100 dark:hover:bg-[#333] transition-colors ${activeTab === i ? 'bg-gray-100 dark:bg-[#333]' : ''}`}
+            className={`flex-1 py-2 text-base hover:bg-[#E86A24]/10 transition-colors ${activeTab === i ? 'bg-gray-100 dark:bg-[#333]' : ''}`}
           >
             {cat.label}
           </button>
@@ -242,7 +243,7 @@ function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void;
             key={i}
             type="button"
             onClick={() => onSelect(emoji)}
-            className="text-xl p-1 rounded hover:bg-gray-100 dark:hover:bg-[#333] transition-colors"
+            className="text-xl p-1 rounded hover:bg-[#E86A24]/10 transition-colors"
           >
             {emoji}
           </button>
@@ -1643,7 +1644,7 @@ export default function ChatPage() {
               const preview = (newConv.last_message_preview || '').slice(0, 60);
               if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
                 try {
-                  new Notification('Nova conversa no Chat — Zaploto', {
+                  new Notification('Nova conversa no Chat — crm-atendimento', {
                     body: preview
                       ? `${convTitle}: ${preview}${preview.length >= 60 ? '...' : ''}`
                       : convTitle,
@@ -1748,8 +1749,12 @@ export default function ChatPage() {
   };
 
   const startRecording = async () => {
-    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') {
-      alert('Gravação de áudio disponível apenas para WhatsApp Oficial');
+    if (!selectedChannel) {
+      alert('Selecione um canal para gravar áudio');
+      return;
+    }
+    if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
+      alert('Fora da janela de 24h. Use mensagem template para iniciar ou reabrir a conversa.');
       return;
     }
     if (!userId) {
@@ -1838,7 +1843,7 @@ export default function ChatPage() {
     blob: Blob,
     mimeType: string
   ): Promise<{ meta_id?: string; url: string; metaError?: string } | null> => {
-    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || !userId) return null;
+    if (!selectedChannel || !userId) return null;
     setUploading(true);
     try {
       const baseType = mimeType.split(';')[0].trim().toLowerCase();
@@ -1848,6 +1853,22 @@ export default function ChatPage() {
       };
       const ext = extMap[baseType] ?? 'ogg';
       const fileName = `audio_${Date.now()}.${ext}`;
+
+      if (selectedChannel.type === 'evolution') {
+        const fd = new FormData();
+        fd.append('file', new File([blob], fileName, { type: baseType }));
+        fd.append('instance_id', selectedChannel.id);
+        const uploadRes = await fetch('/api/chat/evolution/upload-media', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: fd,
+        });
+        const uploadData = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok || !uploadData?.success || !uploadData?.data?.url) {
+          return null;
+        }
+        return { url: uploadData.data.url, meta_id: undefined };
+      }
 
       // Dois uploads em paralelo:
       // 1. Meta  → media_id para envio confiável (independe de URL pública)
@@ -2134,10 +2155,6 @@ export default function ChatPage() {
     setSending(true);
     try {
       if (hasRecordedAudio) {
-        if (selectedChannel.type !== 'whatsapp_official') {
-          setSendError('Gravação de áudio disponível apenas para WhatsApp Oficial');
-          return;
-        }
         const uploaded = await uploadRecordedAudio(recordedBlob!, recordedMimeType);
         if (!uploaded) {
           setSendError(
@@ -2149,6 +2166,30 @@ export default function ChatPage() {
           setSendError(uploaded.metaError || 'Falha ao enviar áudio para o WhatsApp.');
           return;
         }
+
+        if (selectedChannel.type === 'evolution') {
+          const response = await fetch('/api/chat/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+              instance_id: selectedChannel.id,
+              remoteJid: conversation.remote_jid,
+              type: 'media',
+              media: uploaded.url,
+              mimetype: recordedMimeType.split(';')[0].trim() || 'audio/ogg',
+              mediatype: 'audio',
+              fileName: 'audio.ogg',
+            }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (response.ok && result.success) {
+            discardRecordedAudio();
+          } else {
+            setSendError(result.error || result.message || 'Falha ao enviar áudio.');
+          }
+          return;
+        }
+
         const to = conversation.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
         const body: Record<string, string | undefined> = {
           config_id: selectedChannel.id,
@@ -2422,7 +2463,7 @@ export default function ChatPage() {
     switch (s) {
       case 'sent': return <Check className="w-4 h-4" />;
       case 'delivered': return <CheckCheck className="w-4 h-4" />;
-      case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#8CD955' }} />;
+      case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#E86A24' }} />;
       default: return <Clock className="w-4 h-4" />;
     }
   };
@@ -2433,7 +2474,7 @@ export default function ChatPage() {
   const isWithin24hWindow = (conv: Conversation): boolean => isWithin24hWindowInbox(conv);
 
   const getConversationColor = (title: string) => {
-    const colors = ['#8CD955', '#7BC84A', '#6AB83D', '#A8E677', '#5AA832', '#4C9628', '#3E841E', '#2F7214'];
+    const colors = ['#E86A24', '#D95E1B', '#C9531A', '#EF9057', '#5AA832', '#4C9628', '#3E841E', '#2F7214'];
     return colors[(title.charCodeAt(0) || 0) % colors.length];
   };
 
@@ -2518,7 +2559,7 @@ export default function ChatPage() {
 
       {deleteConfirm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setDeleteConfirm(null)}>
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-2xl max-w-sm w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="zap-chat-panel rounded-xl shadow-2xl max-w-sm w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start gap-3 mb-4">
               <div className="p-2 rounded-full bg-amber-100 dark:bg-amber-900/30">
                 <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
@@ -2535,7 +2576,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                className="px-4 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-[#E86A24]/10 transition-colors"
               >
                 Cancelar
               </button>
@@ -2597,44 +2638,42 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* 3 Painéis — coluna Zaploto Chat oculta por padrão; botão abre/fecha */}
-        <div className="flex flex-1 min-h-0 overflow-hidden bg-gray-50 dark:bg-[#1e1e1e]">
+        {/* 3 Painéis — coluna crm-atendimento oculta por padrão; botão abre/fecha */}
+        <div className="chat-shell flex flex-1 min-h-0 overflow-hidden">
           {!(isMobile && selectedConversationId) && (
           <>
-          {/* ── Painel Esquerdo (Zaploto Chat) — visível só quando chatSidebarOpen ── */}
+          {/* ── Painel Esquerdo (crm-atendimento) — visível só quando chatSidebarOpen ── */}
           {chatSidebarOpen && (
-          <div className="w-48 md:w-64 min-h-0 flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col relative">
+          <div className="w-48 md:w-64 min-h-0 flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col relative">
             <button
               type="button"
               onClick={() => setChatSidebarOpen(false)}
-              className="absolute top-3 right-3 z-10 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500 dark:text-gray-400"
+              className="absolute top-3 right-3 z-10 rounded-lg p-1.5 text-gray-400 hover:bg-[#E86A24]/10 hover:text-[#E86A24]"
               aria-label="Fechar menu"
             >
               <X className="w-4 h-4" />
             </button>
-            <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3 pr-8">Zaploto Chat</h2>
+            <div className="p-4 border-b border-[#E86A24]/10">
+              <h2 className="mb-3 pr-8 text-lg font-bold text-white">crmTR</h2>
               <div className="space-y-1">
                 <button
                   onClick={() => setActiveView('chat')}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
                     activeView === 'chat'
-                      ? 'text-white'
-                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                      ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/25'
+                      : 'text-gray-300 hover:bg-[#E86A24]/10'
                   }`}
-                  style={activeView === 'chat' ? { backgroundColor: '#8CD955' } : {}}
                 >
                   <MessageCircle className="w-5 h-5" />
                   Todas as conversas
                 </button>
                 <button
                   onClick={() => setActiveView('contacts')}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
                     activeView === 'contacts'
-                      ? 'text-white'
-                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                      ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/25'
+                      : 'text-gray-300 hover:bg-[#E86A24]/10'
                   }`}
-                  style={activeView === 'contacts' ? { backgroundColor: '#8CD955' } : {}}
                 >
                   <BookUser className="w-5 h-5" />
                   Contatos
@@ -2644,12 +2683,11 @@ export default function ChatPage() {
                 {selectedChannel?.type === 'evolution' && (
                   <button
                     onClick={() => setActiveView('agente-ia')}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
                       activeView === 'agente-ia'
-                        ? 'text-white'
-                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                        ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/25'
+                        : 'text-gray-300 hover:bg-[#E86A24]/10'
                     }`}
-                    style={activeView === 'agente-ia' ? { backgroundColor: '#8CD955' } : {}}
                   >
                     <Workflow className="w-5 h-5" />
                     Agente IA
@@ -2660,12 +2698,11 @@ export default function ChatPage() {
                 {selectedChannel?.type === 'evolution' && (
                   <button
                     onClick={() => setActiveView('broadcast')}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
                       activeView === 'broadcast'
-                        ? 'text-white'
-                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333]'
+                        ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/25'
+                        : 'text-gray-300 hover:bg-[#E86A24]/10'
                     }`}
-                    style={activeView === 'broadcast' ? { backgroundColor: '#8CD955' } : {}}
                   >
                     <Radio className="w-5 h-5" />
                     Disparo em Massa
@@ -2679,8 +2716,8 @@ export default function ChatPage() {
 
             {/* Seletor de Canal */}
             {canSelectChannel ? (
-              <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
-                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
+              <div className="p-4 border-b border-[#E86A24]/10">
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-gray-500">
                   Canal
                 </label>
                 <select
@@ -2699,8 +2736,7 @@ export default function ChatPage() {
                     }
                     setSelectedConversationId('');
                   }}
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
-                  style={{ borderColor: '#8CD955' }}
+                  className={`w-full px-3 py-2 text-sm ${zapInput} border-[#E86A24]/50`}
                 >
                   <option value="">Selecione um canal</option>
                   {channels.evolution.length > 0 && (
@@ -2724,7 +2760,7 @@ export default function ChatPage() {
                 </select>
               </div>
             ) : selectedChannel ? (
-              <div className="p-4 border-b border-gray-200 dark:border-[#404040]">
+              <div className="p-4 border-b border-[#E86A24]/10">
                 <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Chat</div>
                 <div className="text-sm text-gray-700 dark:text-gray-200">
                   {selectedChannel.type === 'evolution' ? selectedChannel.instance_name : selectedChannel.name}
@@ -2745,9 +2781,9 @@ export default function ChatPage() {
           {/* ── Painel Central (lista) — ocultável com botão no header da conversa ── */}
           {!(conversationsListHidden && selectedConversationId) && (activeView === 'agente-ia' ? (
             /* ── Vista Agente IA ── */
-            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-              <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
-                <Workflow className="w-5 h-5 text-[#8CD955]" />
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col">
+              <div className="flex-shrink-0 p-4 border-b border-[#E86A24]/10 flex items-center gap-2">
+                <Workflow className="w-5 h-5 text-[#E86A24]" />
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Agente IA</h3>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -2761,10 +2797,10 @@ export default function ChatPage() {
                     </div>
 
                     {instanceFlow && (
-                      <div className="p-3 rounded-lg border border-[#8CD955]/50 bg-[#8CD955]/10">
+                      <div className="p-3 rounded-lg border border-[#E86A24]/50 bg-[#E86A24]/10">
                         <div className="flex items-center gap-2 mb-1">
-                          <Bot className="w-4 h-4 text-[#8CD955]" />
-                          <span className="text-xs font-semibold text-[#5a9e2f] dark:text-[#8CD955]">Flow ativo</span>
+                          <Bot className="w-4 h-4 text-[#E86A24]" />
+                          <span className="text-xs font-semibold text-[#5a9e2f] dark:text-[#E86A24]">Flow ativo</span>
                         </div>
                         <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{instanceFlow.flows?.name}</p>
                         {instanceFlow.flows?.description && (
@@ -2786,7 +2822,7 @@ export default function ChatPage() {
                         <select
                           value={selectedFlowId}
                           onChange={(e) => setSelectedFlowId(e.target.value)}
-                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
                         >
                           <option value="">— Sem flow (desativar) —</option>
                           {availableFlows.map((f) => (
@@ -2803,7 +2839,7 @@ export default function ChatPage() {
                       onClick={saveFlowConfig}
                       disabled={savingFlowConfig}
                       className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-60"
-                      style={{ backgroundColor: '#8CD955' }}
+                      style={{ backgroundColor: '#E86A24' }}
                     >
                       {savingFlowConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                       {savingFlowConfig ? 'Salvando...' : 'Salvar configuração'}
@@ -2818,10 +2854,10 @@ export default function ChatPage() {
             </div>
           ) : activeView === 'broadcast' ? (
             /* ── Vista Disparo em Massa ── */
-            <div className="min-w-0 flex-1 md:w-96 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-              <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between">
+            <div className="min-w-0 flex-1 md:w-96 md:flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col">
+              <div className="flex-shrink-0 p-4 border-b border-[#E86A24]/10 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Radio className="w-5 h-5 text-[#8CD955]" />
+                  <Radio className="w-5 h-5 text-[#E86A24]" />
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Disparo em Massa</h3>
                   {broadcastRunning && <span className="text-xs text-green-500 font-medium animate-pulse">• Executando</span>}
                 </div>
@@ -2829,7 +2865,7 @@ export default function ChatPage() {
                   <button
                     onClick={resumeBroadcast}
                     className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg text-white"
-                    style={{ backgroundColor: '#8CD955' }}
+                    style={{ backgroundColor: '#E86A24' }}
                   >
                     <Play className="w-3 h-3" /> Retomar
                   </button>
@@ -2866,7 +2902,7 @@ export default function ChatPage() {
                           className="h-2 rounded-full transition-all duration-500"
                           style={{
                             width: `${broadcastJob.total_count > 0 ? Math.round(((broadcastProgress?.current ?? broadcastJob.current_index) / broadcastJob.total_count) * 100) : 0}%`,
-                            backgroundColor: '#8CD955',
+                            backgroundColor: '#E86A24',
                           }}
                         />
                       </div>
@@ -2888,7 +2924,7 @@ export default function ChatPage() {
                         <button
                           onClick={resumeBroadcast}
                           className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-medium"
-                          style={{ backgroundColor: '#8CD955' }}
+                          style={{ backgroundColor: '#E86A24' }}
                         >
                           <Play className="w-4 h-4" /> Retomar
                         </button>
@@ -2914,7 +2950,7 @@ export default function ChatPage() {
                     {/* Log em tempo real */}
                     <div>
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Log de envio</p>
-                      <div ref={broadcastLogRef} className="h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#1e1e1e] p-2 space-y-1 text-xs font-mono">
+                      <div ref={broadcastLogRef} className="h-48 overflow-y-auto rounded-lg border border-[#E86A24]/12 bg-[#160f0a]/60 p-2 space-y-1 text-xs font-mono">
                         {broadcastLog.length === 0 && (
                           <p className="text-gray-400 text-center py-4">Nenhum envio ainda...</p>
                         )}
@@ -2939,7 +2975,7 @@ export default function ChatPage() {
                         value={broadcastTitle}
                         onChange={(e) => setBroadcastTitle(e.target.value)}
                         placeholder="Ex: Promoção Black Friday"
-                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
                       />
                     </div>
 
@@ -2957,7 +2993,7 @@ export default function ChatPage() {
                             const msg = crmMessages.find((m) => m.id === e.target.value) ?? null;
                             setSelectedCrmMessage(msg);
                           }}
-                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                          className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
                         >
                           <option value="">— Selecione uma mensagem —</option>
                           {crmMessages.map((m) => (
@@ -2968,7 +3004,7 @@ export default function ChatPage() {
                         </select>
                       )}
                       {selectedCrmMessage && (
-                        <div className="mt-2 p-2 rounded-lg bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040]">
+                        <div className="mt-2 p-2 rounded-lg bg-gray-50 dark:bg-[#333] border border-[#E86A24]/12">
                           <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-semibold">{selectedCrmMessage.title}</p>
                           {selectedCrmMessage.attachment_url && (
                             <div className="flex items-center gap-1 text-xs text-blue-500 mb-1">
@@ -2988,7 +3024,7 @@ export default function ChatPage() {
                       <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
                         Contatos (.csv)
                       </label>
-                      <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 dark:border-[#404040] cursor-pointer hover:border-[#8CD955] transition-colors">
+                      <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 dark:border-[#404040] cursor-pointer hover:border-[#E86A24] transition-colors">
                         <Upload className="w-4 h-4 text-gray-400" />
                         <span className="text-sm text-gray-500 dark:text-gray-400 truncate">
                           {broadcastCsvFileName || 'Selecionar arquivo CSV'}
@@ -3031,7 +3067,7 @@ export default function ChatPage() {
                         <select
                           value={broadcastDelay}
                           onChange={(e) => setBroadcastDelay(Number(e.target.value))}
-                          className="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                          className="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
                         >
                           <option value={15}>15 segundos</option>
                           <option value={30}>30 segundos</option>
@@ -3050,7 +3086,7 @@ export default function ChatPage() {
                       onClick={startBroadcast}
                       disabled={broadcastCreating || !selectedCrmMessage || broadcastContacts.length === 0}
                       className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      style={{ backgroundColor: '#8CD955' }}
+                      style={{ backgroundColor: '#E86A24' }}
                     >
                       {broadcastCreating
                         ? <><Loader2 className="w-4 h-4 animate-spin" /> Iniciando...</>
@@ -3066,7 +3102,7 @@ export default function ChatPage() {
                           {broadcastJobs.map((job) => (
                             <div
                               key={job.id}
-                              className="p-2.5 rounded-lg border border-gray-200 dark:border-[#404040] cursor-pointer hover:border-[#8CD955] transition-colors"
+                              className="p-2.5 rounded-lg border border-[#E86A24]/12 cursor-pointer hover:border-[#E86A24] transition-colors"
                               onClick={() => {
                                 setBroadcastJob(job);
                                 setBroadcastProgress({ current: job.current_index, total: job.total_count });
@@ -3103,14 +3139,14 @@ export default function ChatPage() {
             </div>
           ) : activeView === 'contacts' ? (
             /* Vista Contatos */
-            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
-              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040] flex items-center gap-2">
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col">
+              <div className="flex-shrink-0 p-3 border-b border-[#E86A24]/10 flex items-center gap-2">
                 {!chatSidebarOpen && (
                   <button
                     type="button"
                     onClick={() => setChatSidebarOpen(true)}
-                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 flex-shrink-0"
-                    aria-label="Abrir menu Zaploto Chat"
+                    className="p-2 rounded-lg hover:bg-[#E86A24]/10 text-gray-600 dark:text-gray-300 flex-shrink-0"
+                    aria-label="Abrir menu crm-atendimento"
                     title="Abrir menu (canal, conversas/contatos)"
                   >
                     <PanelLeft className="w-5 h-5" />
@@ -3147,7 +3183,7 @@ export default function ChatPage() {
                             setActiveView('chat');
                             setSelectedConversationId(conv.id);
                           }}
-                          className="p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                          className="p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-[#E86A24]/10 transition-colors"
                         >
                           <div className="flex items-center gap-3">
                             <div
@@ -3174,16 +3210,16 @@ export default function ChatPage() {
             </div>
           ) : (
             /* Vista Chat — Lista de Conversas */
-            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden bg-white dark:bg-[#2a2a2a] border-r border-gray-200 dark:border-[#404040] flex flex-col">
+            <div className="min-w-0 flex-1 md:w-80 md:flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col">
               {/* Botão menu + Busca + Abas */}
-              <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-[#404040]">
+              <div className="flex-shrink-0 p-3 border-b border-[#E86A24]/10">
                 {!chatSidebarOpen && (
                   <div className="mb-2">
                     <button
                       type="button"
                       onClick={() => setChatSidebarOpen(true)}
-                      className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-300 inline-flex items-center gap-2 text-sm font-medium"
-                      aria-label="Abrir menu Zaploto Chat"
+                      className="p-2 rounded-lg hover:bg-[#E86A24]/10 text-gray-600 dark:text-gray-300 inline-flex items-center gap-2 text-sm font-medium"
+                      aria-label="Abrir menu crm-atendimento"
                       title="Abrir menu (canal, conversas/contatos)"
                     >
                       <PanelLeft className="w-5 h-5" />
@@ -3198,7 +3234,7 @@ export default function ChatPage() {
                     placeholder="Buscar..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    className={`w-full py-2 pl-10 pr-4 text-sm text-white placeholder:text-gray-500 ${zapInput}`}
                   />
                 </div>
                 {tagOptions.length > 0 && (
@@ -3207,7 +3243,7 @@ export default function ChatPage() {
                     <select
                       value={tagFilter}
                       onChange={(e) => setTagFilter(e.target.value)}
-                      className="w-full px-3 py-2 text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-gray-900 dark:text-gray-100"
+                      className={`w-full px-3 py-2 text-sm text-white ${zapInput}`}
                     >
                       <option value="">Todas</option>
                       {tagOptions.map((t) => (
@@ -3216,13 +3252,13 @@ export default function ChatPage() {
                     </select>
                   </div>
                 )}
-                <div className="flex items-center gap-1 border-b border-gray-200 dark:border-[#404040] -mx-4 px-4">
+                <div className="flex items-center gap-1 border-b border-[#E86A24]/10 -mx-4 px-4">
                   {/* Todos = janela 24h ativa (prioridade máxima) */}
                   <button
                     onClick={() => setConversationFilter('all')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                       conversationFilter === 'all'
-                        ? 'border-[#8CD955] text-[#8CD955]'
+                        ? 'border-[#E86A24] text-[#E86A24]'
                         : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                     }`}
                   >
@@ -3232,7 +3268,7 @@ export default function ChatPage() {
                     onClick={() => setConversationFilter('mine')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                       conversationFilter === 'mine'
-                        ? 'border-[#8CD955] text-[#8CD955]'
+                        ? 'border-[#E86A24] text-[#E86A24]'
                         : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                     }`}
                   >
@@ -3242,7 +3278,7 @@ export default function ChatPage() {
                     onClick={() => setConversationFilter('unassigned')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                       conversationFilter === 'unassigned'
-                        ? 'border-[#8CD955] text-[#8CD955]'
+                        ? 'border-[#E86A24] text-[#E86A24]'
                         : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
                     }`}
                   >
@@ -3254,7 +3290,7 @@ export default function ChatPage() {
               {/* Lista com scroll infinito */}
               <div
                 ref={conversationListScrollRef}
-                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain p-2"
                 onScroll={() => {
                   const el = conversationListScrollRef.current;
                   if (!el || !hasMoreConversations) return;
@@ -3271,7 +3307,7 @@ export default function ChatPage() {
                     Carregando conversas...
                   </div>
                 ) : sortedConversations.length === 0 ? (
-                  <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
+                  <div className="p-6 text-center text-sm text-gray-500">
                     {selectedChannel ? (
                       <>
                         {conversationFilter === 'all'
@@ -3297,10 +3333,10 @@ export default function ChatPage() {
                         <div
                           key={conv.id}
                           onClick={() => setSelectedConversationId(conv.id)}
-                          className={`p-3 border-b border-gray-100 dark:border-[#404040] cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${
+                          className={`mx-2 mb-2 cursor-pointer rounded-xl border p-3 transition-all ${
                             isSelected
-                              ? 'bg-[#8CD95515] dark:bg-[#8CD95520] border-l-4 border-l-[#8CD955]'
-                              : ''
+                              ? 'zap-card-client border-[#E86A24]/50 bg-[#E86A24]/10 shadow-[0_4px_12px_rgba(232,106,36,0.15)]'
+                              : 'border-transparent hover:zap-card-client hover:border-[#404040]'
                           }`}
                         >
                           <div className="flex items-start gap-3">
@@ -3316,7 +3352,7 @@ export default function ChatPage() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between mb-1">
-                                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5 flex-wrap">
+                                <h3 className="flex flex-wrap items-center gap-1.5 truncate text-sm font-semibold text-white">
                                   {conv.title || 'Sem nome'}
                                   {selectedChannel?.type === 'whatsapp_official' &&
                                     conv.whatsapp_config_id && (
@@ -3365,7 +3401,7 @@ export default function ChatPage() {
                                 {conv.unread_count > 0 && (
                                   <span
                                     className="text-xs font-bold text-white rounded-full px-2 py-0.5"
-                                    style={{ backgroundColor: '#8CD955' }}
+                                    style={{ backgroundColor: '#E86A24' }}
                                   >
                                     {conv.unread_count}
                                   </span>
@@ -3391,17 +3427,17 @@ export default function ChatPage() {
 
           {/* ── Painel Direito — Mensagens (no mobile: só mostra quando conversa selecionada) ── */}
           {(!isMobile || selectedConversationId) && (
-          <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-gray-50 dark:bg-[#1e1e1e] min-w-0">
+          <div className="chat-messages-pane flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {selectedConversationId && selectedConversation ? (
               <>
                 {/* Header da conversa — compacto; etiquetas e ações na mesma linha */}
-                <div className="flex-shrink-0 bg-white dark:bg-[#2a2a2a] border-b border-gray-200 dark:border-[#404040]">
+                <div className="flex-shrink-0 zap-chat-panel border-b border-[#E86A24]/10">
                   <div className="px-3 py-2 flex items-center gap-2 min-w-0 flex-wrap">
                     {isMobile && (
                       <button
                         type="button"
                         onClick={() => setSelectedConversationId('')}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200 flex-shrink-0"
+                        className="p-1.5 rounded-lg hover:bg-[#E86A24]/10 text-gray-700 dark:text-gray-200 flex-shrink-0"
                         aria-label="Voltar para lista"
                       >
                         <ChevronLeft className="w-5 h-5" />
@@ -3412,7 +3448,7 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => setConversationsListHidden((v) => !v)}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-600 dark:text-gray-400 flex-shrink-0"
+                        className="p-1.5 rounded-lg hover:bg-[#E86A24]/10 text-gray-600 dark:text-gray-400 flex-shrink-0"
                         title={conversationsListHidden ? 'Mostrar lista de conversas' : 'Ocultar lista de conversas'}
                         aria-label={conversationsListHidden ? 'Mostrar conversas' : 'Ocultar conversas'}
                       >
@@ -3478,17 +3514,17 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => setShowTagsPopover((v) => !v)}
-                          className="px-2 py-1 text-xs font-medium rounded-md border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333] flex items-center gap-1"
+                          className="px-2 py-1 text-xs font-medium rounded-md border border-gray-300 dark:border-[#404040] text-gray-600 dark:text-gray-300 hover:bg-[#E86A24]/10 flex items-center gap-1"
                         >
                           Etiquetas
                           {(selectedConversation.tags || []).length > 0 && (
-                            <span className="bg-[#8CD955] text-white rounded-full min-w-[14px] h-3.5 flex items-center justify-center text-[10px] px-1">
+                            <span className="bg-[#E86A24] text-white rounded-full min-w-[14px] h-3.5 flex items-center justify-center text-[10px] px-1">
                               {(selectedConversation.tags || []).length}
                             </span>
                           )}
                         </button>
                         {showTagsPopover && (
-                          <div className="absolute right-0 top-full mt-1 z-20 w-56 py-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                          <div className="absolute right-0 top-full mt-1 z-20 w-56 py-2 zap-chat-panel border border-[#E86A24]/12 rounded-lg shadow-lg">
                             <div className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-[#404040]">
                               Marcar conversa
                             </div>
@@ -3510,7 +3546,7 @@ export default function ChatPage() {
                                       type="button"
                                       onClick={() => handleToggleTag(t.name)}
                                       disabled={updatingTags}
-                                      className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200"
+                                      className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-[#E86A24]/10 text-gray-700 dark:text-gray-200"
                                     >
                                       <span
                                         className="w-4 h-4 rounded flex items-center justify-center text-xs flex-shrink-0 text-white font-bold"
@@ -3552,7 +3588,7 @@ export default function ChatPage() {
                         onClick={handleResolveConversation}
                         disabled={resolvingConversation}
                         className="px-2.5 py-1 text-xs font-medium text-white rounded-md flex items-center gap-1.5 disabled:opacity-60"
-                        style={{ backgroundColor: '#8CD955' }}
+                        style={{ backgroundColor: '#E86A24' }}
                       >
                         {resolvingConversation ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -3567,20 +3603,20 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => setShowConvMenu((v) => !v)}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-[#333] rounded-md text-gray-500 dark:text-gray-400"
+                        className="p-1.5 hover:bg-[#E86A24]/10 rounded-md text-gray-500 dark:text-gray-400"
                         aria-label="Mais opções"
                       >
                         <MoreVertical className="w-4 h-4" />
                       </button>
                       {showConvMenu && (
-                        <div className="absolute right-0 top-full mt-1 z-30 w-52 py-1 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-lg shadow-lg">
+                        <div className="absolute right-0 top-full mt-1 z-30 w-52 py-1 zap-chat-panel border border-[#E86A24]/12 rounded-lg shadow-lg">
                           {selectedConversation.attendance_status === 'resolvido' &&
                             (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
                             <button
                               type="button"
                               onClick={handleReopenConversation}
                               disabled={reopeningConversation}
-                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200 disabled:opacity-60"
+                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#E86A24]/10 text-gray-700 dark:text-gray-200 disabled:opacity-60"
                             >
                               {reopeningConversation ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                               Reabrir conversa
@@ -3590,7 +3626,7 @@ export default function ChatPage() {
                             <button
                               type="button"
                               onClick={() => { setShowTagsPopover(true); setShowConvMenu(false); }}
-                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-[#333] text-gray-700 dark:text-gray-200"
+                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#E86A24]/10 text-gray-700 dark:text-gray-200"
                             >
                               <Tag className="w-4 h-4" />
                               Gerenciar etiquetas
@@ -3614,7 +3650,7 @@ export default function ChatPage() {
                       <button
                         onClick={loadOlderMessages}
                         disabled={loadingOlderMessages}
-                        className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded-full bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] shadow-sm"
+                        className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-3 py-1.5 rounded-full bg-white dark:bg-[#333] border border-[#E86A24]/12 shadow-sm"
                       >
                         {loadingOlderMessages ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
@@ -3676,8 +3712,8 @@ export default function ChatPage() {
                               <div
                                 className={`max-w-md px-4 py-2 rounded-lg ${
                                   msg.from_me
-                                    ? 'bg-[#8CD955] text-white rounded-br-none'
-                                    : 'bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 rounded-bl-none border border-gray-200 dark:border-[#404040]'
+                                    ? 'bg-[#E86A24] text-white rounded-br-none'
+                                    : 'rounded-bl-none border border-[#E86A24]/15 bg-[#1f1612] text-gray-100'
                                 } ${isDeleting ? 'opacity-50' : ''}`}
                               >
                                 <MessageContent
@@ -3702,7 +3738,7 @@ export default function ChatPage() {
                                   type="button"
                                   onClick={() => requestDeleteMessage(msg.id)}
                                   disabled={isDeleting || !!deletingMessageId}
-                                  className="flex-shrink-0 mb-1 p-1 rounded-full bg-white dark:bg-[#333] border border-gray-200 dark:border-[#404040] text-gray-400 hover:text-red-500 hover:border-red-300 shadow-sm disabled:opacity-50 transition-colors"
+                                  className="flex-shrink-0 mb-1 p-1 rounded-full bg-white dark:bg-[#333] border border-[#E86A24]/12 text-gray-400 hover:text-red-500 hover:border-red-300 shadow-sm disabled:opacity-50 transition-colors"
                                   title="Apagar mensagem"
                                 >
                                   {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -3734,17 +3770,17 @@ export default function ChatPage() {
                 )}
 
                 {/* ── Barra de mensagem ────────────────────────────────── */}
-                <div className="flex-shrink-0 w-full bg-white dark:bg-[#2a2a2a] border-t border-gray-200 dark:border-[#404040] px-3 py-3">
+                <div className="flex-shrink-0 w-full zap-chat-panel border-t border-[#E86A24]/10 px-3 py-3">
                   <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
                   <input ref={docInputRef} type="file" className="hidden" accept="application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   {/* ── Prévia de áudio gravado ──────────────────────────── */}
                   {recordedBlob && !isRecording && (
-                    <div className="mb-2 p-3 bg-gray-50 dark:bg-[#2a2a2a] rounded-xl border border-[#8CD955]/40 dark:border-[#8CD955]/30 flex flex-col gap-2">
+                    <div className="mb-2 flex flex-col gap-2 rounded-xl border border-[#E86A24]/35 bg-[#160f0a]/50 p-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-[#8CD955]/20 flex items-center justify-center">
-                            <Mic size={13} className="text-[#8CD955]" />
+                          <div className="w-6 h-6 rounded-full bg-[#E86A24]/20 flex items-center justify-center">
+                            <Mic size={13} className="text-[#E86A24]" />
                           </div>
                           <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Prévia do áudio</span>
                         </div>
@@ -3763,7 +3799,7 @@ export default function ChatPage() {
                     </div>
                   )}
                   {attachedMedia && (
-                    <div className="mb-2 p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-gray-200 dark:border-[#404040]">
+                    <div className="mb-2 p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-[#E86A24]/12">
                       {attachedMedia.type === 'image' && attachedMedia.preview && (
                         <img src={attachedMedia.preview} alt="" className="w-10 h-10 rounded object-cover" />
                       )}
@@ -3790,7 +3826,7 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => setShowEmojiPicker((v) => !v)}
-                        className={`p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition-colors ${showEmojiPicker ? 'text-[#8CD955]' : 'text-gray-500 dark:text-gray-400'}`}
+                        className={`p-1.5 rounded-lg hover:bg-[#E86A24]/10 transition-colors ${showEmojiPicker ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}
                         title="Emoji"
                       >
                         <Smile className="w-4 h-4" />
@@ -3810,7 +3846,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Anexar"
                     >
                       {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
@@ -3848,8 +3884,12 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={startRecording}
-                        disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                        className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                        disabled={
+                          uploading ||
+                          !selectedChannel ||
+                          (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage)
+                        }
+                        className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                         title="Gravar áudio"
                       >
                         <Mic className="w-4 h-4" />
@@ -3860,7 +3900,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => docInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Documento (PDF)"
                     >
                       <FileText className="w-4 h-4" />
@@ -3869,7 +3909,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => imageInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#333] disabled:opacity-50"
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Imagem"
                     >
                       <ImageIcon className="w-4 h-4" />
@@ -3899,7 +3939,7 @@ export default function ChatPage() {
                             : "Digite a mensagem. Shift+Enter = nova linha. '/' = resposta pronta."
                         }
                         rows={2}
-                        className="w-full px-3 py-2.5 text-sm border border-gray-300 dark:border-[#404040] rounded-xl bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 resize-none overflow-y-auto focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                        className={`w-full resize-none overflow-y-auto rounded-xl border border-[#785037]/40 bg-[#1a120d] px-3 py-2.5 text-sm text-gray-100 placeholder:text-gray-500 focus:border-[#E86A24] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30`}
                         style={{ minHeight: '44px', maxHeight: '160px' }}
                         disabled={sending || !canSendFreeMessage}
                       />
@@ -3911,7 +3951,7 @@ export default function ChatPage() {
                         disabled={spellChecking || !messageText.trim()}
                         title="Corretor ortográfico"
                         className="px-3 py-2 text-xs font-medium text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
-                        style={{ backgroundColor: '#8CD955' }}
+                        style={{ backgroundColor: '#E86A24' }}
                       >
                         {spellChecking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
                       </button>
@@ -3931,7 +3971,7 @@ export default function ChatPage() {
                               : 'Enviar'
                         }
                         className="px-3 py-2 text-white rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-50 min-w-[44px] h-[38px]"
-                        style={{ backgroundColor: '#8CD955' }}
+                        style={{ backgroundColor: '#E86A24' }}
                       >
                         {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                       </button>
@@ -3945,10 +3985,12 @@ export default function ChatPage() {
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <MessageSquare className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-                  <p className="text-gray-600 dark:text-gray-400">Selecione uma conversa para começar</p>
+              <div className="flex flex-1 items-center justify-center p-8">
+                <div className="zap-card-client max-w-sm rounded-2xl border border-[#E86A24]/20 p-8 text-center">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#E86A24]/15">
+                    <MessageSquare className="h-8 w-8 text-[#E86A24]" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-300">Selecione uma conversa para começar</p>
                 </div>
               </div>
             )}
@@ -3960,7 +4002,7 @@ export default function ChatPage() {
       {/* ── Modal Salvar / Editar Contato ──────────────────────────────────── */}
       {showContactModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+          <div className="zap-chat-panel rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {convContact ? 'Editar Contato' : 'Salvar Contato'}
@@ -3968,7 +4010,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setShowContactModal(false)}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] text-gray-500"
+                className="p-2 rounded-lg hover:bg-[#E86A24]/10 text-gray-500"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -3984,7 +4026,7 @@ export default function ChatPage() {
                   value={contactForm.name}
                   onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="Nome do contato"
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] focus:outline-none"
                 />
               </div>
 
@@ -3997,7 +4039,7 @@ export default function ChatPage() {
                   value={contactForm.phone}
                   onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
                   placeholder="5511999999999"
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] focus:outline-none"
                 />
               </div>
 
@@ -4008,7 +4050,7 @@ export default function ChatPage() {
                 <select
                   value={contactForm.horario}
                   onChange={(e) => setContactForm((f) => ({ ...f, horario: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] focus:outline-none"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] focus:outline-none"
                 >
                   <option value="">Selecione um horário</option>
                   <option value="Manhã (08h–12h)">Manhã (08h–12h)</option>
@@ -4034,7 +4076,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setShowContactModal(false)}
-                className="flex-1 px-4 py-2.5 text-sm font-medium border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors"
+                className="flex-1 px-4 py-2.5 text-sm font-medium border border-gray-300 dark:border-[#404040] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-[#E86A24]/10 transition-colors"
               >
                 Cancelar
               </button>
@@ -4043,7 +4085,7 @@ export default function ChatPage() {
                 onClick={handleSaveContact}
                 disabled={savingContact}
                 className="flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60 transition-colors"
-                style={{ backgroundColor: '#8CD955' }}
+                style={{ backgroundColor: '#E86A24' }}
               >
                 {savingContact ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

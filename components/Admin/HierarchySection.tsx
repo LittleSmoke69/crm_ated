@@ -1090,7 +1090,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             </div>
           </div>
           <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-            <button onClick={() => handleEditUser(user)} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-gray-400 dark:text-[#888] hover:text-[#8CD955] dark:hover:text-[#00ff00] hover:bg-gray-50 dark:hover:bg-[#333] rounded-lg transition-colors touch-manipulation" title="Editar usuário">
+            <button onClick={() => handleEditUser(user)} className="p-2.5 sm:p-2 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 flex items-center justify-center text-gray-400 dark:text-[#888] hover:text-[#E86A24] dark:hover:text-[#00ff00] hover:bg-gray-50 dark:hover:bg-[#333] rounded-lg transition-colors touch-manipulation" title="Editar usuário">
               <EditIcon className="w-5 h-5" />
             </button>
             {showRemoveFromBanca && (
@@ -1122,7 +1122,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             </div>
           </div>
           {role === 'consultor' && (
-            <a href={`/crm/kanban?userId=${user.id}`} className="w-full flex items-center justify-center gap-2 px-3 py-3 sm:py-2 min-h-[44px] bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors text-xs sm:text-sm font-medium touch-manipulation active:scale-[0.98]">
+            <a href={`/crm/kanban?userId=${user.id}`} className="w-full flex items-center justify-center gap-2 px-3 py-3 sm:py-2 min-h-[44px] bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition-colors text-xs sm:text-sm font-medium touch-manipulation active:scale-[0.98]">
               <TrendingUp className="w-4 h-4" />
               Acessar CRM
             </a>
@@ -1240,14 +1240,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           <div className="mb-5 sm:mb-6 pb-5 border-b border-emerald-200/80 dark:border-emerald-800/80">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4 mb-4">
               <div className="flex items-start gap-3 min-w-0 flex-1">
-                <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-xl bg-[#8CD955] dark:bg-[#00e600] text-white flex items-center justify-center font-bold text-base sm:text-lg flex-shrink-0 shadow-md shadow-emerald-200/50 dark:shadow-emerald-900/40">
+                <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-xl bg-[#E86A24] dark:bg-[#00e600] text-white flex items-center justify-center font-bold text-base sm:text-lg flex-shrink-0 shadow-md shadow-emerald-200/50 dark:shadow-emerald-900/40">
                   {crmBanca.name ? String(crmBanca.name).substring(0, 2).toUpperCase() : 'BK'}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mb-0.5">Banca</p>
                   <h2 className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white leading-tight break-words">{crmBanca.name || 'Banca sem nome'}</h2>
                   {crmBanca.url && (
-                    <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-xs sm:text-sm text-[#8CD955] dark:text-[#00ff00] hover:underline font-medium inline-flex items-center gap-1 mt-1 break-all max-w-full">
+                    <a href={`https://${normalizeBancaUrl(crmBanca.url)}`} target="_blank" rel="noreferrer" className="text-xs sm:text-sm text-[#E86A24] dark:text-[#00ff00] hover:underline font-medium inline-flex items-center gap-1 mt-1 break-all max-w-full">
                       <Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 flex-shrink-0" />
                       <span className="break-all">{normalizeBancaUrl(crmBanca.url)}</span>
                     </a>
@@ -1264,7 +1264,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
               {!owner ? (
                 <>
-                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className={`${btnClass} bg-[#8CD955] text-white hover:bg-[#7BC84A]`}>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className={`${btnClass} bg-[#E86A24] text-white hover:bg-[#D95E1B]`}>
                     <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Criar Dono</span>
                   </button>
                   <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className={`${btnClass} bg-emerald-700/90 text-white hover:bg-emerald-700 border border-emerald-600`}>
@@ -1804,7 +1804,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               <button
                 type="button"
                 onClick={() => { setPeopleSearch(''); setBancasCurrentPage(1); }}
-                className="mt-4 text-sm text-[#8CD955] dark:text-[#00ff00] font-medium hover:underline"
+                className="mt-4 text-sm text-[#E86A24] dark:text-[#00ff00] font-medium hover:underline"
               >
                 Limpar busca de pessoas
               </button>
@@ -1920,7 +1920,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
             <div className="flex-1 relative w-full min-w-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-[#888] w-5 h-5 pointer-events-none" />
-              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]" />
+              <input type="text" value={bancaSearch} onChange={(e) => { setBancaSearch(e.target.value); setBancasCurrentPage(1); }} placeholder="Pesquisar banca por nome ou URL..." className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]" />
             </div>
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <div className="relative flex-1 sm:flex-none min-w-0 sm:min-w-[220px]" ref={bancaPickerRef}>
@@ -1958,7 +1958,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                           value={bancaPickerSearch}
                           onChange={(e) => setBancaPickerSearch(e.target.value)}
                           placeholder="Buscar banca por nome, URL ou ID..."
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888] focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-transparent"
+                          className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888] focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-transparent"
                           autoFocus
                         />
                       </div>
@@ -1975,7 +1975,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                             setBancaPickerOpen(false);
                             setBancaPickerSearch('');
                           }}
-                          className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${selectedBancaMode === 'all' ? 'bg-[#8CD955]/15 dark:bg-[#00ff00]/15 text-[#5a9a2e] dark:text-[#00ff00] font-semibold' : 'text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#404040]'}`}
+                          className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${selectedBancaMode === 'all' ? 'bg-[#E86A24]/15 dark:bg-[#00ff00]/15 text-[#5a9a2e] dark:text-[#00ff00] font-semibold' : 'text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#404040]'}`}
                         >
                           Todas as bancas
                         </button>
@@ -1992,7 +1992,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                               setBancaPickerOpen(false);
                               setBancaPickerSearch('');
                             }}
-                            className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${String(selectedBancaMode) === String(b.id) ? 'bg-[#8CD955]/15 dark:bg-[#00ff00]/15 text-[#5a9a2e] dark:text-[#00ff00] font-semibold' : 'text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#404040]'}`}
+                            className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${String(selectedBancaMode) === String(b.id) ? 'bg-[#E86A24]/15 dark:bg-[#00ff00]/15 text-[#5a9a2e] dark:text-[#00ff00] font-semibold' : 'text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#404040]'}`}
                           >
                             <span className="block truncate">{b.name || b.url || b.id}</span>
                             {b.url && b.name && (
@@ -2008,7 +2008,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   </div>
                 )}
               </div>
-              <button onClick={handleLoadData} disabled={!bancasDropdownReady || dataLoading} className="px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors flex items-center justify-center gap-2 font-medium disabled:opacity-70 text-sm touch-manipulation" title="Carregar dados da hierarquia">
+              <button onClick={handleLoadData} disabled={!bancasDropdownReady || dataLoading} className="px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition-colors flex items-center justify-center gap-2 font-medium disabled:opacity-70 text-sm touch-manipulation" title="Carregar dados da hierarquia">
                 {dataLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> <span>Carregando...</span></> : <><RefreshCw className="w-4 h-4" /> <span>Carregar dados</span></>}
               </button>
               {dataLoaded && (
@@ -2037,7 +2037,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   setBancasCurrentPage(1);
                 }}
                 placeholder="Buscar gerente ou consultor (nome ou e-mail)..."
-                className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-800/60 rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
+                className="w-full min-w-0 pl-10 pr-4 py-2.5 sm:py-2 text-base sm:text-sm bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-800/60 rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
               />
             </div>
           )}
@@ -2048,7 +2048,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
         {dataLoading ? (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] p-12 text-center">
-            <Loader2 className="w-12 h-12 mx-auto mb-4 text-[#8CD955] dark:text-[#00ff00] animate-spin" />
+            <Loader2 className="w-12 h-12 mx-auto mb-4 text-[#E86A24] dark:text-[#00ff00] animate-spin" />
             <p className="text-gray-600 dark:text-[#aaa]">Carregando hierarquia...</p>
           </div>
         ) : !dataLoaded ? (
@@ -2066,22 +2066,22 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       {showEditModal && editingUser && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-[#404040]">
-            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-[#8CD955] to-[#7BC84A] dark:from-[#00ff00] dark:to-[#00e600] text-white">
+            <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-[#E86A24] to-[#D95E1B] dark:from-[#00ff00] dark:to-[#00e600] text-white">
               <h2 className="text-xl font-bold flex items-center gap-2"><EditIcon className="w-6 h-6" /> Editar Usuário</h2>
               <button onClick={() => { setShowEditModal(false); setEditingUser(null); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={(e) => { e.preventDefault(); handleSaveEdit(); }} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Email</label>
-                <input type="email" value={editFormData.email} onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
+                <input type="email" value={editFormData.email} onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nova Senha (deixe em branco para não alterar)</label>
-                <input type="password" value={editFormData.password} onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="••••••••" />
+                <input type="password" value={editFormData.password} onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="••••••••" />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => { setShowEditModal(false); setEditingUser(null); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition-colors font-medium">Salvar</button>
+                <button type="submit" className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition-colors font-medium">Salvar</button>
               </div>
             </form>
           </div>
@@ -2101,15 +2101,15 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <form onSubmit={handleCreateUser} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nome Completo</label>
-                <input type="text" value={createFormData.fullName} onChange={(e) => setCreateFormData({ ...createFormData, fullName: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="Nome do usuário" />
+                <input type="text" value={createFormData.fullName} onChange={(e) => setCreateFormData({ ...createFormData, fullName: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="Nome do usuário" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Email *</label>
-                <input type="email" value={createFormData.email} onChange={(e) => setCreateFormData({ ...createFormData, email: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
+                <input type="email" value={createFormData.email} onChange={(e) => setCreateFormData({ ...createFormData, email: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Senha *</label>
-                <input type="password" value={createFormData.password} onChange={(e) => setCreateFormData({ ...createFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
+                <input type="password" value={createFormData.password} onChange={(e) => setCreateFormData({ ...createFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
               </div>
               {(createFormData.status === 'gerente' || createFormData.status === 'consultor' || createFormData.status === 'gestor') && (
                 <div>
@@ -2123,7 +2123,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   <select
                     value={createFormData.enroller}
                     onChange={(e) => setCreateFormData({ ...createFormData, enroller: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">
                       {createFormData.status === 'consultor' ? 'Selecione...' : 'Sem superior (opcional)'}
@@ -2159,11 +2159,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nome da Banca *</label>
-                    <input type="text" value={createFormData.bancaName} onChange={(e) => setCreateFormData({ ...createFormData, bancaName: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
+                    <input type="text" value={createFormData.bancaName} onChange={(e) => setCreateFormData({ ...createFormData, bancaName: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">URL da Banca *</label>
-                    <input type="text" value={createFormData.bancaUrl} onChange={(e) => setCreateFormData({ ...createFormData, bancaUrl: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="exemplo.com/api/crm" required />
+                    <input type="text" value={createFormData.bancaUrl} onChange={(e) => setCreateFormData({ ...createFormData, bancaUrl: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="exemplo.com/api/crm" required />
                   </div>
                 </>
               )}
@@ -2194,7 +2194,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               </p>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Superior (Gerente ou Admin) *</label>
-                <select value={importConsultantsGerenteId} onChange={(e) => setImportConsultantsGerenteId(e.target.value)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]">
+                <select value={importConsultantsGerenteId} onChange={(e) => setImportConsultantsGerenteId(e.target.value)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]">
                   <option value="">Selecione...</option>
                   {getSuperioresParaConsultor(importConsultantsContext.bancaId).map((m: any) => (
                     <option key={m.id} value={m.id}>

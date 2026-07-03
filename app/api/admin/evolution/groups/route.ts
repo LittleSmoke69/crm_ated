@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { evolutionBalancer } from '@/lib/services/evolution-balancer';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 
 export const runtime = 'nodejs';
 
@@ -25,6 +26,13 @@ export async function GET(req: NextRequest) {
     const canAccess = profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'dono_banca';
     if (!canAccess) {
       return errorResponse('Acesso negado. Apenas administradores.', 403);
+    }
+
+    if (!isEvolutionStackEnabled()) {
+      return successResponse(
+        { dbGroups: [], evolutionGroups: [], totalDbGroups: 0, totalEvolutionGroups: 0 },
+        'Stack Evolution desabilitado neste ambiente'
+      );
     }
 
     // Busca grupos salvos no banco

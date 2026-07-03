@@ -1258,7 +1258,7 @@ export default function GerentePage() {
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
       </div>
     );
   }
@@ -1367,7 +1367,7 @@ export default function GerentePage() {
   const SortableTh = ({ field, label, align = 'center' }: { field: TeamTableSortField; label: string; align?: 'left' | 'center' | 'right' }) => (
     <th
       onClick={() => toggleSort(field)}
-      className={`px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors select-none ${align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : 'text-center'}`}
+      className={`px-4 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#E86A24] transition-colors select-none ${align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : 'text-center'}`}
     >
       <div className={`flex items-center gap-1 ${align === 'right' ? 'justify-end' : align === 'left' ? 'justify-start' : 'justify-center'}`}>
         {label}
@@ -1559,8 +1559,8 @@ export default function GerentePage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#8CD95515] dark:bg-[#8CD95525] rounded-xl">
-              <Briefcase className="w-6 h-6 text-[#8CD955]" />
+            <div className="p-2.5 bg-[#E86A2415] dark:bg-[#E86A2425] rounded-xl">
+              <Briefcase className="w-6 h-6 text-[#E86A24]" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Painel do Gerente</h1>
@@ -1587,12 +1587,12 @@ export default function GerentePage() {
               >
                 {bancasLoading ? (
                   <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#E86A24] border-t-transparent" />
                     <span>Carregando bancas...</span>
                   </>
                 ) : (
                   <>
-                    <Filter className="w-4 h-4 text-[#8CD955]" />
+                    <Filter className="w-4 h-4 text-[#E86A24]" />
                     {selectedBanca === BANCA_ALL ? 'Todas as bancas' : (bancas.find(b => b.url === selectedBanca)?.name || 'Selecione uma Banca')}
                     <ChevronDown className="w-4 h-4" />
                   </>
@@ -1603,7 +1603,7 @@ export default function GerentePage() {
                 <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[280px] max-h-[400px] overflow-hidden flex flex-col">
                   {bancasLoading ? (
                     <div className="p-6 flex flex-col items-center justify-center gap-3 text-center">
-                      <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#8CD955] border-t-transparent" />
+                      <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#E86A24] border-t-transparent" />
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Verificando bancas disponíveis</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">Carregando as bancas em que você pode trabalhar...</p>
                     </div>
@@ -1617,7 +1617,7 @@ export default function GerentePage() {
                             placeholder="Pesquisar banca..."
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                            className="w-full pl-10 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 font-bold focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-400"
                             autoFocus
                           />
                         </div>
@@ -1631,7 +1631,7 @@ export default function GerentePage() {
                               setShowBancaFilter(false);
                               setBancaSearchTerm('');
                             }}
-                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === BANCA_ALL ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'}`}
+                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === BANCA_ALL ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-bold' : 'text-gray-700 dark:text-gray-200'}`}
                           >
                             Todas as bancas
                           </button>
@@ -1653,7 +1653,7 @@ export default function GerentePage() {
                                   setShowBancaFilter(false);
                                   setBancaSearchTerm('');
                                 }}
-                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === banca.url ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-bold' : 'text-gray-700 dark:text-gray-200'
+                                className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedBanca === banca.url ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-bold' : 'text-gray-700 dark:text-gray-200'
                                   }`}
                               >
                                 {banca.name}
@@ -1683,7 +1683,7 @@ export default function GerentePage() {
                   disabled={gerentesLoading || gerentes.length === 0}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm disabled:opacity-80"
                 >
-                  <Briefcase className="w-4 h-4 text-[#8CD955]" />
+                  <Briefcase className="w-4 h-4 text-[#E86A24]" />
                   {gerentesLoading ? 'Carregando...' : (gerentes.find((g) => g.id === selectedGerente)?.full_name || gerentes.find((g) => g.id === selectedGerente)?.email || 'Selecione um Gerente')}
                   <ChevronDown className="w-4 h-4" />
                 </button>
@@ -1697,7 +1697,7 @@ export default function GerentePage() {
                           placeholder="Pesquisar gerente..."
                           value={gerenteSearchTerm}
                           onChange={(e) => setGerenteSearchTerm(e.target.value)}
-                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
                           autoFocus
                         />
                       </div>
@@ -1713,7 +1713,7 @@ export default function GerentePage() {
                               setShowGerenteFilter(false);
                               setGerenteSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedGerente === gerente.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedGerente === gerente.id ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                               }`}
                           >
                             {gerente.full_name || gerente.email}
@@ -1740,7 +1740,7 @@ export default function GerentePage() {
                   }}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
                 >
-                  <Users className="w-4 h-4 text-[#8CD955]" />
+                  <Users className="w-4 h-4 text-[#E86A24]" />
                   {selectedConsultor === 'all'
                     ? 'Todos os Consultores'
                     : allConsultores.find(c => c.id === selectedConsultor)?.name || 'Consultor'}
@@ -1757,7 +1757,7 @@ export default function GerentePage() {
                           placeholder="Pesquisar consultor..."
                           value={consultorSearchTerm}
                           onChange={(e) => setConsultorSearchTerm(e.target.value)}
-                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
+                          className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
                           autoFocus
                         />
                       </div>
@@ -1769,7 +1769,7 @@ export default function GerentePage() {
                           setShowConsultorFilter(false);
                           setConsultorSearchTerm('');
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === 'all' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                           }`}
                       >
                         Todos os Consultores
@@ -1784,7 +1784,7 @@ export default function GerentePage() {
                               setShowConsultorFilter(false);
                               setConsultorSearchTerm('');
                             }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === consultor.id ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedConsultor === consultor.id ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                               }`}
                           >
                             {consultor.name || consultor.email}
@@ -1807,7 +1807,7 @@ export default function GerentePage() {
                 onClick={() => setShowDatePicker(!showDatePicker)}
                 className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
               >
-                <Calendar className="w-4 h-4 text-[#8CD955]" />
+                <Calendar className="w-4 h-4 text-[#E86A24]" />
                 {dateFilter === 'daily' && 'Diário'}
                 {dateFilter === 'yesterday' && 'Ontem'}
                 {dateFilter === '7days' && 'Últimos 7 dias'}
@@ -1832,7 +1832,7 @@ export default function GerentePage() {
                             setDateFilter('custom');
                           }
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${dateFilter === filter ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${dateFilter === filter ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
                           }`}
                       >
                         {filter === 'daily' && 'Diário'}
@@ -1854,7 +1854,7 @@ export default function GerentePage() {
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <div>
@@ -1865,7 +1865,7 @@ export default function GerentePage() {
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <button
@@ -1877,7 +1877,7 @@ export default function GerentePage() {
                             }
                           }}
                           disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         >
                           Aplicar
                         </button>
@@ -1892,7 +1892,7 @@ export default function GerentePage() {
               type="button"
               onClick={() => loadData(false)}
               disabled={dataLoading || (selectedBanca === BANCA_ALL && bancas.length === 0)}
-              className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-gray-900 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
+              className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-gray-900 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
             >
               <Filter className="w-4 h-4" />
               Filtrar
@@ -1902,7 +1902,7 @@ export default function GerentePage() {
               onClick={() => setSolicitationChoiceOpen(true)}
               className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
             >
-              <ClipboardList className="w-4 h-4 text-[#8CD955]" />
+              <ClipboardList className="w-4 h-4 text-[#E86A24]" />
               Solicitações
             </button>
           </div>
@@ -1924,8 +1924,8 @@ export default function GerentePage() {
 
         {/* Loading da busca de consultores em lotes — fixo no topo do dashboard para ficar sempre visível */}
         {loadingConsultoresProgress && (
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[#8CD955] bg-[#8CD95510] dark:bg-[#8CD95515] border border-[#8CD95530] dark:border-[#8CD95540] rounded-xl px-4 py-3 shadow-sm">
-            <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#8CD955] border-t-transparent shrink-0" />
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[#E86A24] bg-[#E86A2410] dark:bg-[#E86A2415] border border-[#E86A2430] dark:border-[#E86A2440] rounded-xl px-4 py-3 shadow-sm">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#E86A24] border-t-transparent shrink-0" />
             <span className="font-medium">
               Buscando consultores {loadingConsultoresProgress.from}-{loadingConsultoresProgress.to} de {loadingConsultoresProgress.total || '…'}
               {loadingConsultoresProgress.bancaTotal != null && loadingConsultoresProgress.bancaTotal > 0 && (
@@ -1942,11 +1942,11 @@ export default function GerentePage() {
         <div className="relative">
           {(dataLoading || initialLoading) && !gerenteTotalKpis && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
             </div>
           )}
           {gerenteTotalKpis ? (
-            <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
               <div className="flex items-center gap-2 mb-6">
                 <Briefcase className="w-6 h-6 text-white" />
                 <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
@@ -2041,7 +2041,7 @@ export default function GerentePage() {
               </div>
             </div>
           ) : (
-            <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
               <div className="text-center py-8">
                 <AlertCircle className="w-12 h-12 text-white/80 mx-auto mb-4" />
                 <p className="text-white font-medium">Dados não encontrados</p>
@@ -2054,13 +2054,13 @@ export default function GerentePage() {
         <div className="relative">
           {(dataLoading || initialLoading) && !chartData && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
             </div>
           )}
           {chartData ? (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+                <BarChart3 className="w-5 h-5 text-[#E86A24]" />
                 Análises e Gráficos
               </h2>
 
@@ -2250,12 +2250,12 @@ export default function GerentePage() {
         {/* Resumo de Etiquetas (gráficos) */}
         <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
           <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-            <Tag className="w-5 h-5 text-[#8CD955]" />
+            <Tag className="w-5 h-5 text-[#E86A24]" />
             Resumo de Etiquetas
           </h2>
           {tagsLoading ? (
             <div className="py-12 flex flex-col items-center justify-center gap-3">
-              <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#E86A24] border-t-transparent" />
               <p className="text-sm text-gray-500">Carregando resumo...</p>
             </div>
           ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
@@ -2280,14 +2280,14 @@ export default function GerentePage() {
           {/* Uso de Etiquetas por Consultor */}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-              <Tag className="w-5 h-5 text-[#8CD955]" />
+              <Tag className="w-5 h-5 text-[#E86A24]" />
               Uso de Etiquetas por Consultor
             </h2>
 
             <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
               {tagsLoading ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-3">
-                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#E86A24] border-t-transparent" />
                   <p className="text-sm text-gray-500">Carregando dados...</p>
                 </div>
               ) : tagsReportData?.tagUsage && tagsReportData.tagUsage.length > 0 ? (
@@ -2308,7 +2308,7 @@ export default function GerentePage() {
                   ) : (
                     <div key={idx} className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700">
                       <div className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-full bg-[#8CD95520] text-[#8CD955] flex items-center justify-center text-[10px]">
+                        <div className="w-6 h-6 rounded-full bg-[#E86A2420] text-[#E86A24] flex items-center justify-center text-[10px]">
                           {item.consultorName[0].toUpperCase()}
                         </div>
                         {item.consultorName}
@@ -2353,7 +2353,7 @@ export default function GerentePage() {
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
               {tagsLoading ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-3">
-                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#E86A24] border-t-transparent" />
                   <p className="text-sm text-gray-500">Carregando histórico...</p>
                 </div>
               ) : tagsReportData?.recentTaggedClients && tagsReportData.recentTaggedClients.length > 0 ? (
@@ -2407,7 +2407,7 @@ export default function GerentePage() {
         <div className="relative">
           {dataLoading && !loadingConsultoresProgress && consultorMetrics.length === 0 && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
@@ -2429,14 +2429,14 @@ export default function GerentePage() {
                       setTableSearchTerm(e.target.value);
                       setTeamTablePage(1);
                     }}
-                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] outline-none transition-all"
+                    className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] outline-none transition-all"
                   />
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(true)}
-                  className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20 w-full sm:w-auto"
+                  className="flex items-center justify-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#E86A24]/20 w-full sm:w-auto"
                 >
                   <UserPlus className="w-4 h-4" />
                   Novo Consultor
@@ -2453,7 +2453,7 @@ export default function GerentePage() {
                     <tr className="bg-gray-50/30 dark:bg-gray-800/60">
                       <th
                         onClick={() => toggleSort('name')}
-                        className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#8CD955] transition-colors"
+                        className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#E86A24] transition-colors"
                       >
                         <div className="flex items-center gap-1">
                           Consultor
@@ -2477,7 +2477,7 @@ export default function GerentePage() {
                       <tr key={consultor.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-sm">
+                            <div className="w-9 h-9 rounded-full bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] flex items-center justify-center font-bold text-sm">
                               {(consultor.name || consultor.email)[0].toUpperCase()}
                             </div>
                             <div>
@@ -2544,7 +2544,7 @@ export default function GerentePage() {
                           <button
                             type="button"
                             onClick={() => setResumoModalConsultor(consultor)}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 hover:border-[#8CD955]/30 transition-colors"
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#E86A2415] hover:text-[#E86A24] border border-gray-200 dark:border-gray-600 hover:border-[#E86A24]/30 transition-colors"
                           >
                             <BarChart3 className="w-4 h-4" />
                             Resumo
@@ -2563,7 +2563,7 @@ export default function GerentePage() {
                         setTeamTablePageSize(Number(e.target.value));
                         setTeamTablePage(1);
                       }}
-                      className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                      className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] outline-none"
                     >
                       {[10, 25, 50].map((n) => (
                         <option key={n} value={n}>{n}</option>
@@ -2612,7 +2612,7 @@ export default function GerentePage() {
                 {paginatedMetrics.map((consultor) => (
                   <div key={consultor.id} className="p-4 space-y-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] flex items-center justify-center font-bold text-base shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] flex items-center justify-center font-bold text-base shrink-0">
                         {(consultor.name || consultor.email)[0].toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -2622,7 +2622,7 @@ export default function GerentePage() {
                       <button
                         type="button"
                         onClick={() => setResumoModalConsultor(consultor)}
-                        className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#8CD95515] hover:text-[#8CD955] border border-gray-200 dark:border-gray-600 transition-colors"
+                        className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-[#E86A2415] hover:text-[#E86A24] border border-gray-200 dark:border-gray-600 transition-colors"
                       >
                         <BarChart3 className="w-4 h-4" />
                         Resumo
@@ -2656,7 +2656,7 @@ export default function GerentePage() {
                       setTeamTablePageSize(Number(e.target.value));
                       setTeamTablePage(1);
                     }}
-                    className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] outline-none"
+                    className="px-2 py-1.5 text-xs font-medium bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] outline-none"
                   >
                     {[10, 25, 50].map((n) => (
                       <option key={n} value={n}>{n}</option>
@@ -2711,7 +2711,7 @@ export default function GerentePage() {
           <div className="p-4">
             {leadRequestsHistoryLoading ? (
               <div className="py-12 flex flex-col items-center justify-center gap-3">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#8CD955] border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#E86A24] border-t-transparent" />
                 <p className="text-sm text-gray-500 dark:text-gray-400">Carregando solicitações...</p>
               </div>
             ) : leadRequestsHistory.length === 0 ? (
@@ -2729,7 +2729,7 @@ export default function GerentePage() {
                       id="hist-consultor"
                       value={leadRequestHistoryConsultorFilter}
                       onChange={(e) => setLeadRequestHistoryConsultorFilter(e.target.value)}
-                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24]"
                     >
                       <option value="all">Todos</option>
                       {leadRequestHistoryConsultores.map((c) => (
@@ -2743,7 +2743,7 @@ export default function GerentePage() {
                       id="hist-status"
                       value={leadRequestHistoryStatusFilter}
                       onChange={(e) => setLeadRequestHistoryStatusFilter(e.target.value)}
-                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#8CD955]/50 focus:border-[#8CD955]"
+                      className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-[#E86A24]/50 focus:border-[#E86A24]"
                     >
                       <option value="all">Todas</option>
                       <option value="pending">Pendente</option>
@@ -2891,7 +2891,7 @@ export default function GerentePage() {
         {resumoModalConsultor && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
-              <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+              <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white">
                 <h2 className="text-lg font-bold flex items-center gap-2">
                   <BarChart3 className="w-5 h-5" />
                   Resumo
@@ -2923,9 +2923,9 @@ export default function GerentePage() {
                       <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1">Leads</p>
                       <p className="text-base font-bold text-gray-800 dark:text-gray-100">{resumoModalConsultor.externalKpis?.total_leads ?? 0}</p>
                     </div>
-                    <div className="bg-[#8CD95510] p-3 rounded-xl border border-[#8CD955]/20 text-center">
-                      <p className="text-[10px] font-bold text-[#8CD955] uppercase mb-1">Depositado</p>
-                      <p className="text-base font-bold text-[#8CD955]">
+                    <div className="bg-[#E86A2410] p-3 rounded-xl border border-[#E86A24]/20 text-center">
+                      <p className="text-[10px] font-bold text-[#E86A24] uppercase mb-1">Depositado</p>
+                      <p className="text-base font-bold text-[#E86A24]">
                         R$ {(resumoModalConsultor.externalKpis?.total_deposited ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                       </p>
                     </div>
@@ -2941,7 +2941,7 @@ export default function GerentePage() {
                   <Link
                     href={`/crm/kanban?userId=${resumoModalConsultor.id}`}
                     onClick={() => setResumoModalConsultor(null)}
-                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-[#8CD955] bg-[#8CD95515] border border-[#8CD955]/30 hover:bg-[#8CD95525] transition-colors"
+                    className="flex items-center gap-2 w-full px-4 py-3 rounded-xl text-sm font-bold text-[#E86A24] bg-[#E86A2415] border border-[#E86A24]/30 hover:bg-[#E86A2425] transition-colors"
                   >
                     <Eye className="w-4 h-4" />
                     Acessar o Kanban
@@ -2994,7 +2994,7 @@ export default function GerentePage() {
         {solicitationChoiceOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
-              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white shrink-0">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <ClipboardList className="w-6 h-6" />
                   Solicitações
@@ -3010,7 +3010,7 @@ export default function GerentePage() {
                     setSolicitationChoiceOpen(false);
                     openSolicitationModal();
                   }}
-                  className="w-full flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3.5 rounded-xl transition-colors"
+                  className="w-full flex items-center justify-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3.5 rounded-xl transition-colors"
                 >
                   <Users className="w-5 h-5" />
                   Pedir lead
@@ -3024,7 +3024,7 @@ export default function GerentePage() {
                     setConsultorRequestError('');
                     setConsultorBancaModalOpen(true);
                   }}
-                  className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-[#8CD955] text-[#8CD955] dark:text-[#8CD955] font-bold py-3.5 rounded-xl hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 transition-colors"
+                  className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-[#E86A24] text-[#E86A24] dark:text-[#E86A24] font-bold py-3.5 rounded-xl hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 transition-colors"
                 >
                   <UserPlus className="w-5 h-5" />
                   Consultor
@@ -3038,7 +3038,7 @@ export default function GerentePage() {
         {solicitationModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700 flex flex-col">
-              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white shrink-0">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <ClipboardList className="w-6 h-6" />
                   Solicitação de leads
@@ -3051,7 +3051,7 @@ export default function GerentePage() {
               <form onSubmit={handleSolicitationSubmit} className="flex flex-col flex-1 overflow-hidden">
                 <div className="p-6 space-y-4 overflow-y-auto flex-1">
                   {solicitationError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{solicitationError}</div>}
-                  {solicitationSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{solicitationSuccess}</div>}
+                  {solicitationSuccess && <div className="bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] p-3 rounded-xl text-sm font-medium border border-[#E86A24]/30">{solicitationSuccess}</div>}
 
                   <div>
                     <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Consultor que receberá os leads</label>
@@ -3059,7 +3059,7 @@ export default function GerentePage() {
                       required
                       value={solicitationConsultorId}
                       onChange={(e) => setSolicitationConsultorId(e.target.value)}
-                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                     >
                       <option value="">Selecione um consultor</option>
                       {[...(allConsultores.length > 0 ? allConsultores : consultorMetrics)]
@@ -3078,7 +3078,7 @@ export default function GerentePage() {
                       </p>
                     ) : solicitationBancasLoading ? (
                       <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
-                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#E86A24] border-t-transparent" />
                         Buscando bancas do consultor...
                       </div>
                     ) : solicitationBancasForConsultant.length === 0 ? (
@@ -3090,7 +3090,7 @@ export default function GerentePage() {
                         required
                         value={solicitationBancaId}
                         onChange={(e) => setSolicitationBancaId(e.target.value)}
-                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                       >
                         <option value="">Selecione a banca</option>
                         {solicitationBancasForConsultant.map((b) => (
@@ -3113,7 +3113,7 @@ export default function GerentePage() {
                             Math.min(SOLICITATION_MAX_LEADS, Math.max(1, parseInt(e.target.value, 10) || 1))
                           )
                         }
-                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Máx: {SOLICITATION_MAX_LEADS}</p>
                     </div>
@@ -3124,7 +3124,7 @@ export default function GerentePage() {
                         min={1}
                         value={solicitationDeadlineDays}
                         onChange={(e) => setSolicitationDeadlineDays(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Prazo para conversão dos leads</p>
                     </div>
@@ -3138,7 +3138,7 @@ export default function GerentePage() {
                       placeholder="Ex.: priorizar leads com aposta recente..."
                       rows={3}
                       maxLength={1000}
-                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium placeholder:text-gray-400 resize-y"
+                      className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium placeholder:text-gray-400 resize-y"
                     />
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-1">Será enviada ao admin junto com a solicitação</p>
                   </div>
@@ -3149,7 +3149,7 @@ export default function GerentePage() {
                   <button
                     type="submit"
                     disabled={solicitationSubmitting || (!!solicitationConsultorId?.trim() && (solicitationBancasLoading || solicitationBancasForConsultant.length === 0)) || !solicitationBancaId?.trim()}
-                    className="bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors"
+                    className="bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 px-6 rounded-xl disabled:opacity-50 transition-colors"
                   >
                     {solicitationSubmitting ? 'Enviando...' : 'Enviar solicitação'}
                   </button>
@@ -3163,7 +3163,7 @@ export default function GerentePage() {
         {consultorBancaModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
-              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white shrink-0">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white shrink-0">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <UserPlus className="w-6 h-6" />
                   Solicitação de consultor
@@ -3215,7 +3215,7 @@ export default function GerentePage() {
                 <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca</label>
                 {bancasLoading ? (
                   <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#E86A24] border-t-transparent" />
                     Carregando bancas...
                   </div>
                 ) : (
@@ -3223,7 +3223,7 @@ export default function GerentePage() {
                     value={consultorBancaId}
                     onChange={(e) => setConsultorBancaId(e.target.value)}
                     required
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-4"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-4"
                   >
                     <option value="">Selecione a banca</option>
                     {bancas.map((b) => (
@@ -3238,7 +3238,7 @@ export default function GerentePage() {
                   max={500}
                   value={consultorQuantity}
                   onChange={(e) => setConsultorQuantity(Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 1)))}
-                  className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-6"
+                  className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium mb-6"
                 />
                 <div className="flex gap-3">
                   <button
@@ -3251,7 +3251,7 @@ export default function GerentePage() {
                   <button
                     type="submit"
                     disabled={consultorRequestSubmitting || !consultorBancaId}
-                    className="flex-1 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50"
+                    className="flex-1 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 rounded-xl disabled:opacity-50"
                   >
                     {consultorRequestSubmitting ? 'Enviando...' : 'Enviar solicitação'}
                   </button>
@@ -3265,7 +3265,7 @@ export default function GerentePage() {
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-700">
-              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#A8E677] to-[#8CD955] text-white">
+              <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <UserPlus className="w-6 h-6" />
                   Novo Consultor
@@ -3277,7 +3277,7 @@ export default function GerentePage() {
 
               <form onSubmit={handleCreateConsultor} className="p-6 space-y-4">
                 {formError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{formError}</div>}
-                {formSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{formSuccess}</div>}
+                {formSuccess && <div className="bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] p-3 rounded-xl text-sm font-medium border border-[#E86A24]/30">{formSuccess}</div>}
 
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Consultor</label>
@@ -3285,7 +3285,7 @@ export default function GerentePage() {
                     type="text"
                     required
                     placeholder="Ex: João Silva"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.fullName}
                     onChange={e => setFormData({ ...formData, fullName: e.target.value })}
                   />
@@ -3296,7 +3296,7 @@ export default function GerentePage() {
                     type="email"
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.email}
                     onChange={e => setFormData({ ...formData, email: e.target.value })}
                   />
@@ -3307,7 +3307,7 @@ export default function GerentePage() {
                     type="password"
                     required
                     placeholder="••••••••"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={formData.password}
                     onChange={e => setFormData({ ...formData, password: e.target.value })}
                   />
@@ -3315,7 +3315,7 @@ export default function GerentePage() {
 
                 <div className="pt-4 flex gap-3">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
-                  <button type="submit" disabled={isSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
+                  <button type="submit" disabled={isSubmitting} className="flex-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {isSubmitting ? 'Cadastrando...' : 'Cadastrar Consultor'}
                   </button>
                 </div>
@@ -3339,14 +3339,14 @@ export default function GerentePage() {
               </div>
               <form onSubmit={handleEditConsultor} className="p-6 space-y-4">
                 {editFormError && <div className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 p-3 rounded-xl text-sm font-medium border border-red-100 dark:border-red-800">{editFormError}</div>}
-                {editFormSuccess && <div className="bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] p-3 rounded-xl text-sm font-medium border border-[#8CD955]/30">{editFormSuccess}</div>}
+                {editFormSuccess && <div className="bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] p-3 rounded-xl text-sm font-medium border border-[#E86A24]/30">{editFormSuccess}</div>}
                 <div>
                   <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome</label>
                   <input
                     type="text"
                     required
                     placeholder="Nome do consultor"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.fullName}
                     onChange={e => setEditFormData({ ...editFormData, fullName: e.target.value })}
                   />
@@ -3357,7 +3357,7 @@ export default function GerentePage() {
                     type="email"
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.email}
                     onChange={e => setEditFormData({ ...editFormData, email: e.target.value })}
                   />
@@ -3367,14 +3367,14 @@ export default function GerentePage() {
                   <input
                     type="password"
                     placeholder="••••••••"
-                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
+                    className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.password}
                     onChange={e => setEditFormData({ ...editFormData, password: e.target.value })}
                   />
                 </div>
                 <div className="pt-4 flex gap-3">
                   <button type="button" onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
-                  <button type="submit" disabled={isEditSubmitting} className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
+                  <button type="submit" disabled={isEditSubmitting} className="flex-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
                     {isEditSubmitting ? 'Salvando...' : 'Salvar'}
                   </button>
                 </div>

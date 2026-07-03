@@ -290,7 +290,7 @@ export default function NormalizationRulesPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -308,7 +308,7 @@ export default function NormalizationRulesPage() {
           </div>
           <button
             onClick={handleCreate}
-            className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition"
+            className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
           >
             <Plus className="w-5 h-5" />
             Criar Regra
@@ -317,7 +317,7 @@ export default function NormalizationRulesPage() {
 
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
           </div>
         ) : rules.length === 0 ? (
           <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
@@ -331,7 +331,7 @@ export default function NormalizationRulesPage() {
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
-                        <Settings className="w-5 h-5 text-[#8CD955]" />
+                        <Settings className="w-5 h-5 text-[#E86A24]" />
                         <h3 className="font-bold text-lg text-gray-900">{rule.name}</h3>
                         <span className={`px-2 py-1 text-xs font-medium rounded ${
                           rule.enabled
@@ -366,7 +366,7 @@ export default function NormalizationRulesPage() {
                       </button>
                       <button
                         onClick={() => handleEdit(rule)}
-                        className="p-2 hover:bg-[#8CD95515] rounded-lg transition text-[#8CD955]"
+                        className="p-2 hover:bg-[#E86A2415] rounded-lg transition text-[#E86A24]"
                       >
                         <Edit className="w-5 h-5" />
                       </button>
@@ -499,7 +499,7 @@ export default function NormalizationRulesPage() {
                     id="enabled"
                     checked={formData.enabled}
                     onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
-                    className="w-4 h-4 text-[#8CD955] border-gray-300 rounded"
+                    className="w-4 h-4 text-[#E86A24] border-gray-300 rounded"
                   />
                   <label htmlFor="enabled" className="text-sm text-gray-700">
                     Regra ativa
@@ -514,7 +514,7 @@ export default function NormalizationRulesPage() {
                   </label>
                   <button
                     onClick={handleAddMapping}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition text-sm"
+                    className="flex items-center gap-2 px-3 py-1.5 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition text-sm"
                   >
                     <Plus className="w-4 h-4" />
                     Adicionar Mapeamento
@@ -567,7 +567,7 @@ export default function NormalizationRulesPage() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (
                   <>
@@ -765,7 +765,7 @@ export default function NormalizationRulesPage() {
               </button>
               <button
                 onClick={handleSaveMapping}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7CC845] transition font-medium"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium"
               >
                 Salvar Mapeamento
               </button>

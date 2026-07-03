@@ -98,7 +98,7 @@ export function TenantSwitcher() {
                   window.location.reload();
                 }}
                 className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${
-                  t.id === selectedTenantId ? 'bg-[#8CD955]/10 text-[#8CD955] font-medium' : 'text-gray-700'
+                  t.id === selectedTenantId ? 'bg-[#E86A24]/10 text-[#E86A24] font-medium' : 'text-gray-700'
                 }`}
               >
                 {t.name}

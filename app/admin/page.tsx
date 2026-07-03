@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useTenantRouter, withTenantSlug, getWlSlugHeadersForApi } from '@/lib/utils/tenant-href';
+import { getLandingRouteByStatus } from '@/lib/utils/landing-route';
 import { evolutionDbStatusIsConnected } from '@/lib/utils/evolution-instance-status';
 import {
   findProxyById,
@@ -13,6 +14,7 @@ import {
 } from '@/lib/utils/proxy-enabled';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
+import { isEvolutionStackEnabled } from '@/lib/app-scope';
 import { useSidebar } from '@/contexts/SidebarContext';
 import {
   LineChart,
@@ -59,7 +61,6 @@ import {
   TrendingUp as TrendingUpIcon,
   Download,
   Loader2,
-  Eraser,
   Star,
   Crown,
   Eye,
@@ -75,15 +76,16 @@ import {
   ExternalLink,
   Headphones as HeadphonesIcon,
   Unplug,
-  Link2
+  Link2,
+  MessageCircle
 } from 'lucide-react';
-import CRMStatCard from '@/components/CRM/CRMStatCard';
 import StatusDistributionChart from '@/components/Charts/StatusDistributionChart';
 import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
 import ConversionFunnelChart from '@/components/Charts/ConversionFunnelChart';
 import ActivityByWeekdayChart from '@/components/Charts/ActivityByWeekdayChart';
 import MaturadorSection from '@/components/Admin/MaturadorSection';
 import { Zap } from 'lucide-react';
+import { Tag as TagIcon2 } from 'lucide-react';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
@@ -270,7 +272,7 @@ export default function AdminDashboard() {
   const [loadingZaplotoRoles, setLoadingZaplotoRoles] = useState(false);
   const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('overview');
+  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('users');
   const [instances, setInstances] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ dbGroups: any[]; evolutionGroups: any[] }>({ dbGroups: [], evolutionGroups: [] });
   const [loadingInstances, setLoadingInstances] = useState(false);
@@ -326,11 +328,11 @@ export default function AdminDashboard() {
   // Admin (não super_admin): seções permitidas. Auditoria: apenas overview (transferência de leads pela sidebar).
   useEffect(() => {
     if (isSuperAdmin) return;
-    const adminAllowed = ['overview', 'users', 'crm', 'disparo', 'loto_assistencia', 'settings'];
-    const auditoriaAllowed = ['overview'];
+    const adminAllowed = ['users'];
+    const auditoriaAllowed = ['users'];
     const allowed = adminStatus === 'auditoria' ? auditoriaAllowed : adminAllowed;
     if (adminStatus === 'admin' || adminStatus === 'auditoria') {
-      if (!allowed.includes(activeSection)) setActiveSection('overview');
+      if (!allowed.includes(activeSection)) setActiveSection('users');
     }
   }, [isSuperAdmin, adminStatus, activeSection]);
 
@@ -419,10 +421,11 @@ export default function AdminDashboard() {
       setAdminStatus(result.data?.status || null);
       setIsSuperAdmin(!!result.data?.isSuperAdmin);
       setHasVslRedirect(!!result.data?.hasVslRedirect);
-      await Promise.all([
-        loadData(),
-        loadFinishedCampaigns()
-      ]);
+      const evolutionEnabled = isEvolutionStackEnabled();
+      await loadData({ evolutionEnabled });
+      if (evolutionEnabled) {
+        await loadFinishedCampaigns();
+      }
       setLoading(false);
     } catch (error) {
       console.error('Erro ao verificar admin:', error);
@@ -432,9 +435,10 @@ export default function AdminDashboard() {
     }
   };
 
-  const loadData = async () => {
+  const loadData = async (opts?: { evolutionEnabled?: boolean }) => {
     const currentUserId = getStoredUserId() || userId;
     if (!currentUserId) return;
+    const evolutionEnabled = opts?.evolutionEnabled ?? isEvolutionStackEnabled();
     setUsersLoadError(null);
     try {
       const [statsRes, usersRes] = await Promise.all([
@@ -461,35 +465,14 @@ export default function AdminDashboard() {
         setUsers([]);
       }
 
-      // Carrega instâncias e grupos
-      loadInstances();
-      loadGroups();
+      if (evolutionEnabled) {
+        loadInstances();
+        loadGroups();
+      }
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
       setUsersLoadError('Falha ao carregar. Tente novamente.');
       setUsers([]);
-    }
-  };
-
-  const handleClearUserData = async (targetUserId: string, targetEmail: string) => {
-    if (!confirm(`Limpar todos os dados da conta e do dashboard do usuário ${targetEmail || targetUserId}? Campanhas, contatos, disparos e buscas serão removidos permanentemente.`)) {
-      return;
-    }
-    try {
-      const res = await fetch(`/api/admin/users/${targetUserId}/clear-data`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
-        await loadData();
-        alert('Dados do usuário foram limpos.');
-      } else {
-        alert(json?.error || 'Erro ao limpar dados do usuário.');
-      }
-    } catch (e) {
-      console.error('Erro ao limpar dados do usuário:', e);
-      alert('Erro ao limpar dados. Tente novamente.');
     }
   };
 
@@ -829,7 +812,7 @@ export default function AdminDashboard() {
           <p className="text-gray-600 mb-4">Você não tem permissão para acessar esta área.</p>
           <button
             onClick={() => router.push('/admin/login')}
-            className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition"
+            className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition"
           >
             Fazer Login Admin
           </button>
@@ -869,90 +852,17 @@ export default function AdminDashboard() {
 
         <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-md p-2 flex flex-wrap gap-2 border border-gray-200 dark:border-[#404040]">
           <button
-            onClick={() => setActiveSection('overview')}
-            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-              activeSection === 'overview'
-                ? 'text-white'
-                : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-            }`}
-            style={activeSection === 'overview' ? { backgroundColor: '#8CD955' } : {}}
-          >
-            <LayoutDashboard className="w-4 h-4 sm:w-5 sm:h-5" />
-            <span>Dashboard</span>
-          </button>
-
-          <button
             onClick={() => setActiveSection('users')}
             className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
               activeSection === 'users'
                 ? 'text-white'
                 : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
             }`}
-            style={activeSection === 'users' ? { backgroundColor: '#8CD955' } : {}}
+            style={activeSection === 'users' ? { backgroundColor: '#E86A24' } : {}}
           >
             <Users className="w-4 h-4 sm:w-5 sm:h-5" />
             <span>Usuários</span>
           </button>
-
-          {/* CRM: super_admin e admin */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
-            <button
-              onClick={() => setActiveSection('crm')}
-              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                activeSection === 'crm'
-                  ? 'text-white'
-                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-              }`}
-              style={activeSection === 'crm' ? { backgroundColor: '#8CD955' } : {}}
-            >
-              <LayoutIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>CRM</span>
-            </button>
-          )}
-
-          {/* Disparo: super_admin e admin - dados de envio de mensagens (Activations) */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
-            <button
-              onClick={() => setActiveSection('disparo')}
-              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                activeSection === 'disparo'
-                  ? 'text-white'
-                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-              }`}
-              style={activeSection === 'disparo' ? { backgroundColor: '#8CD955' } : {}}
-            >
-              <Send className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>Disparo</span>
-            </button>
-          )}
-
-          {/* Loto Assistência: apenas admin e super_admin - instância para envio de código (esqueci a senha) */}
-          {(isSuperAdmin || adminStatus === 'admin') && (
-            <button
-              onClick={() => setActiveSection('loto_assistencia')}
-              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                activeSection === 'loto_assistencia'
-                  ? 'text-white'
-                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-              }`}
-              style={activeSection === 'loto_assistencia' ? { backgroundColor: '#8CD955' } : {}}
-            >
-              <HeadphonesIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>Loto Assistência</span>
-            </button>
-          )}
-
-          {/* White Label (super_admin com tenant WL selecionado): admin ZapLoto do tenant */}
-          {isSuperAdmin && selectedTenantId && (
-            <button
-              type="button"
-              onClick={() => router.push('/admin/zaploto')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base border-2 border-[#8CD955] bg-[#8CD955]/15 text-gray-800 dark:text-white hover:bg-[#8CD955]/25"
-            >
-              <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>White Label</span>
-            </button>
-          )}
 
           {/* Meta Ads: super_admin e admin */}
           {(isSuperAdmin || adminStatus === 'admin') && (
@@ -965,75 +875,26 @@ export default function AdminDashboard() {
             </button>
           )}
 
-          {/* VSL White Label + Redirect: super_admin, admin ou cargo com permissão vsl_redirect */}
-          {(isSuperAdmin || adminStatus === 'admin' || hasVslRedirect) && (
-            <button
-              onClick={() => router.push('/admin/vsl')}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
-            >
-              <ExternalLink className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>VSL & Redirect</span>
-            </button>
-          )}
-
-          {/* Configurações: super_admin (edição) ou admin (somente visualização Evolution API) */}
+          {/* Etiquetas do CRM: super_admin e admin */}
           {(isSuperAdmin || adminStatus === 'admin') && (
             <button
-              onClick={() => setActiveSection('settings')}
-              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                activeSection === 'settings'
-                  ? 'text-white'
-                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-              }`}
-              style={activeSection === 'settings' ? { backgroundColor: '#8CD955' } : {}}
+              onClick={() => router.push('/admin/etiquetas')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
             >
-              <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span>Configurações</span>
+              <TagIcon2 className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Etiquetas</span>
             </button>
           )}
 
-          {/* Campanhas, Proxys, Maturador e White Label: apenas super_admin */}
-          {isSuperAdmin && (
-            <>
-              <button
-                onClick={() => setActiveSection('campaigns')}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                  activeSection === 'campaigns'
-                    ? 'text-white'
-                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-                }`}
-                style={activeSection === 'campaigns' ? { backgroundColor: '#8CD955' } : {}}
-              >
-                <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>Campanhas</span>
-              </button>
-
-              <button
-                onClick={() => setActiveSection('proxys')}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                  activeSection === 'proxys'
-                    ? 'text-white'
-                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-                }`}
-                style={activeSection === 'proxys' ? { backgroundColor: '#8CD955' } : {}}
-              >
-                <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>Proxys</span>
-              </button>
-
-              <button
-                onClick={() => setActiveSection('maturador')}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
-                  activeSection === 'maturador'
-                    ? 'text-white'
-                    : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
-                }`}
-                style={activeSection === 'maturador' ? { backgroundColor: '#8CD955' } : {}}
-              >
-                <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span>Maturador</span>
-              </button>
-            </>
+          {/* WhatsApp Oficial: super_admin e admin */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => router.push('/admin/whatsapp-official')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
+            >
+              <MessageCircle className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>WhatsApp Oficial</span>
+            </button>
           )}
         </div>
 
@@ -1045,13 +906,13 @@ export default function AdminDashboard() {
                   title="Campanhas Ativas"
                   value={stats.campaigns.running}
                   icon={<BarChart3 className="w-6 h-6" />}
-                  bgColor="bg-[#8CD955]"
+                  bgColor="bg-[#E86A24]"
                 />
                 <MetricCard
                   title="Instâncias Conectadas"
                   value={stats.instances.connected}
                   icon={<CheckCircle2 className="w-6 h-6" />}
-                  bgColor="bg-[#8CD955]"
+                  bgColor="bg-[#E86A24]"
                 />
                 <MetricCard
                   title="Pendentes"
@@ -1063,7 +924,7 @@ export default function AdminDashboard() {
                   title="Adicionados ao Grupo"
                   value={stats.contacts.added}
                   icon={<UserPlus className="w-6 h-6" />}
-                  bgColor="bg-[#8CD955]"
+                  bgColor="bg-[#E86A24]"
                 />
                 <MetricCard
                   title="Falhas ao Adicionar"
@@ -1087,7 +948,7 @@ export default function AdminDashboard() {
                       title="Disparadas hoje"
                       value={stats.dispatches.dispatchedToday}
                       icon={<Send className="w-6 h-6" />}
-                      bgColor="bg-[#8CD955]"
+                      bgColor="bg-[#E86A24]"
                     />
                     <MetricCard
                       title="Próximas execuções"
@@ -1105,7 +966,7 @@ export default function AdminDashboard() {
                       title="Sucesso (total)"
                       value={stats.dispatches.successTotal}
                       icon={<CheckCircle className="w-6 h-6" />}
-                      bgColor="bg-[#8CD955]"
+                      bgColor="bg-[#E86A24]"
                     />
                   </div>
                 </>
@@ -1193,7 +1054,7 @@ export default function AdminDashboard() {
                       }`}>
                         <CheckCircle2 className={`w-5 h-5 ${
                           stats.campaigns.successRate >= 80 
-                            ? 'text-[#8CD955]' 
+                            ? 'text-[#E86A24]' 
                             : stats.campaigns.successRate >= 50 
                             ? 'text-yellow-600' 
                             : 'text-red-600'
@@ -1205,7 +1066,7 @@ export default function AdminDashboard() {
                       <div className="relative inline-block">
                         <div className={`text-5xl sm:text-6xl font-extrabold mb-2 bg-gradient-to-r ${
                           stats.campaigns.successRate >= 80 
-                            ? 'from-[#8CD955] to-[#A8E677]' 
+                            ? 'from-[#E86A24] to-[#EF9057]' 
                             : stats.campaigns.successRate >= 50 
                             ? 'from-yellow-500 to-yellow-400' 
                             : 'from-red-500 to-red-400'
@@ -1213,7 +1074,7 @@ export default function AdminDashboard() {
                           {stats.campaigns.successRate}%
                         </div>
                         {stats.campaigns.successRate >= 80 && (
-                          <TrendingUp className="w-6 h-6 text-[#8CD955] absolute -top-2 -right-8 animate-pulse" />
+                          <TrendingUp className="w-6 h-6 text-[#E86A24] absolute -top-2 -right-8 animate-pulse" />
                         )}
                       </div>
                       <p className="text-sm text-gray-500 mt-2">
@@ -1241,7 +1102,7 @@ export default function AdminDashboard() {
                       {/* Stats breakdown */}
                       <div className="flex justify-between items-center text-xs text-gray-600 pt-2 border-t border-gray-100">
                         <div className="flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-[#8CD955]" />
+                          <CheckCircle2 className="w-3 h-3 text-[#E86A24]" />
                           <span className="font-medium">{stats.contacts.added || 0} adicionados</span>
                         </div>
                         <div className="flex items-center gap-1">
@@ -1257,8 +1118,8 @@ export default function AdminDashboard() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full">
                 <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#E86A24]/10 dark:bg-[#E86A24]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#E86A24]/5 dark:bg-[#E86A24]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
                   
                   <div className="relative z-10">
                     <div className="flex flex-col gap-3 mb-4">
@@ -1285,18 +1146,18 @@ export default function AdminDashboard() {
                               setInstancesSearch(e.target.value);
                               setInstancesCurrentPage(1); // Reset para primeira página ao buscar
                             }}
-                            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] w-full sm:w-64"
+                            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#555] rounded-lg text-sm text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] w-full sm:w-64"
                           />
                         </div>
                         <button
                           onClick={loadInstances}
                           disabled={loadingInstances}
-                          className="p-1.5 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
+                          className="p-1.5 text-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
                           title="Recarregar instâncias"
                         >
                           <RefreshCw className={`w-4 h-4 ${loadingInstances ? 'animate-spin' : ''}`} />
                         </button>
-                        <Settings className="w-5 h-5 text-[#8CD955] flex-shrink-0" />
+                        <Settings className="w-5 h-5 text-[#E86A24] flex-shrink-0" />
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
@@ -1315,7 +1176,7 @@ export default function AdminDashboard() {
                     </div>
                     {loadingInstances ? (
                       <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] mx-auto" />
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24] mx-auto" />
                       </div>
                     ) : (
                       <div>
@@ -1350,7 +1211,7 @@ export default function AdminDashboard() {
                                     return (
                                   <div
                                     key={inst.id || i}
-                                    className="p-3 bg-gray-50/80 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors"
+                                    className="p-3 bg-gray-50/80 dark:bg-[#333] rounded-lg border border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/50 dark:hover:border-[#E86A24]/50 transition-colors"
                                   >
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="flex-1 min-w-0">
@@ -1436,21 +1297,21 @@ export default function AdminDashboard() {
 
                 <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#E86A24]/10 dark:bg-[#E86A24]/5 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#E86A24]/5 dark:bg-[#E86A24]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex justify-between items-center mb-4">
                       <h2 className="text-lg sm:text-xl font-bold text-gray-800 dark:text-white">Grupos Salvos no Banco</h2>
-                      <Users className="w-5 h-5 text-[#8CD955]" />
+                      <Users className="w-5 h-5 text-[#E86A24]" />
                     </div>
                     {loadingGroups ? (
                       <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-[#8CD955] mx-auto" />
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24] mx-auto" />
                       </div>
                     ) : (
                       <div>
-                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#8CD955]">
+                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#E86A24]">
                           {groups.dbGroups.length}
                         </div>
                         {groups.dbGroups.length > 0 ? (
@@ -1462,7 +1323,7 @@ export default function AdminDashboard() {
                                   groupsCurrentPage * groupsPerPage
                                 )
                                 .map((g, i) => (
-                                  <div key={g.id || i} className="truncate p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors text-gray-800 dark:text-white">
+                                  <div key={g.id || i} className="truncate p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/50 dark:hover:border-[#E86A24]/50 transition-colors text-gray-800 dark:text-white">
                                     {g.group_subject || g.group_id}
                                   </div>
                                 ))}
@@ -1487,8 +1348,8 @@ export default function AdminDashboard() {
 
                 <div className="bg-gradient-to-br from-gray-100 to-gray-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
                   {/* Decorative background elements */}
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
-                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#E86A24]/10 dark:bg-[#E86A24]/5 rounded-full -mr-16 -mt-16"></div>
+                  <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#E86A24]/5 dark:bg-[#E86A24]/5 rounded-full -ml-12 -mb-12"></div>
                   
                   <div className="relative z-10">
                     <div className="flex justify-between items-center mb-4">
@@ -1501,7 +1362,7 @@ export default function AdminDashboard() {
                       </div>
                     ) : (
                       <div>
-                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#8CD955]">
+                        <div className="text-4xl sm:text-5xl font-extrabold mb-2 text-[#E86A24]">
                           {finishedCampaigns.length}
                         </div>
                         {finishedCampaigns.length > 0 ? (
@@ -1513,7 +1374,7 @@ export default function AdminDashboard() {
                                   campaignsCurrentPage * campaignsPerPage
                                 )
                                 .map((c, i) => (
-                                  <div key={c.id || i} className="flex justify-between items-center gap-2 p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#8CD955]/50 dark:hover:border-[#8CD955]/50 transition-colors">
+                                  <div key={c.id || i} className="flex justify-between items-center gap-2 p-2 bg-gray-50/80 dark:bg-[#333] rounded border border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/50 dark:hover:border-[#E86A24]/50 transition-colors">
                                     <div className="truncate flex-1 min-w-0" title={c.group_subject || c.group_id}>
                                       {c.group_subject || c.group_id}
                                     </div>
@@ -1560,7 +1421,6 @@ export default function AdminDashboard() {
               users={users}
               onUserSelect={setSelectedUser}
               selectedUser={selectedUser}
-              onClearUserData={handleClearUserData}
               usersLoadError={usersLoadError}
               onRetryLoad={loadData}
               isSuperAdmin={isSuperAdmin}
@@ -1582,7 +1442,7 @@ export default function AdminDashboard() {
                   href="/crm/activations"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#8CD955] hover:bg-[#7BC84A] text-white font-medium transition-colors"
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#E86A24] hover:bg-[#D95E1B] text-white font-medium transition-colors"
                 >
                   <Send className="w-4 h-4" />
                   Abrir Mensagem (envio e agendamentos)
@@ -1639,7 +1499,7 @@ export default function AdminDashboard() {
 
               {loadingDisparo && !disparoData ? (
                 <div className="bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl p-12 text-center">
-                  <RefreshCw className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+                  <RefreshCw className="w-8 h-8 animate-spin text-[#E86A24] mx-auto mb-2" />
                   <p className="text-gray-500 dark:text-[#aaa]">Carregando dados de disparo…</p>
                 </div>
               ) : disparoData ? (
@@ -1650,7 +1510,7 @@ export default function AdminDashboard() {
                       title="Disparadas hoje"
                       value={disparoData.summary.dispatchedToday}
                       icon={<Send className="w-6 h-6" />}
-                      bgColor="bg-[#8CD955]"
+                      bgColor="bg-[#E86A24]"
                     />
                     <MetricCard
                       title="Próximas execuções"
@@ -1668,7 +1528,7 @@ export default function AdminDashboard() {
                       title="Sucesso (total)"
                       value={disparoData.summary.successTotal}
                       icon={<CheckCircle className="w-6 h-6" />}
-                      bgColor="bg-[#8CD955]"
+                      bgColor="bg-[#E86A24]"
                     />
                   </div>
 
@@ -1682,7 +1542,7 @@ export default function AdminDashboard() {
                           <XAxis dataKey="dayName" stroke="#6b7280" style={{ fontSize: '12px' }} />
                           <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} allowDecimals={false} />
                           <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
-                          <Line type="monotone" dataKey="count" name="Disparos" stroke="#8CD955" strokeWidth={2} dot={{ fill: '#8CD955', r: 4 }} />
+                          <Line type="monotone" dataKey="count" name="Disparos" stroke="#E86A24" strokeWidth={2} dot={{ fill: '#E86A24', r: 4 }} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -1796,7 +1656,7 @@ export default function AdminDashboard() {
           {activeSection === 'loto_assistencia' && (isSuperAdmin || adminStatus === 'admin') && (
             <div className="space-y-6 w-full">
               <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                <HeadphonesIcon className="w-6 h-6 text-[#8CD955]" />
+                <HeadphonesIcon className="w-6 h-6 text-[#E86A24]" />
                 Loto Assistência
               </h1>
               <p className="text-sm text-gray-600">
@@ -1804,7 +1664,7 @@ export default function AdminDashboard() {
               </p>
               {lotoAssistenciaLoading ? (
                 <div className="bg-gray-50 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-xl p-8 text-center">
-                  <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto mb-2" />
                   <p className="text-gray-500">Carregando…</p>
                 </div>
               ) : (
@@ -1837,7 +1697,7 @@ export default function AdminDashboard() {
                     <textarea
                       value={lotoAssistenciaMessage}
                       onChange={(e) => setLotoAssistenciaMessage(e.target.value)}
-                      placeholder="Seu código de recuperação de senha Zaploto é: *{{Código}}*. Válido por 15 minutos. Não compartilhe."
+                      placeholder="Seu código de recuperação de senha crm-atendimento é: *{{Código}}*. Válido por 15 minutos. Não compartilhe."
                       rows={4}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
                     />
@@ -1849,7 +1709,7 @@ export default function AdminDashboard() {
                     <textarea
                       value={lotoAssistenciaMessageDisconnected}
                       onChange={(e) => setLotoAssistenciaMessageDisconnected(e.target.value)}
-                      placeholder="⚠️ *Zaploto*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar."
+                      placeholder="⚠️ *crm-atendimento*: A instância *{{NomeInstancia}}* foi desconectada. Status: {{Status}}. Acesse o painel para reconectar."
                       rows={3}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-800 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500 resize-y"
                     />
@@ -1930,7 +1790,7 @@ export default function AdminDashboard() {
                         }
                       }}
                       className="px-4 py-2 rounded-lg text-white font-medium disabled:opacity-50 flex items-center gap-2"
-                      style={{ backgroundColor: '#8CD955' }}
+                      style={{ backgroundColor: '#E86A24' }}
                     >
                       {lotoAssistenciaSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       Salvar
@@ -2156,7 +2016,7 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
         <div className="flex items-center justify-between mb-3 sm:mb-4">
           <div className={`${bgColor} p-2 sm:p-3 rounded-lg text-white shadow-md`}>{icon}</div>
         </div>
-        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#8CD955] to-[#A8E677] dark:from-[#00ff00] dark:to-[#7BC84A]' : isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500 dark:from-gray-400 dark:to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-400 dark:to-blue-500'} bg-clip-text text-transparent`}>
+        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#E86A24] to-[#EF9057] dark:from-[#00ff00] dark:to-[#D95E1B]' : isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500 dark:from-gray-400 dark:to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-400 dark:to-blue-500'} bg-clip-text text-transparent`}>
           {value}
         </div>
         <div className="text-xs sm:text-sm text-gray-600 dark:text-[#aaa] font-medium">{title}</div>
@@ -2167,11 +2027,70 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
 
 type ZaplotoRole = { id: string; code: string; label: string };
 
+const HIDDEN_USER_ROLE_CODES = new Set(['dono_banca', 'gerente', 'consultor', 'auditoria']);
+
+function formatRoleLabel(code: string, fallback?: string): string {
+  const labels: Record<string, string> = {
+    suporte: 'Atendente',
+    super_admin: 'Super Admin',
+    dono_banca: 'Dono de Banca',
+    gerente: 'Gerente',
+    consultor: 'Consultor',
+    auditoria: 'Auditoria',
+    gestor: 'Gestor de Tráfego',
+    admin: 'Admin',
+  };
+  return labels[code] || fallback || code;
+}
+
+function getSelectableUserRoles(
+  isSuperAdmin: boolean,
+  zaplotoRoles: ZaplotoRole[],
+  currentStatus?: string
+): ZaplotoRole[] {
+  const hiddenRoleLabels: Record<string, string> = {
+    dono_banca: 'Dono de Banca',
+    gerente: 'Gerente',
+    consultor: 'Consultor',
+    auditoria: 'Auditoria',
+    super_admin: 'Super Admin',
+    suporte: 'Atendente',
+  };
+
+  let roles: ZaplotoRole[];
+  if (zaplotoRoles.length > 0) {
+    roles = zaplotoRoles
+      .filter(
+        (r) => !HIDDEN_USER_ROLE_CODES.has(r.code) && (r.code !== 'super_admin' || isSuperAdmin)
+      )
+      .map((r) => ({ ...r, label: formatRoleLabel(r.code, r.label) }));
+  } else {
+    roles = [
+      ...(isSuperAdmin ? [{ id: 'super_admin', code: 'super_admin', label: 'Super Admin' }] : []),
+      { id: 'admin', code: 'admin', label: 'Admin' },
+      { id: 'gestor', code: 'gestor', label: 'Gestor de Tráfego' },
+      { id: 'suporte', code: 'suporte', label: 'Atendente' },
+    ];
+  }
+
+  if (currentStatus && !roles.some((r) => r.code === currentStatus)) {
+    roles = [
+      ...roles,
+      {
+        id: currentStatus,
+        code: currentStatus,
+        label: hiddenRoleLabels[currentStatus] || formatRoleLabel(currentStatus),
+      },
+    ];
+  }
+
+  return roles;
+}
+
 const UsersSection = ({ 
   users, 
   onUserSelect, 
   selectedUser,
-  onClearUserData,
   usersLoadError,
   onRetryLoad,
   isSuperAdmin = false,
@@ -2182,7 +2101,6 @@ const UsersSection = ({
   users: User[]; 
   onUserSelect: (userId: string | null) => void; 
   selectedUser: string | null;
-  onClearUserData?: (userId: string, email: string) => Promise<void>;
   usersLoadError?: string | null;
   onRetryLoad?: () => Promise<void>;
   isSuperAdmin?: boolean;
@@ -2190,7 +2108,7 @@ const UsersSection = ({
   getTenantHeader?: () => Record<string, string>;
   adminUserId?: string | null;
 }) => {
-  const roleList: ZaplotoRole[] = Array.isArray(zaplotoRoles) ? zaplotoRoles : [];
+  const roleList = getSelectableUserRoles(isSuperAdmin, Array.isArray(zaplotoRoles) ? zaplotoRoles : []);
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -2204,7 +2122,7 @@ const UsersSection = ({
     email: '',
     fullName: '',
     password: '',
-    status: 'consultor',
+    status: 'suporte',
     enroller: '',
     bancaName: '',
     bancaUrl: ''
@@ -2217,11 +2135,6 @@ const UsersSection = ({
     const currentUserId = getStoredUserId();
     if (!currentUserId) {
       alert('Sessão inválida. Faça login novamente.');
-      return;
-    }
-
-    if (createFormData.status === 'consultor' && !createFormData.enroller) {
-      alert('Consultor deve ser vinculado a um Gerente. Selecione um gerente na lista.');
       return;
     }
 
@@ -2248,7 +2161,7 @@ const UsersSection = ({
           email: '',
           fullName: '',
           password: '',
-          status: 'consultor',
+          status: 'suporte',
           enroller: '',
           bancaName: '',
           bancaUrl: ''
@@ -2437,7 +2350,7 @@ const UsersSection = ({
       console.log('[Impersonate] Resposta da API:', { status: res.status, ok: res.ok, result });
       
       if (res.ok && result.success) {
-        const { targetUserId: newUserId, targetEmail, adminEmail } = result.data;
+        const { targetUserId: newUserId, targetEmail, adminEmail, targetStatus } = result.data;
         
         console.log('[Impersonate] Sucesso! Configurando sessão para:', { newUserId, targetEmail });
         
@@ -2449,7 +2362,7 @@ const UsersSection = ({
         sessionStorage.setItem('user_id', newUserId);
         sessionStorage.setItem('profile_id', newUserId);
         sessionStorage.setItem('profile_email', targetEmail);
-        sessionStorage.removeItem('profile_status');
+        if (targetStatus) sessionStorage.setItem('profile_status', targetStatus);
         sessionStorage.removeItem('zaploto_v1_admin_profile_session_ok_uid');
 
         localStorage.setItem('profile_id', newUserId);
@@ -2457,8 +2370,8 @@ const UsersSection = ({
         
         console.log('[Impersonate] Sessão configurada, redirecionando...');
         
-        // Redireciona para o dashboard
-        window.location.href = withTenantSlug('/');
+        const landingRoute = getLandingRouteByStatus(targetStatus);
+        window.location.href = withTenantSlug(landingRoute);
       } else {
         console.error('[Impersonate] Erro na resposta:', result);
         alert(`Erro: ${result.error || 'Erro desconhecido'}`);
@@ -2557,10 +2470,8 @@ const UsersSection = ({
 
   // Filtra potenciais superiores baseados no status sendo editado (super_admin pode atribuir qualquer hierarquia)
   const getPotentialEnrollers = (status: string) => {
-    if (status === 'consultor') return users.filter(u => u.status === 'gerente');
-    if (status === 'gerente') return users.filter(u => ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(u.status));
-    if (status === 'gestor') return users.filter(u => ['dono_banca', 'admin', 'super_admin'].includes(u.status));
-    if (status === 'auditoria' || status === 'suporte') return users.filter(u => u.status === 'admin' || (isSuperAdmin && u.status === 'super_admin'));
+    if (status === 'gestor') return users.filter(u => ['admin', 'super_admin'].includes(u.status));
+    if (status === 'suporte') return users.filter(u => u.status === 'admin' || (isSuperAdmin && u.status === 'super_admin'));
     return [];
   };
 
@@ -2578,14 +2489,18 @@ const UsersSection = ({
     if (!lastSeen) return false;
     const lastSeenDate = new Date(lastSeen);
     const now = new Date();
-    // Se visto nos últimos 2 minutos, considera online
     return (now.getTime() - lastSeenDate.getTime()) < 120000;
   };
 
+  const userInitial = (user: User) => {
+    const src = (user.full_name || user.email || '?').trim();
+    return src.charAt(0).toUpperCase();
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Busca */}
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] p-4 rounded-xl shadow-sm border border-gray-200 dark:border-[#404040]">
+        <div className="rounded-xl border border-[#404040] bg-[#2a2a2a] p-4 shadow-sm">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-[#888] w-5 h-5" />
           <input
@@ -2596,7 +2511,7 @@ const UsersSection = ({
               setSearchQuery(e.target.value);
               setCurrentPage(1); // Volta para primeira página ao buscar
             }}
-            className="w-full pl-10 pr-4 py-2.5 bg-gray-200 dark:bg-[#333] border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-sm text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder-gray-400"
+            className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[#404040] bg-[#333] text-sm text-white placeholder:text-gray-500 focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30"
           />
           {searchQuery && (
             <button
@@ -2611,13 +2526,13 @@ const UsersSection = ({
 
       {/* Filtros de Status e Botão Criar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] p-2 rounded-xl shadow-sm border border-gray-200 dark:border-[#404040] flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 rounded-xl border border-[#404040] bg-[#2a2a2a] p-2 shadow-sm">
           <button
             onClick={() => {
               setStatusFilter('todos');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'todos' ? 'bg-[#8CD955] text-white' : 'bg-gray-100 dark:bg-[#333] text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#404040]'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'todos' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
             Todos
           </button>
@@ -2627,7 +2542,7 @@ const UsersSection = ({
                 setStatusFilter('super_admin');
                 setCurrentPage(1);
               }}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'super_admin' ? 'bg-amber-600 text-white' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'super_admin' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
             >
               Super Admins
             </button>
@@ -2637,69 +2552,33 @@ const UsersSection = ({
               setStatusFilter('admin');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'admin' ? 'bg-red-600 text-white' : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'admin' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
             Admins
-          </button>
-          <button
-            onClick={() => {
-              setStatusFilter('dono_banca');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'dono_banca' ? 'bg-purple-600 text-white' : 'bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50'}`}
-          >
-            Donos de Banca
-          </button>
-          <button
-            onClick={() => {
-              setStatusFilter('gerente');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gerente' ? 'bg-blue-600 text-white' : 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50'}`}
-          >
-            Gerentes
-          </button>
-          <button
-            onClick={() => {
-              setStatusFilter('consultor');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'consultor' ? 'bg-[#8CD955] text-white' : 'bg-emerald-50 dark:bg-[#8CD955]/20 text-[#8CD955] dark:text-[#8CD955] hover:bg-emerald-100 dark:hover:bg-[#8CD955]/30'}`}
-          >
-            Consultores
           </button>
           <button
             onClick={() => {
               setStatusFilter('gestor');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-teal-600 text-white' : 'bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
             Gestores de Tráfego
-          </button>
-          <button
-            onClick={() => {
-              setStatusFilter('auditoria');
-              setCurrentPage(1);
-            }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'auditoria' ? 'bg-orange-600 text-white' : 'bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/50'}`}
-          >
-            Auditoria
           </button>
           <button
             onClick={() => {
               setStatusFilter('suporte');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'suporte' ? 'bg-cyan-600 text-white' : 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/50'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'suporte' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
-            Suporte
+            Atendente
           </button>
         </div>
 
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center justify-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100"
+          className="flex items-center justify-center gap-2 rounded-xl bg-[#E86A24] px-6 py-2.5 font-bold text-white shadow-md shadow-[#E86A24]/30 transition-all hover:bg-[#D95E1B]"
         >
           <UserPlus className="w-5 h-5" />
           Cadastrar Usuário
@@ -2710,7 +2589,7 @@ const UsersSection = ({
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-[#404040]">
-            <div className="p-6 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-[#8CD955] text-white">
+            <div className="p-6 border-b border-gray-100 dark:border-[#404040] flex items-center justify-between bg-[#E86A24] text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserPlus className="w-6 h-6" />
                 Novo Usuário
@@ -2728,7 +2607,7 @@ const UsersSection = ({
                     type="text" 
                     required
                     placeholder="Nome do usuário"
-                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.fullName}
                     onChange={e => setCreateCreateFormData({...createFormData, fullName: e.target.value})}
                   />
@@ -2740,7 +2619,7 @@ const UsersSection = ({
                     type="email" 
                     required
                     placeholder="exemplo@email.com"
-                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.email}
                     onChange={e => setCreateCreateFormData({...createFormData, email: e.target.value})}
                   />
@@ -2752,7 +2631,7 @@ const UsersSection = ({
                     type="password" 
                     required
                     placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.password}
                     onChange={e => setCreateCreateFormData({...createFormData, password: e.target.value})}
                   />
@@ -2761,106 +2640,52 @@ const UsersSection = ({
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Tipo de Usuário</label>
                   <select
-                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                    className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                     value={createFormData.status}
                     onChange={e => setCreateCreateFormData({...createFormData, status: e.target.value, enroller: ''})}
                   >
-                    {roleList.length > 0
-                      ? roleList.map(r => (
-                          <option key={r.id} value={r.code}>{r.label}</option>
-                        ))
-                      : (
-                        <>
-                          {isSuperAdmin && <option value="super_admin">Super Admin</option>}
-                          <option value="admin">Admin</option>
-                          <option value="dono_banca">Dono de Banca</option>
-                          <option value="gestor">Gestor de Tráfego</option>
-                          <option value="gerente">Gerente</option>
-                          <option value="consultor">Consultor</option>
-                          <option value="auditoria">Auditoria</option>
-                          <option value="suporte">Suporte</option>
-                        </>
-                      )}
+                    {roleList.map(r => (
+                      <option key={r.id} value={r.code}>{r.label}</option>
+                    ))}
                   </select>
                 </div>
 
-                {createFormData.status === 'dono_banca' && (
-                  <>
-                    <div className="col-span-2 md:col-span-1 animate-in slide-in-from-top-2 duration-200">
-                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Nome da Banca</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="Ex: Banca Prime"
-                        className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
-                        value={createFormData.bancaName}
-                        onChange={e => setCreateCreateFormData({...createFormData, bancaName: e.target.value})}
-                      />
-                    </div>
-                    <div className="col-span-2 md:col-span-1 animate-in slide-in-from-top-2 duration-200">
-                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">URL da Banca</label>
-                      <input 
-                        type="url" 
-                        required
-                        placeholder="https://..."
-                        className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
-                        value={createFormData.bancaUrl}
-                        onChange={e => setCreateCreateFormData({...createFormData, bancaUrl: e.target.value})}
-                      />
-                    </div>
-                  </>
-                )}
-
-                {(createFormData.status === 'gerente' || createFormData.status === 'consultor' || createFormData.status === 'gestor') && (
+                {createFormData.status === 'gestor' && (
                   <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">
-                      {createFormData.status === 'gerente'
-                        ? 'Selecionar Dono de Banca (opcional)'
-                        : createFormData.status === 'gestor'
-                        ? 'Superior: Dono da banca, Admin ou Super Admin (opcional)'
-                        : 'Selecionar Gerente *'}
-                      {createFormData.status === 'consultor' && (
-                        <span className="text-amber-600 ml-1">obrigatório</span>
-                      )}
+                      Superior: Admin ou Super Admin (opcional)
                     </label>
                     <select 
-                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
-                      required={createFormData.status === 'consultor'}
                     >
-                      <option value="">
-                        {createFormData.status === 'consultor' ? 'Selecione um gerente...' : 'Sem superior (opcional)'}
-                      </option>
-                      {getPotentialEnrollers(createFormData.status).map(u => (
+                      <option value="">Sem superior (opcional)</option>
+                      {getPotentialEnrollers('gestor').map(u => (
                         <option key={u.id} value={u.id}>
-                          {createFormData.status === 'gestor'
-                            ? [
-                                u.full_name || u.email,
-                                u.status === 'super_admin'
-                                  ? '(Super Admin)'
-                                  : u.status === 'admin'
-                                    ? '(Admin)'
-                                    : u.status === 'dono_banca'
-                                      ? '(Dono da banca)'
-                                      : '',
-                              ]
-                                .filter(Boolean)
-                                .join(' ')
-                            : u.full_name || u.email}
+                          {[
+                            u.full_name || u.email,
+                            u.status === 'super_admin'
+                              ? '(Super Admin)'
+                              : u.status === 'admin'
+                                ? '(Admin)'
+                                : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
                         </option>
                       ))}
                     </select>
                   </div>
                 )}
 
-                {(createFormData.status === 'auditoria' || createFormData.status === 'suporte') && (
+                {createFormData.status === 'suporte' && (
                   <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">
                       Selecionar Admin (Opcional)
                     </label>
                     <select 
-                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#8CD955] focus:border-[#8CD955] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
                     >
@@ -2884,7 +2709,7 @@ const UsersSection = ({
                 <button 
                   type="submit"
                   disabled={isCreating}
-                  className="flex-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {isCreating ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -2901,39 +2726,42 @@ const UsersSection = ({
         </div>
       )}
 
-      <div className="bg-gradient-to-br from-white to-emerald-50 dark:from-[#2a2a2a] dark:to-[#2a2a2a] rounded-xl shadow-lg border border-emerald-100 dark:border-[#404040] overflow-hidden relative">
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-200/20 rounded-full -mr-20 -mt-20"></div>
-        <div className="absolute bottom-0 left-0 w-32 h-32 bg-emerald-300/10 rounded-full -ml-16 -mb-16"></div>
+      <div className="relative overflow-hidden rounded-xl border border-[#E86A24]/25 bg-gradient-to-br from-[#2a2a2a] via-[#262220] to-[#1f1a18] shadow-lg shadow-[#E86A24]/10">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-[#E86A24]/10 blur-2xl" />
+        <div className="pointer-events-none absolute -bottom-12 -left-12 h-32 w-32 rounded-full bg-[#E86A24]/5 blur-xl" />
         
-        <div className="p-4 sm:p-6 relative z-10">
-          <div className="flex justify-between items-center mb-6">
+        <div className="relative z-10 p-4 sm:p-6">
+          <div className="mb-6 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Users className="w-6 h-6 text-[#8CD955]" />
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Gestão de Usuários</h2>
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#E86A24]/15">
+                <Users className="h-5 w-5 text-[#E86A24]" />
+              </div>
+              <h2 className="text-xl font-bold text-white sm:text-2xl">Gestão de Usuários</h2>
             </div>
-            <span className="text-sm text-gray-600 dark:text-[#aaa] font-medium bg-gray-50/80 dark:bg-[#333] px-3 py-1 rounded-lg border border-gray-200 dark:border-[#404040]">{filteredUsers.length} usuários encontrados</span>
+            <span className="rounded-lg border border-[#404040] bg-[#333]/80 px-3 py-1 text-sm font-medium text-gray-400">
+              {filteredUsers.length} usuários encontrados
+            </span>
           </div>
 
           {usersLoadError && (
-            <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2 text-amber-800">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+              <div className="flex items-center gap-2 text-amber-200">
+                <AlertCircle className="h-5 w-5 flex-shrink-0" />
                 <span>{usersLoadError}</span>
               </div>
-              <button type="button" onClick={() => onRetryLoad?.()} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium flex items-center gap-2">
-                <RefreshCw className="w-4 h-4" />
+              <button type="button" onClick={() => onRetryLoad?.()} className="flex items-center gap-2 rounded-lg bg-[#E86A24] px-4 py-2 font-medium text-white hover:bg-[#D95E1B]">
+                <RefreshCw className="h-4 w-4" />
                 Tentar novamente
               </button>
             </div>
           )}
           
-          <div className="overflow-x-auto -mx-4 sm:mx-0">
+          <div className="-mx-4 overflow-x-auto sm:mx-0">
             <table className="w-full min-w-[1000px]">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#333]">
+                <tr className="border-b border-[#404040] bg-[#333]/60">
                   <th 
-                    className="text-left p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
+                    className="cursor-pointer p-4 text-left text-xs font-bold uppercase tracking-wider text-gray-400 transition-colors select-none hover:bg-[#404040]/50"
                     onClick={() => handleSort('full_name')}
                   >
                     <div className="flex items-center gap-2">
@@ -2944,7 +2772,7 @@ const UsersSection = ({
                     </div>
                   </th>
                   <th 
-                    className="text-left p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
+                    className="cursor-pointer p-4 text-left text-xs font-bold uppercase tracking-wider text-gray-400 transition-colors select-none hover:bg-[#404040]/50"
                     onClick={() => handleSort('status')}
                   >
                     <div className="flex items-center gap-2">
@@ -2955,7 +2783,7 @@ const UsersSection = ({
                     </div>
                   </th>
                   <th 
-                    className="text-center p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
+                    className="cursor-pointer p-4 text-center text-xs font-bold uppercase tracking-wider text-gray-400 transition-colors select-none hover:bg-[#404040]/50"
                     onClick={() => handleSort('total_online_time')}
                   >
                     <div className="flex items-center justify-center gap-2">
@@ -2965,9 +2793,9 @@ const UsersSection = ({
                       )}
                     </div>
                   </th>
-                  <th className="text-center p-4 text-gray-700 text-xs font-bold uppercase tracking-wider">Limites</th>
+                  <th className="p-4 text-center text-xs font-bold uppercase tracking-wider text-gray-400">Limites</th>
                   <th 
-                    className="text-center p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors select-none"
+                    className="cursor-pointer p-4 text-center text-xs font-bold uppercase tracking-wider text-gray-400 transition-colors select-none hover:bg-[#404040]/50"
                     onClick={() => handleSort('stats')}
                   >
                     <div className="flex items-center justify-center gap-2">
@@ -2977,12 +2805,12 @@ const UsersSection = ({
                       )}
                     </div>
                   </th>
-                  <th className="text-right p-4 text-gray-700 dark:text-gray-300 text-xs font-bold uppercase tracking-wider">Ações</th>
+                  <th className="p-4 text-right text-xs font-bold uppercase tracking-wider text-gray-400">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-[#404040]/60">
                 {paginatedUsers.map((user: User) => (
-                  <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-[#333] transition-colors border-b border-gray-100 dark:border-[#404040]">
+                  <tr key={user.id} className="border-b border-[#404040]/40 transition-colors hover:bg-[#333]/50">
                     <td className="p-4">
                       {editingUser === user.id ? (
                         <div className="space-y-2">
@@ -2991,28 +2819,33 @@ const UsersSection = ({
                             value={editFormData.fullName || ''}
                             onChange={e => setEditFormData({...editFormData, fullName: e.target.value})}
                             placeholder="Nome Completo"
-                            className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            className="w-full rounded border bg-[#333] px-2 py-1 text-sm text-white"
                           />
                           <input
                             type="email"
                             value={editFormData.email || ''}
                             onChange={e => setEditFormData({...editFormData, email: e.target.value})}
                             placeholder="Email"
-                            className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            className="w-full rounded border bg-[#333] px-2 py-1 text-sm text-white"
                           />
                           <input
                             type="password"
                             value={editFormData.password || ''}
                             onChange={e => setEditFormData({...editFormData, password: e.target.value})}
                             placeholder="Nova senha (deixe em branco para não alterar)"
-                            className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            className="w-full rounded border bg-[#333] px-2 py-1 text-sm text-white"
                           />
                         </div>
                       ) : (
-                        <div className="text-gray-800 dark:text-white">
-                          <div className="font-bold text-sm">{user.full_name || 'Sem nome'}</div>
-                          <div className="text-xs opacity-90">{user.email}</div>
-                          <div className="text-[10px] opacity-80 mt-1 font-mono">{user.id}</div>
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#E86A24] text-sm font-bold text-white">
+                            {userInitial(user)}
+                          </div>
+                          <div>
+                            <div className="text-sm font-bold text-white">{user.full_name || 'Sem nome'}</div>
+                            <div className="text-xs text-gray-400">{user.email}</div>
+                            <div className="mt-1 font-mono text-[10px] text-gray-500">{user.id}</div>
+                          </div>
                         </div>
                       )}
                     </td>
@@ -3025,22 +2858,13 @@ const UsersSection = ({
                             onChange={e => setEditFormData({...editFormData, status: e.target.value, enroller: null})}
                               className="flex-1 px-2 py-1 text-sm border rounded text-gray-700 font-bold"
                           >
-                            {roleList.length > 0
-                              ? roleList.map(r => (
-                                  <option key={r.id} value={r.code}>{r.label}</option>
-                                ))
-                              : (
-                                <>
-                                  {isSuperAdmin && <option value="super_admin">Super Admin</option>}
-                                  <option value="admin">Admin</option>
-                                  <option value="dono_banca">Dono de Banca</option>
-                                  <option value="gestor">Gestor de Tráfego</option>
-                                  <option value="gerente">Gerente</option>
-                                  <option value="consultor">Consultor</option>
-                                  <option value="auditoria">Auditoria</option>
-                                  <option value="suporte">Suporte</option>
-                                </>
-                              )}
+                            {getSelectableUserRoles(
+                              isSuperAdmin,
+                              Array.isArray(zaplotoRoles) ? zaplotoRoles : [],
+                              editFormData?.status
+                            ).map(r => (
+                              <option key={r.id} value={r.code}>{r.label}</option>
+                            ))}
                           </select>
                             <button
                               type="button"
@@ -3052,18 +2876,6 @@ const UsersSection = ({
                               {editFormData.isActive ? 'ATIVO' : 'INATIVO'}
                             </button>
                           </div>
-                          {(editFormData.status === 'gerente' || editFormData.status === 'consultor') && (
-                            <select
-                              value={editFormData.enroller || ''}
-                              onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
-                              className="w-full px-2 py-1 text-sm border rounded text-gray-700"
-                            >
-                              <option value="">Sem superior</option>
-                              {getPotentialEnrollers(editFormData.status).map(pe => (
-                                <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
-                              ))}
-                            </select>
-                          )}
                           {editFormData.status === 'gestor' && (
                             <select
                               value={editFormData.enroller || ''}
@@ -3079,9 +2891,7 @@ const UsersSection = ({
                                       ? '(Super Admin)'
                                       : pe.status === 'admin'
                                         ? '(Admin)'
-                                        : pe.status === 'dono_banca'
-                                          ? '(Dono da banca)'
-                                          : '',
+                                        : '',
                                   ]
                                     .filter(Boolean)
                                     .join(' ')}
@@ -3089,53 +2899,26 @@ const UsersSection = ({
                               ))}
                             </select>
                           )}
-                          {(editFormData.status === 'auditoria' || editFormData.status === 'suporte') && (
+                          {editFormData.status === 'suporte' && (
                             <select
                               value={editFormData.enroller || ''}
                               onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
                               className="w-full px-2 py-1 text-sm border rounded text-gray-700"
                             >
                               <option value="">Sem superior (pode ser NULL)</option>
-                              {getPotentialEnrollers(editFormData.status).map(pe => (
+                              {getPotentialEnrollers('suporte').map(pe => (
                                 <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
                               ))}
                             </select>
-                          )}
-                          {editFormData.status === 'dono_banca' && (
-                            <div className="space-y-1 mt-2">
-                              <input
-                                type="text"
-                                value={editFormData.bancaName || ''}
-                                onChange={e => setEditFormData({...editFormData, bancaName: e.target.value})}
-                                placeholder="Nome da Banca"
-                                className="w-full px-2 py-1 text-[10px] border rounded text-gray-700"
-                              />
-                              <input
-                                type="url"
-                                value={editFormData.bancaUrl || ''}
-                                onChange={e => setEditFormData({...editFormData, bancaUrl: e.target.value})}
-                                placeholder="URL da Banca"
-                                className="w-full px-2 py-1 text-[10px] border rounded text-gray-700"
-                              />
-                            </div>
                           )}
                         </div>
                       ) : (
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            user.status === 'super_admin' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200' :
-                            user.status === 'admin' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
-                            user.status === 'dono_banca' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' :
-                            user.status === 'gestor' ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300' :
-                            user.status === 'gerente' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' :
-                            user.status === 'auditoria' ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300' :
-                            user.status === 'suporte' ? 'bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300' :
-                            'bg-emerald-100 dark:bg-[#8CD955]/20 text-emerald-700 dark:text-[#8CD955]'
-                          }`}>
-                            {user.status}
+                          <span className="rounded-md border border-[#E86A24]/30 bg-[#E86A24]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#E86A24]">
+                            {formatRoleLabel(user.status)}
                           </span>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${user.settings?.is_active ? 'bg-green-100 dark:bg-[#8CD955]/30 text-green-700 dark:text-[#8CD955]' : 'bg-gray-100 dark:bg-[#404040] text-gray-500 dark:text-gray-400'}`}>
+                            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${user.settings?.is_active ? 'border border-[#E86A24]/30 bg-[#E86A24]/15 text-[#E86A24]' : 'border border-[#404040] bg-[#333] text-gray-500'}`}>
                               {user.settings?.is_active ? 'ATIVO' : 'INATIVO'}
                             </span>
                           </div>
@@ -3156,12 +2939,12 @@ const UsersSection = ({
                     <td className="p-4">
                       <div className="text-center">
                         <div className="flex items-center justify-center gap-1.5 mb-1">
-                          <div className={`w-2 h-2 rounded-full ${isOnline(user.last_seen_at) ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`}></div>
-                          <span className={`text-xs font-bold ${isOnline(user.last_seen_at) ? 'text-green-600' : 'text-gray-500'}`}>
+                          <div className={`w-2 h-2 rounded-full ${isOnline(user.last_seen_at) ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                          <span className={`text-xs font-bold ${isOnline(user.last_seen_at) ? 'text-green-400' : 'text-gray-500'}`}>
                             {isOnline(user.last_seen_at) ? 'Online' : 'Offline'}
                           </span>
                         </div>
-                        <div className="text-sm font-black text-gray-800 dark:text-white" title="Tempo total acumulado">
+                        <div className="text-sm font-black text-white" title="Tempo total acumulado">
                           {formatTime(user.total_online_time)}
                         </div>
                         {user.last_seen_at && (
@@ -3195,7 +2978,7 @@ const UsersSection = ({
                         </div>
                       ) : (
                         <div className="text-center">
-                          <div className="text-xs font-bold text-gray-700 dark:text-gray-300">{user.settings?.max_leads_per_day} Leads/Dia</div>
+                          <div className="text-xs font-bold text-gray-300">{user.settings?.max_leads_per_day} Leads/Dia</div>
                           <div className="text-[10px] text-gray-500">{user.settings?.max_instances} Instâncias</div>
                         </div>
                       )}
@@ -3204,11 +2987,11 @@ const UsersSection = ({
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-center">
                         <div>
                           <div className="text-[10px] text-gray-400 uppercase font-bold">Camps</div>
-                          <div className="text-xs font-bold text-gray-700 dark:text-gray-300">{user.stats.campaigns}</div>
+                          <div className="text-xs font-bold text-gray-300">{user.stats.campaigns}</div>
                         </div>
                         <div>
                           <div className="text-[10px] text-gray-400 uppercase font-bold">Sucesso</div>
-                          <div className="text-xs font-bold text-[#8CD955]">{user.stats.processed}</div>
+                          <div className="text-xs font-bold text-[#E86A24]">{user.stats.processed}</div>
                         </div>
                         <div>
                           <div className="text-[10px] text-gray-400 uppercase font-bold">WAs</div>
@@ -3228,7 +3011,7 @@ const UsersSection = ({
                               type="button"
                               onClick={(e) => handleSave(user.id, e)}
                               disabled={saving}
-                              className="p-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] disabled:opacity-50 transition-colors"
+                              className="p-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] disabled:opacity-50 transition-colors"
                               title="Salvar"
                             >
                               {saving ? (
@@ -3255,38 +3038,29 @@ const UsersSection = ({
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleImpersonate(user.id, user.email)}
-                              className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 border border-blue-100"
+                              className="rounded-lg border border-blue-500/40 bg-[#333] p-2 text-blue-400 transition-colors hover:bg-blue-500/10"
                               title="Acessar Conta"
                             >
                               <LogIn className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => handleEdit(user)}
-                              className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 border border-gray-200"
+                              className="rounded-lg border border-gray-500/40 bg-[#333] p-2 text-gray-200 transition-colors hover:bg-[#404040]"
                               title="Editar Usuário"
                             >
                               <Edit className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => handleDelete(user.id, user.email)}
-                              className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 border border-red-100"
+                              className="rounded-lg border border-red-500/40 bg-[#333] p-2 text-red-400 transition-colors hover:bg-red-500/10"
                               title="Remover Usuário"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
-                            {onClearUserData && (
-                              <button
-                                onClick={() => onClearUserData(user.id, user.email)}
-                                className="p-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 border border-amber-100"
-                                title="Limpar dados da conta e do dashboard (campanhas, contatos, disparos, buscas)"
-                              >
-                                <Eraser className="w-4 h-4" />
-                              </button>
-                            )}
                             {user.status === 'consultor' && (
                               <a
                                 href={`/crm/kanban?userId=${user.id}`}
-                                className="p-2 bg-emerald-50 text-[#8CD955] rounded-lg hover:bg-emerald-100 border border-emerald-100"
+                                className="rounded-lg border border-[#E86A24]/40 bg-[#333] p-2 text-[#E86A24] transition-colors hover:bg-[#E86A24]/10"
                                 title="Visualizar CRM"
                               >
                                 <BarChart3 className="w-4 h-4" />
@@ -3301,10 +3075,9 @@ const UsersSection = ({
               </tbody>
             </table>
           </div>
-        </div>
-        
+
         {totalPages > 1 && (
-          <div className="p-4 bg-gray-50 border-t border-gray-100">
+          <div className="mt-4 border-t border-[#404040] pt-4">
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
@@ -3314,6 +3087,7 @@ const UsersSection = ({
             />
           </div>
         )}
+        </div>
       </div>
     </div>
   );
@@ -3611,7 +3385,7 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                     <td className="p-3 sm:p-4 text-[10px] sm:text-xs text-gray-600">
                       <div className="flex flex-col gap-1">
                         {campaign.started_at ? (
-                          <div className="flex items-center gap-1 text-[#8CD955] font-bold">
+                          <div className="flex items-center gap-1 text-[#E86A24] font-bold">
                             <Clock className="w-3 h-3" />
                             <span>{new Date(campaign.started_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                           </div>
@@ -3627,7 +3401,7 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                       <div className="flex flex-wrap gap-2">
                         <button
                           onClick={() => setEditingCampaign(campaign)}
-                          className="px-3 py-1.5 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                          className="px-3 py-1.5 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
                           title="Editar Campanha"
                         >
                           <Edit className="w-4 h-4" />
@@ -4186,7 +3960,7 @@ const SettingsSection = () => {
                         <button
                           onClick={() => canEditEvolutionApi && handleEdit(api)}
                           disabled={!canEditEvolutionApi}
-                          className="p-2 text-[#8CD955] hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="p-2 text-[#E86A24] hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                           title={!canEditEvolutionApi ? 'Sem permissão' : 'Editar'}
                         >
                           <Edit className="w-4 h-4" />
@@ -4380,7 +4154,7 @@ const SettingsSection = () => {
                   id="is_active"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                  className="w-4 h-4 text-[#8CD955] border-gray-300 rounded focus:ring-emerald-500"
+                  className="w-4 h-4 text-[#E86A24] border-gray-300 rounded focus:ring-emerald-500"
                 />
                 <label htmlFor="is_active" className="ml-2 text-sm text-gray-700 dark:text-gray-200">
                   API Ativa
@@ -4416,7 +4190,7 @@ const SettingsSection = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] flex items-center justify-center gap-2 text-sm sm:text-base"
+                  className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] flex items-center justify-center gap-2 text-sm sm:text-base"
                 >
                   <Save className="w-4 h-4" />
                   {editingApi ? 'Salvar Alterações' : 'Criar API'}
@@ -4860,13 +4634,13 @@ const ProxySection = () => {
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 dark:bg-[#8CD955]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#E86A24]/10 dark:bg-[#E86A24]/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#E86A24]/5 dark:bg-[#E86A24]/5 rounded-full -ml-12 -mb-12 pointer-events-none" />
         
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4 sm:mb-6">
             <div className="flex items-center gap-2">
-              <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
+              <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-[#E86A24]" />
               <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Proxys Evolution</h2>
             </div>
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto relative z-20">
@@ -4874,7 +4648,7 @@ const ProxySection = () => {
                 type="button"
                 onClick={() => openLinkProxyModal()}
                 disabled={loading}
-                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 border border-[#8CD955] text-[#5a9c2e] dark:text-[#8CD955] rounded-lg hover:bg-[#8CD955]/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base w-full sm:w-auto"
+                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 border border-[#E86A24] text-[#5a9c2e] dark:text-[#E86A24] rounded-lg hover:bg-[#E86A24]/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base w-full sm:w-auto"
                 title="Vincular ou remover proxy em lote nas instâncias"
               >
                 <Link2 className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -4887,7 +4661,7 @@ const ProxySection = () => {
                   setFormDataProxy({ name: '', host: '', port: '', password: '', username: '', protocol: '' });
                   setShowAddModalProxy(true);
                 }}
-                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] text-sm sm:text-base w-full sm:w-auto"
+                className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] text-sm sm:text-base w-full sm:w-auto"
               >
                 <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
                 Adicionar Proxy
@@ -4933,7 +4707,7 @@ const ProxySection = () => {
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
                           isProxyEnabled(proxy.enabled)
-                            ? 'bg-[#8CD955]/20 text-[#8CD955] dark:bg-[#8CD955]/20 dark:text-[#8CD955]'
+                            ? 'bg-[#E86A24]/20 text-[#E86A24] dark:bg-[#E86A24]/20 dark:text-[#E86A24]'
                             : 'bg-gray-200 dark:bg-[#404040] text-gray-600 dark:text-gray-400'
                         }`}
                       >
@@ -4951,7 +4725,7 @@ const ProxySection = () => {
                         </button>
                         <button
                           onClick={() => handleEditProxy(proxy)}
-                          className="p-2 text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded"
+                          className="p-2 text-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 rounded"
                           title="Editar"
                         >
                           <Edit className="w-4 h-4" />
@@ -4983,12 +4757,12 @@ const ProxySection = () => {
         </div>
       </div>
       <div className="bg-gradient-to-br from-white to-gray-50 dark:from-[#2a2a2a] dark:to-[#333] rounded-xl shadow-lg border border-gray-200 dark:border-[#404040] p-4 sm:p-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-[#8CD955]/10 dark:bg-[#8CD955]/5 rounded-full -mr-16 -mt-16"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#8CD955]/5 rounded-full -ml-12 -mb-12"></div>
+        <div className="absolute top-0 right-0 w-32 h-32 bg-[#E86A24]/10 dark:bg-[#E86A24]/5 rounded-full -mr-16 -mt-16"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-[#E86A24]/5 rounded-full -ml-12 -mb-12"></div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4 sm:mb-6">
-            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-[#8CD955]" />
+            <Users className="w-5 h-5 sm:w-6 sm:h-6 text-[#E86A24]" />
             <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Atribuir Instancias aos Proxys</h2>
           </div>
           <div className="space-y-4">
@@ -5191,7 +4965,7 @@ const ProxySection = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] flex items-center justify-center gap-2 text-sm sm:text-base"
+                  className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] flex items-center justify-center gap-2 text-sm sm:text-base"
                 >
                   <Save className="w-4 h-4" />
                   {editingProxy ? 'Salvar Alterações' : 'Criar Proxy'}
@@ -5219,7 +4993,7 @@ const ProxySection = () => {
             <div className="flex justify-between items-start gap-3 mb-4 shrink-0">
               <div>
                 <h3 className="text-lg sm:text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
-                  <Link2 className="w-5 h-5 text-[#8CD955]" />
+                  <Link2 className="w-5 h-5 text-[#E86A24]" />
                   Vincular proxy às instâncias
                 </h3>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
@@ -5310,7 +5084,7 @@ const ProxySection = () => {
                     <label
                       key={inst.id}
                       className={`flex items-start gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-[#333] ${
-                        checked ? 'bg-[#8CD955]/5 dark:bg-[#8CD955]/10' : ''
+                        checked ? 'bg-[#E86A24]/5 dark:bg-[#E86A24]/10' : ''
                       }`}
                     >
                       <input
@@ -5318,7 +5092,7 @@ const ProxySection = () => {
                         checked={checked}
                         onChange={() => toggleLinkInstance(inst.id)}
                         disabled={linkModalBusy}
-                        className="mt-1 rounded border-gray-300 text-[#8CD955] focus:ring-[#8CD955]"
+                        className="mt-1 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                       />
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-gray-800 dark:text-white text-sm">
@@ -5333,7 +5107,7 @@ const ProxySection = () => {
                           <div className="text-xs text-gray-500 dark:text-gray-400">{inst.phone_number}</div>
                         )}
                         {linkedId ? (
-                          <span className="inline-flex items-center gap-1 mt-1 text-xs text-[#5a9c2e] dark:text-[#8CD955]">
+                          <span className="inline-flex items-center gap-1 mt-1 text-xs text-[#5a9c2e] dark:text-[#E86A24]">
                             <Link2 className="w-3 h-3" />
                             {linkedLabel || 'Proxy vinculado'}
                           </span>
@@ -5373,7 +5147,7 @@ const ProxySection = () => {
                 type="button"
                 onClick={handleBulkLinkProxy}
                 disabled={linkModalBusy || linkSelectedInstanceIds.size === 0 || !linkProxyId}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] text-sm flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {linkModalBusy ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

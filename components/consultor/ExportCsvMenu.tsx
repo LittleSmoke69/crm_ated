@@ -277,7 +277,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
         disabled={disabled || nothingToExport}
         className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <Download className="w-4 h-4 text-[#8CD955]" />
+        <Download className="w-4 h-4 text-[#E86A24]" />
         Exportar CSV
         <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -305,7 +305,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
               disabled={!hasTotals}
               title={!hasTotals ? 'Sem totais carregados' : undefined}
             >
-              <FileSpreadsheet className="w-4 h-4 mt-0.5 text-[#8CD955]" />
+              <FileSpreadsheet className="w-4 h-4 mt-0.5 text-[#E86A24]" />
               <span className="flex-1">
                 <span className="block font-bold">Resumo (KPIs)</span>
                 <span className="block text-[11px] text-gray-500 dark:text-gray-400">
@@ -320,7 +320,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
               disabled={!hasCommission}
               title={!hasCommission ? 'Sem comissões no período' : undefined}
             >
-              <PieChartIcon className="w-4 h-4 mt-0.5 text-[#8CD955]" />
+              <PieChartIcon className="w-4 h-4 mt-0.5 text-[#E86A24]" />
               <span className="flex-1">
                 <span className="block font-bold">Comissão por tipo</span>
                 <span className="block text-[11px] text-gray-500 dark:text-gray-400">
@@ -335,7 +335,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
               disabled={!hasBets}
               title={!hasBets ? 'Sem apostas no período' : undefined}
             >
-              <UsersIcon className="w-4 h-4 mt-0.5 text-[#8CD955]" />
+              <UsersIcon className="w-4 h-4 mt-0.5 text-[#E86A24]" />
               <span className="flex-1">
                 <span className="block font-bold">Apostas por usuário</span>
                 <span className="block text-[11px] text-gray-500 dark:text-gray-400">
@@ -350,7 +350,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
               disabled={!hasDeposits}
               title={!hasDeposits ? 'Sem depósitos no período' : undefined}
             >
-              <DollarSign className="w-4 h-4 mt-0.5 text-[#8CD955]" />
+              <DollarSign className="w-4 h-4 mt-0.5 text-[#E86A24]" />
               <span className="flex-1">
                 <span className="block font-bold">Depósitos por usuário</span>
                 <span className="block text-[11px] text-gray-500 dark:text-gray-400">

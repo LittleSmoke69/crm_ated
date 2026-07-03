@@ -525,7 +525,7 @@ function FlowEditorPageContent() {
     return (
       <Layout>
         <div className="flex items-center justify-center h-screen">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -608,7 +608,7 @@ function FlowEditorPageContent() {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8CD955] hover:bg-[#7CC845] text-black rounded-md text-xs font-semibold transition disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#E86A24] hover:bg-[#7CC845] text-black rounded-md text-xs font-semibold transition disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             {saving ? 'Salvando...' : 'Salvar'}
@@ -950,7 +950,7 @@ function FlowEditorPageContent() {
                     configResizeRef.current = { startX: e.clientX, startWidth: configPanelWidth };
                     setIsResizingConfig(true);
                   }}
-                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 group hover:bg-[#8CD955]/40 bg-transparent transition-colors"
+                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 group hover:bg-[#E86A24]/40 bg-transparent transition-colors"
                   style={{ marginLeft: '-1px' }}
                 >
                   <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1027,7 +1027,7 @@ export default function FlowEditorPage() {
     <Suspense fallback={
       <Layout>
         <div className="flex items-center justify-center p-12">
-          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     }>
@@ -1632,7 +1632,7 @@ const TestPanel: React.FC<{
         <button
           onClick={handleTest}
           disabled={testing || !userId || flowId === 'new'}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-[#8CD955] hover:bg-[#7CC845] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
+          className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-[#E86A24] hover:bg-[#7CC845] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
         >
           {testing ? (
             <>
@@ -2009,26 +2009,26 @@ const DestinoSelector: React.FC<{
       <div>
         <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Destino do envio *</label>
         <div className="flex flex-col gap-2">
-          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#8CD955] has-[:checked]:bg-[#8CD955]/10 dark:has-[:checked]:bg-[#8CD955]/15">
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#E86A24] has-[:checked]:bg-[#E86A24]/10 dark:has-[:checked]:bg-[#E86A24]/15">
             <input
               type="radio"
               name={`destino-${nodeId}`}
               checked={value === 'grupo'}
               onChange={() => onUpdate({ destination_type: 'grupo' })}
-              className="mt-1 text-[#8CD955] focus:ring-[#8CD955]"
+              className="mt-1 text-[#E86A24] focus:ring-[#E86A24]"
             />
             <div>
               <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Grupo</span>
               <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-snug">Envia no grupo (JID). Ex: {'{{$json.normalized.groupId}}'}</p>
             </div>
           </label>
-          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#8CD955] has-[:checked]:bg-[#8CD955]/10 dark:has-[:checked]:bg-[#8CD955]/15">
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-200 dark:border-[#444] px-3 py-2.5 has-[:checked]:border-[#E86A24] has-[:checked]:bg-[#E86A24]/10 dark:has-[:checked]:bg-[#E86A24]/15">
             <input
               type="radio"
               name={`destino-${nodeId}`}
               checked={value === 'direto'}
               onChange={() => onUpdate({ destination_type: 'direto' })}
-              className="mt-1 text-[#8CD955] focus:ring-[#8CD955]"
+              className="mt-1 text-[#E86A24] focus:ring-[#E86A24]"
             />
             <div>
               <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Conversa direta</span>
@@ -2171,11 +2171,11 @@ const MediaUploadField: React.FC<{
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
           className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-            dragOver ? 'border-[#8CD955] bg-[#8CD955]/10' : 'border-gray-300 dark:border-[#555] hover:border-[#8CD955]/60 hover:bg-[#8CD955]/5'
+            dragOver ? 'border-[#E86A24] bg-[#E86A24]/10' : 'border-gray-300 dark:border-[#555] hover:border-[#E86A24]/60 hover:bg-[#E86A24]/5'
           } ${uploading ? 'pointer-events-none opacity-70' : ''}`}
         >
           {uploading ? (
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-2" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto mb-2" />
           ) : (
             <Upload className="w-8 h-8 text-gray-400 dark:text-gray-500 mx-auto mb-2" />
           )}
@@ -2220,7 +2220,7 @@ const MediaUploadField: React.FC<{
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+        className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-[#555] rounded-lg text-sm font-mono text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
         placeholder={mediaType === 'image' ? 'https://exemplo.com/imagem.jpg' : mediaType === 'video' ? 'https://exemplo.com/video.mp4' : 'https://exemplo.com/audio.mp3'}
       />
     </div>

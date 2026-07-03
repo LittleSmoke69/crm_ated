@@ -1,7 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Plus, Trash2, Loader2 } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import ChatGestaoTagsReport from '@/components/Admin/chat-gestao/ChatGestaoTagsReport';
+import ZapCard from '@/components/ui/ZapCard';
+import { zapCardMuted, zapInput } from '@/lib/zap-card-styles';
 
 interface ChatTag {
   id: string;
@@ -12,7 +15,14 @@ interface ChatTag {
   created_at?: string;
 }
 
-export default function ChatGestaoTagsSection({ userId }: { userId: string }) {
+export default function ChatGestaoTagsSection({
+  userId,
+  secondary = false,
+}: {
+  userId: string;
+  secondary?: boolean;
+}) {
+  const [open, setOpen] = useState(!secondary);
   const [tags, setTags] = useState<ChatTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
@@ -84,20 +94,45 @@ export default function ChatGestaoTagsSection({ userId }: { userId: string }) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <MessageSquare className="w-8 h-8 text-[#8CD955]" />
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Etiquetas do chat</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Crie etiquetas para o suporte usar nas conversas (ex: Urgente, Reclamação). Elas aparecem no filtro e ao marcar
-            conversas.
-          </p>
+    <section className={secondary ? 'mt-10 pt-8 border-t border-gray-200 dark:border-[#404040]' : ''}>
+      {secondary ? (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="w-full flex items-center justify-between gap-3 mb-4 text-left group"
+        >
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-5 h-5 text-gray-400 group-hover:text-[#E86A24]" />
+            <div>
+              <h2 className="text-base font-semibold text-gray-700 dark:text-gray-300">Etiquetas do chat</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Classifique conversas e veja o relatório de conversas etiquetadas
+              </p>
+            </div>
+          </div>
+          {open ? (
+            <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" />
+          )}
+        </button>
+      ) : (
+        <div className="flex items-center gap-3 mb-6">
+          <MessageSquare className="w-8 h-8 text-[#E86A24]" />
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Etiquetas do chat</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Crie etiquetas para o atendente usar nas conversas (ex: Urgente, Reclamação). Elas aparecem no filtro e ao
+              marcar conversas.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
+      {(!secondary || open) && (
+        <ZapCard className={secondary ? 'w-full' : 'max-w-2xl mx-auto'}>
       {error && (
-        <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm">{error}</div>
+        <div className="mb-4 p-3 rounded-lg bg-red-900/20 text-red-300 text-sm">{error}</div>
       )}
 
       <form onSubmit={handleCreate} className="flex gap-2 mb-6">
@@ -106,13 +141,13 @@ export default function ChatGestaoTagsSection({ userId }: { userId: string }) {
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           placeholder="Nome da etiqueta (ex: Urgente)"
-          className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 placeholder:text-gray-500"
+          className={`flex-1 px-3 py-2 text-sm ${zapInput}`}
           maxLength={50}
         />
         <button
           type="submit"
           disabled={!newName.trim() || saving}
-          className="px-4 py-2 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#8CD955] text-white hover:opacity-90 disabled:opacity-50"
+          className="px-4 py-2 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#E86A24] text-white hover:opacity-90 disabled:opacity-50"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           Adicionar
@@ -125,16 +160,16 @@ export default function ChatGestaoTagsSection({ userId }: { userId: string }) {
         </div>
       ) : tags.length === 0 ? (
         <div className="py-8 text-center text-gray-500 dark:text-gray-400 text-sm">
-          Nenhuma etiqueta. Adicione uma acima para o suporte usar no chat.
+          Nenhuma etiqueta. Adicione uma acima para o atendente usar no chat.
         </div>
       ) : (
         <ul className="space-y-2">
           {tags.map((tag) => (
             <li
               key={tag.id}
-              className="flex items-center justify-between gap-4 p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]"
+              className={`flex items-center justify-between gap-4 p-3 rounded-lg ${zapCardMuted}`}
             >
-              <span className="font-medium text-gray-900 dark:text-gray-100">{tag.name}</span>
+              <span className="font-medium text-white">{tag.name}</span>
               <button
                 type="button"
                 onClick={() => handleDelete(tag.id)}
@@ -148,6 +183,10 @@ export default function ChatGestaoTagsSection({ userId }: { userId: string }) {
           ))}
         </ul>
       )}
-    </div>
+
+      <ChatGestaoTagsReport userId={userId} availableTags={tags.map((t) => t.name)} />
+        </ZapCard>
+      )}
+    </section>
   );
 }

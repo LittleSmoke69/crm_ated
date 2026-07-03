@@ -33,8 +33,8 @@ function Content() {
     <Layout>
       <div className="p-4 max-w-6xl mx-auto">
         <Link
-          href="/admin/chat-gestao?tab=relatorio"
-          className="inline-flex items-center gap-2 text-sm text-[#8CD955] hover:underline mb-4"
+          href="/admin/chat-gestao"
+          className="inline-flex items-center gap-2 text-sm text-[#E86A24] hover:underline mb-4"
         >
           <ArrowLeft className="w-4 h-4" />
           Voltar à Gestão do Chat

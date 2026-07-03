@@ -388,8 +388,8 @@ export default function ConsultorDetalhadoPage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#8CD95515] rounded-xl">
-              <ClipboardList className="w-6 h-6 text-[#8CD955]" />
+            <div className="p-2.5 bg-[#E86A2415] rounded-xl">
+              <ClipboardList className="w-6 h-6 text-[#E86A24]" />
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Desempenho Detalhado</h1>
@@ -433,7 +433,7 @@ export default function ConsultorDetalhadoPage() {
                 />
                 <Link
                   href="/consultor"
-                  className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#8CD955]/20"
+                  className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#E86A24]/20"
                 >
                   <Users className="w-4 h-4" />
                   Visão Geral
@@ -449,7 +449,7 @@ export default function ConsultorDetalhadoPage() {
             onClick={() => setKindFilter('all')}
             className={`text-left p-4 rounded-2xl border transition-all ${
               kindFilter === 'all'
-                ? 'border-[#8CD955] bg-[#8CD95510] shadow-sm'
+                ? 'border-[#E86A24] bg-[#E86A2410] shadow-sm'
                 : 'border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#333]'
             }`}
           >
@@ -529,7 +529,7 @@ export default function ConsultorDetalhadoPage() {
               placeholder="Buscar por consultor, usuário, email, categoria..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955]/30 outline-none"
+              className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none"
             />
           </div>
           <div className="text-sm text-gray-500 dark:text-gray-400">
@@ -658,7 +658,7 @@ function SortableTh({ label, sortKey, current, dir, onSort, align = 'left' }: So
         align === 'right' ? 'text-right' : 'text-left'
       }`}
     >
-      <span className={`inline-flex items-center gap-1 ${active ? 'text-[#8CD955]' : ''}`}>
+      <span className={`inline-flex items-center gap-1 ${active ? 'text-[#E86A24]' : ''}`}>
         {label}
         <ArrowUpDown className={`w-3 h-3 ${active ? 'opacity-100' : 'opacity-30'}`} />
         {active ? <span className="text-[10px]">{dir === 'asc' ? '↑' : '↓'}</span> : null}

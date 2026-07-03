@@ -239,7 +239,7 @@ const EditCampaignsPage = () => {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <RefreshCw className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-4" />
+          <RefreshCw className="w-8 h-8 animate-spin text-[#E86A24] mx-auto mb-4" />
           <p className="text-gray-700 font-medium">Carregando...</p>
         </div>
       </div>
@@ -308,7 +308,7 @@ const EditCampaignsPage = () => {
             <button
               onClick={() => loadInitialData()}
               disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Atualizar

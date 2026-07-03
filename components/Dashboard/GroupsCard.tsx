@@ -16,7 +16,7 @@ const GroupsCard: React.FC<GroupsCardProps> = ({ title, count, onViewAll }) => {
         {onViewAll && (
           <button
             onClick={onViewAll}
-            className="text-sm font-medium text-[#8CD955] dark:text-[#00ff00] hover:text-[#7BC84A] dark:hover:text-[#00e600] transition-colors"
+            className="text-sm font-medium text-[#E86A24] dark:text-[#00ff00] hover:text-[#D95E1B] dark:hover:text-[#00e600] transition-colors"
           >
             Ver todas
           </button>

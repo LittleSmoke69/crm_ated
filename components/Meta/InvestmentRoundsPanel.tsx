@@ -148,7 +148,7 @@ function RoundCard({
   const pct = metric?.progress_pct ?? 0;
   const pctClamped = Math.min(100, Math.max(0, pct));
   const over = pct > 100;
-  const barColor = over ? 'bg-amber-500' : pct >= 80 ? 'bg-[#8CD955]' : 'bg-emerald-500';
+  const barColor = over ? 'bg-amber-500' : pct >= 80 ? 'bg-[#E86A24]' : 'bg-emerald-500';
 
   const m = metric?.metrics;
 
@@ -370,7 +370,7 @@ export default function InvestmentRoundsPanel({
         </div>
         <button
           onClick={() => setShowForm((s) => !s)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#8CD955] hover:bg-[#7bc548] text-gray-900 text-sm font-semibold transition-colors"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#E86A24] hover:bg-[#7bc548] text-gray-900 text-sm font-semibold transition-colors"
         >
           <Plus className="w-4 h-4" /> Nova rodada
         </button>
@@ -510,7 +510,7 @@ export default function InvestmentRoundsPanel({
       {/* Lista de rodadas */}
       {loadingRounds ? (
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 py-6 justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-[#8CD955]" /> Carregando rodadas…
+          <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" /> Carregando rodadas…
         </div>
       ) : rounds.length === 0 ? (
         <div className="flex flex-col items-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-8">

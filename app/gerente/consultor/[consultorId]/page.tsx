@@ -382,7 +382,7 @@ export default function DetalheConsultor() {
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
       </div>
     );
   }
@@ -420,7 +420,7 @@ export default function DetalheConsultor() {
           
           <div className="flex items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-[#8CD955] flex items-center justify-center text-white text-2xl font-bold shadow-lg shadow-[#8CD955]/20">
+              <div className="w-16 h-16 rounded-2xl bg-[#E86A24] flex items-center justify-center text-white text-2xl font-bold shadow-lg shadow-[#E86A24]/20">
                 {avatarInitial}
               </div>
               <div>
@@ -432,7 +432,7 @@ export default function DetalheConsultor() {
                       No sistema desde {new Date(consultor.created_at).toLocaleDateString('pt-BR')}
                     </span>
                   )}
-                  <span className="text-sm text-[#8CD955] bg-[#8CD95515] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider text-[10px]">Consultor</span>
+                  <span className="text-sm text-[#E86A24] bg-[#E86A2415] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider text-[10px]">Consultor</span>
                 </div>
               </div>
             </div>
@@ -458,12 +458,12 @@ export default function DetalheConsultor() {
                   >
                     {bancasLoading ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin text-[#8CD955]" />
+                        <Loader2 className="w-4 h-4 animate-spin text-[#E86A24]" />
                         Verificando bancas do consultor...
                       </>
                     ) : (
                       <>
-                        <Filter className="w-4 h-4 text-[#8CD955]" />
+                        <Filter className="w-4 h-4 text-[#E86A24]" />
                         {selectedBanca === 'all'
                           ? 'Todas as bancas'
                           : selectedBanca
@@ -491,7 +491,7 @@ export default function DetalheConsultor() {
                             placeholder="Pesquisar banca..."
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#8CD955]/30 outline-none placeholder:text-gray-500"
+                            className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm text-gray-900 font-bold focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500"
                             autoFocus
                           />
                         </div>
@@ -505,7 +505,7 @@ export default function DetalheConsultor() {
                             setBancaSearchTerm('');
                           }}
                           className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
-                            selectedBanca === 'all' ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
+                            selectedBanca === 'all' ? 'bg-[#E86A2415] text-[#E86A24] font-bold' : 'text-gray-700'
                           }`}
                         >
                           Todas as bancas
@@ -528,7 +528,7 @@ export default function DetalheConsultor() {
                                   setBancaSearchTerm('');
                                 }}
                                 className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors hover:bg-gray-50 ${
-                                  selectedBanca === banca.url ? 'bg-[#8CD95515] text-[#8CD955] font-bold' : 'text-gray-700'
+                                  selectedBanca === banca.url ? 'bg-[#E86A2415] text-[#E86A24] font-bold' : 'text-gray-700'
                                 }`}
                               >
                                 {banca.name}
@@ -554,7 +554,7 @@ export default function DetalheConsultor() {
                     onClick={() => setShowDatePicker(!showDatePicker)}
                     className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
                   >
-                    <Calendar className="w-4 h-4 text-[#8CD955]" />
+                    <Calendar className="w-4 h-4 text-[#E86A24]" />
                     {dateFilter === 'daily' && 'Diário'}
                     {dateFilter === 'yesterday' && 'Ontem'}
                     {dateFilter === '7days' && 'Últimos 7 dias'}
@@ -580,7 +580,7 @@ export default function DetalheConsultor() {
                               }
                             }}
                             className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                              dateFilter === filter ? 'bg-[#8CD95515] text-[#8CD955] font-medium' : 'text-gray-700 hover:bg-gray-50'
+                              dateFilter === filter ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 hover:bg-gray-50'
                             }`}
                           >
                             {filter === 'daily' && 'Diário'}
@@ -602,7 +602,7 @@ export default function DetalheConsultor() {
                                 value={customStartDate}
                                 onChange={(e) => setCustomStartDate(e.target.value)}
                                 max={customEndDate || new Date().toISOString().split('T')[0]}
-                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                               />
                             </div>
                             <div>
@@ -613,7 +613,7 @@ export default function DetalheConsultor() {
                                 onChange={(e) => setCustomEndDate(e.target.value)}
                                 min={customStartDate}
                                 max={new Date().toISOString().split('T')[0]}
-                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                               />
                             </div>
                             <button
@@ -625,7 +625,7 @@ export default function DetalheConsultor() {
                                 }
                               }}
                               disabled={!customStartDate || !customEndDate}
-                              className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                              className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                             >
                               Aplicar
                             </button>
@@ -643,7 +643,7 @@ export default function DetalheConsultor() {
                   router.push(`/crm/kanban?userId=${consultor.id}`);
                 }}
                 disabled={accessingCrm}
-                className="flex items-center gap-2 bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-[#8CD955]/50 disabled:cursor-wait text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-sm"
+                className="flex items-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-[#E86A24]/50 disabled:cursor-wait text-white px-6 py-3 rounded-xl font-medium transition-colors shadow-sm"
               >
                 {accessingCrm ? (
                   <>
@@ -665,13 +665,13 @@ export default function DetalheConsultor() {
         {loading && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#8CD955]"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
             </div>
           </div>
         )}
 
         {/* KPIs Externos - Métricas CRM */}
-        <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+        <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-2">
               <BarChart3 className="w-6 h-6 text-white" />
@@ -801,7 +801,7 @@ export default function DetalheConsultor() {
         {/* Análises e Gráficos */}
         <div className="relative bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+            <BarChart3 className="w-5 h-5 text-[#E86A24]" />
             Análises e Gráficos
             {chartData?.total_indicateds !== undefined && (
               <span className="text-sm font-normal text-gray-500 ml-2">
@@ -816,7 +816,7 @@ export default function DetalheConsultor() {
               {chartData.engagement_distribution && Object.keys(chartData.engagement_distribution).length > 0 && (
                 <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-100">
                   <h3 className="text-sm font-bold text-gray-600 mb-4 flex items-center gap-2">
-                    <Target className="w-4 h-4 text-[#8CD955]" />
+                    <Target className="w-4 h-4 text-[#E86A24]" />
                     Engajamento dos Clientes
                   </h3>
                   <div className="h-80">

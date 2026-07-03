@@ -1895,13 +1895,13 @@ export default function GestorTrafegoClient({
                 <div className="relative order-1">
                   {loadingDonos ? (
                     <div className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm text-gray-500 dark:text-gray-400 min-w-[160px]">
-                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#8CD955] border-t-transparent" />
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-[#E86A24] border-t-transparent" />
                       <span>Carregando...</span>
                     </div>
                   ) : (
                     <div className="relative">
                       <Building2
-                        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8CD955] pointer-events-none z-10"
+                        className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#E86A24] pointer-events-none z-10"
                         aria-hidden
                       />
                       <ChevronDown
@@ -1957,7 +1957,7 @@ export default function GestorTrafegoClient({
                   onClick={() => setShowDatePicker(!showDatePicker)}
                   className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                 >
-                  <Calendar className="w-4 h-4 text-[#8CD955]" />
+                  <Calendar className="w-4 h-4 text-[#E86A24]" />
                   <span>
                     {dateFilter === 'daily' && 'Hoje'}
                     {dateFilter === 'yesterday' && 'Ontem'}
@@ -1981,7 +1981,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'daily' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'daily' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Hoje
@@ -1994,7 +1994,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'yesterday' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'yesterday' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Ontem
@@ -2007,7 +2007,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '7days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '7days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 7 dias
@@ -2020,7 +2020,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '15days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '15days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 15 dias
@@ -2033,7 +2033,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '30days' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === '30days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Últimos 30 dias
@@ -2046,7 +2046,7 @@ export default function GestorTrafegoClient({
                           if (appliedEndDate) setCustomEndDate(appliedEndDate);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'custom' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'custom' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Personalizado
@@ -2059,7 +2059,7 @@ export default function GestorTrafegoClient({
                           setShowDatePicker(false);
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'all' ? 'bg-[#8CD95515] dark:bg-[#8CD95525] text-[#8CD955] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          dateFilter === 'all' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                       >
                         Todo o Período
@@ -2075,7 +2075,7 @@ export default function GestorTrafegoClient({
                             value={customStartDate}
                             onChange={(e) => setCustomStartDate(e.target.value)}
                             max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <div>
@@ -2086,7 +2086,7 @@ export default function GestorTrafegoClient({
                             onChange={(e) => setCustomEndDate(e.target.value)}
                             min={customStartDate}
                             max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
                           />
                         </div>
                         <button
@@ -2098,7 +2098,7 @@ export default function GestorTrafegoClient({
                             }
                           }}
                           disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#8CD955] hover:bg-[#7BC84A] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         >
                           Aplicar
                         </button>
@@ -2399,7 +2399,7 @@ export default function GestorTrafegoClient({
 
           <div className="relative">
             {/* Resumo Geral: skeleton nos valores enquanto carrega (evita confundir com zero real) */}
-            <div className="bg-gradient-to-br from-[#A8E677] to-[#8CD955] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#8CD955]/40">
+            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
                 <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>
@@ -2633,7 +2633,7 @@ export default function GestorTrafegoClient({
                       placeholder="https://graph.facebook.com/v25.0"
                       disabled={!isAdminOrSuperAdmin}
                       readOnly={!isAdminOrSuperAdmin}
-                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
+                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
                     />
                     {!isAdminOrSuperAdmin && (
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Somente administrador pode alterar URL e token.</p>
@@ -2648,7 +2648,7 @@ export default function GestorTrafegoClient({
                       placeholder={isAdminOrSuperAdmin ? '••••••••' : 'Somente administrador pode alterar'}
                       disabled={!isAdminOrSuperAdmin}
                       readOnly={!isAdminOrSuperAdmin}
-                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
+                      className={`w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] ${!isAdminOrSuperAdmin ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed' : 'bg-white dark:bg-gray-800'}`}
                     />
                   </div>
                   <div>
@@ -2658,7 +2658,7 @@ export default function GestorTrafegoClient({
                       value={metaConfigForm.ad_account_id}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, ad_account_id: e.target.value }))}
                       placeholder="act_123, act_456 ou vírgula entre IDs"
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-gray-800"
                     />
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Várias contas: separe por vírgula. Bloqueie contas banidas pela Meta e adicione uma de contingência. Use × para remover antes de salvar.
@@ -2738,7 +2738,7 @@ export default function GestorTrafegoClient({
                       value={metaConfigForm.pixel_id}
                       onChange={(e) => setMetaConfigForm((f) => ({ ...f, pixel_id: e.target.value }))}
                       placeholder="767101702304319"
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-gray-800"
                     />
                   </div>
                 </div>
@@ -2749,7 +2749,7 @@ export default function GestorTrafegoClient({
                       <select
                         value={metaConfigForm.default_campaign_id}
                         onChange={(e) => setMetaConfigForm((f) => ({ ...f, default_campaign_id: e.target.value }))}
-                        className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] bg-white dark:bg-gray-800"
+                        className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-gray-800"
                       >
                         <option value="">Nenhuma</option>
                         {metaCampaignsList.map((c: { id: string; name?: string; campaign_kind?: string }) => (
@@ -2785,7 +2785,7 @@ export default function GestorTrafegoClient({
                     type="button"
                     onClick={handleSaveMetaConfig}
                     disabled={metaConfigSaving}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-[#8CD955] hover:bg-[#7BC84A] disabled:opacity-50 text-white rounded-xl font-medium text-sm"
+                    className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50 text-white rounded-xl font-medium text-sm"
                   >
                     {metaConfigSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                     Salvar configuração
@@ -2836,13 +2836,13 @@ export default function GestorTrafegoClient({
         <div className="relative">
           {(loadingBanca || loadingExtMetrics) && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-2">
-              <Loader2 className="h-8 w-8 text-[#8CD955] animate-spin" />
+              <Loader2 className="h-8 w-8 text-[#E86A24] animate-spin" />
               <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando gráficos…</span>
             </div>
           )}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+              <BarChart3 className="w-5 h-5 text-[#E86A24]" />
               Análise Detalhada do Resumo Geral
             </h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2876,12 +2876,12 @@ export default function GestorTrafegoClient({
         <div className="relative bg-white dark:bg-[#2a2a2a] p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
           {(loadingMeta || loadingExtMetrics) && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-3">
-              <Loader2 className="h-10 w-10 text-[#8CD955] animate-spin" />
+              <Loader2 className="h-10 w-10 text-[#E86A24] animate-spin" />
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando dados do funil…</p>
             </div>
           )}
           <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-2 flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-[#8CD955]" />
+            <BarChart3 className="w-5 h-5 text-[#E86A24]" />
             Funil Facebook (Meta) + Loteria
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
@@ -2922,7 +2922,7 @@ export default function GestorTrafegoClient({
         <div className="relative">
           {loadingBanca && (
             <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex flex-col items-center justify-center gap-2">
-              <Loader2 className="h-8 w-8 text-[#8CD955] animate-spin" />
+              <Loader2 className="h-8 w-8 text-[#E86A24] animate-spin" />
               <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando ranking…</span>
             </div>
           )}

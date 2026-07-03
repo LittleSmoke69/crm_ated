@@ -204,7 +204,7 @@ export default function RegisterPage() {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-500 dark:text-[#888] mt-6 px-2">
-          © 2026 ZAPLOTO. Todos os direitos reservados.
+          © 2026 crmTR. Todos os direitos reservados.
         </p>
       </div>
     </div>

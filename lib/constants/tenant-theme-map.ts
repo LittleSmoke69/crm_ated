@@ -31,9 +31,9 @@ export const TENANT_THEME_LABELS: Record<TenantThemeToken, string> = {
 export type TenantThemePalette = Record<TenantThemeToken, string>;
 
 export const DEFAULT_TENANT_THEME_LIGHT: TenantThemePalette = {
-  primary: '#8CD955',
-  primary_hover: '#7BC84A',
-  accent: '#8CD955',
+  primary: '#E86A24',
+  primary_hover: '#D95E1B',
+  accent: '#E86A24',
   surface: '#ffffff',
   surface_elevated: '#f9fafb',
   border: '#e5e7eb',
@@ -42,9 +42,9 @@ export const DEFAULT_TENANT_THEME_LIGHT: TenantThemePalette = {
 };
 
 export const DEFAULT_TENANT_THEME_DARK: TenantThemePalette = {
-  primary: '#8CD955',
-  primary_hover: '#9ae066',
-  accent: '#8CD955',
+  primary: '#E86A24',
+  primary_hover: '#EF9057',
+  accent: '#E86A24',
   surface: '#1a1a1a',
   surface_elevated: '#2a2a2a',
   border: '#404040',

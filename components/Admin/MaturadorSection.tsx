@@ -1012,7 +1012,7 @@ export default function MaturadorSection({ userId }: Props) {
   return (
     <div className="space-y-6">
       {/* Bloco: Escolher ou montar o fluxo de mensagens (Maturador vs Auto maturador) */}
-      <div className="bg-gradient-to-br from-[#0A5C5C]/10 to-[#8CD955]/10 rounded-xl border border-[#0A5C5C]/20 p-5">
+      <div className="bg-gradient-to-br from-[#0A5C5C]/10 to-[#E86A24]/10 rounded-xl border border-[#0A5C5C]/20 p-5">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-[#0A5C5C]/20 flex items-center justify-center shrink-0">
             <MessageSquare className="w-5 h-5 text-[#0A5C5C]" />
@@ -1229,7 +1229,7 @@ export default function MaturadorSection({ userId }: Props) {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
           <button
             onClick={openCreateModal}
-            className="w-full h-full flex items-center justify-center gap-2 text-[#8CD955] hover:text-[#7BC84A] font-medium"
+            className="w-full h-full flex items-center justify-center gap-2 text-[#E86A24] hover:text-[#D95E1B] font-medium"
           >
             <Plus className="w-5 h-5" />
             <span>Novo Plano</span>
@@ -1766,7 +1766,7 @@ export default function MaturadorSection({ userId }: Props) {
                           <button
                             onClick={() => virginAction(vi.id, 'restart')}
                             disabled={virginActioning === vi.id}
-                            className="px-3 py-1.5 text-xs rounded bg-[#8CD955]/20 hover:bg-[#8CD955]/30 text-[#6AB83D] dark:text-[#8CD955] disabled:opacity-50"
+                            className="px-3 py-1.5 text-xs rounded bg-[#E86A24]/20 hover:bg-[#E86A24]/30 text-[#C9531A] dark:text-[#E86A24] disabled:opacity-50"
                           >
                             Reiniciar
                           </button>
@@ -1834,7 +1834,7 @@ export default function MaturadorSection({ userId }: Props) {
             <p>Nenhum plano cadastrado</p>
             <button
               onClick={openCreateModal}
-              className="mt-4 text-[#8CD955] hover:underline"
+              className="mt-4 text-[#E86A24] hover:underline"
             >
               Criar primeiro plano
             </button>
@@ -1850,7 +1850,7 @@ export default function MaturadorSection({ userId }: Props) {
                   >
                     <div className="flex items-center gap-3">
                       <h4 className="font-medium text-gray-800">{plan.name}</h4>
-                      <span className="text-xs px-2 py-0.5 rounded bg-[#8CD955]/20 text-[#8CD955] dark:text-[#8CD955]">
+                      <span className="text-xs px-2 py-0.5 rounded bg-[#E86A24]/20 text-[#E86A24] dark:text-[#E86A24]">
                         {plan.steps_json.length} steps
                       </span>
                     </div>
@@ -1862,7 +1862,7 @@ export default function MaturadorSection({ userId }: Props) {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => openEditModal(plan)}
-                      className="p-2 text-gray-400 hover:text-[#8CD955] hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/10 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-[#E86A24] hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 rounded-lg transition-colors"
                       title="Editar"
                     >
                       <Edit className="w-4 h-4" />
@@ -2017,7 +2017,7 @@ export default function MaturadorSection({ userId }: Props) {
                   <button
                     type="button"
                     onClick={addStep}
-                    className="text-sm text-[#8CD955] hover:text-[#7BC84A] flex items-center gap-1"
+                    className="text-sm text-[#E86A24] hover:text-[#D95E1B] flex items-center gap-1"
                   >
                     <Plus className="w-4 h-4" />
                     Adicionar Step
@@ -2132,7 +2132,7 @@ export default function MaturadorSection({ userId }: Props) {
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="px-4 py-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2"
               >
                 {saving ? (
                   <>

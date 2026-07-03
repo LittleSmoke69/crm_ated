@@ -10,7 +10,7 @@ const FLOW_HANDLE_BASE =
 export const FLOW_HANDLE_IN = `${FLOW_HANDLE_BASE} flow-handle--in !bg-gradient-to-br !from-sky-400 !to-sky-700 !border-white/90 dark:!border-sky-200/70 ring-1 ring-sky-400/35`;
 
 /** Saída padrão — source (geralmente à direita) */
-export const FLOW_HANDLE_OUT = `${FLOW_HANDLE_BASE} flow-handle--out !bg-gradient-to-br !from-[#c8f06f] !to-[#6fb52a] !border-white/90 dark:!border-[#5a9c2e] ring-1 ring-[#8CD955]/45`;
+export const FLOW_HANDLE_OUT = `${FLOW_HANDLE_BASE} flow-handle--out !bg-gradient-to-br !from-[#c8f06f] !to-[#6fb52a] !border-white/90 dark:!border-[#5a9c2e] ring-1 ring-[#E86A24]/45`;
 
 /** Saída semântica positiva (ex.: ramo “resposta” na Pergunta) */
 export const FLOW_HANDLE_OUT_SUCCESS = `${FLOW_HANDLE_BASE} flow-handle--out flow-handle--success !bg-gradient-to-br !from-emerald-400 !to-emerald-800 !border-white/90 dark:!border-emerald-300/50 ring-1 ring-emerald-400/40`;

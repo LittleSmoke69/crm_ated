@@ -55,7 +55,7 @@ const normalizePhoneForTel = (phone: string | undefined): string => {
 export default function TopPerformersChart({ 
   data, 
   title, 
-  color = '#8CD955',
+  color = '#E86A24',
   valueLabel = 'Valor'
 }: TopPerformersChartProps) {
   if (!data || !Array.isArray(data) || data.length === 0) {
@@ -73,12 +73,12 @@ export default function TopPerformersChart({
         {data.map((item, index) => (
           <div
             key={index}
-            className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#8CD955]/30 transition-all"
+            className="bg-gradient-to-r from-gray-50 to-white dark:from-[#2a2a2a] dark:to-[#1e1e1e] border border-gray-200 dark:border-[#404040] rounded-lg p-3 hover:shadow-md hover:border-[#E86A24]/30 transition-all"
           >
             <div className="flex items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#8CD955] flex items-center justify-center shadow-sm">
+                  <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[#E86A24] flex items-center justify-center shadow-sm">
                     <span className="text-xs font-bold text-white">{index + 1}</span>
                   </div>
                   <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{item.name}</p>
@@ -90,7 +90,7 @@ export default function TopPerformersChart({
                       href={`https://wa.me/${normalizePhoneForTel(item.phone)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#8CD955] font-medium transition-colors"
+                      className="text-xs text-gray-600 dark:text-gray-300 hover:text-[#E86A24] font-medium transition-colors"
                       title="Abrir conversa no WhatsApp"
                     >
                       {formatPhone(item.phone)}
@@ -102,7 +102,7 @@ export default function TopPerformersChart({
               </div>
               <div className="text-right flex-shrink-0">
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5 font-medium">{valueLabel}</p>
-                <p className="text-base font-bold text-[#8CD955]">
+                <p className="text-base font-bold text-[#E86A24]">
                   R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
               </div>

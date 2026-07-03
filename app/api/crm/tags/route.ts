@@ -34,10 +34,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
-    await requireStatus(req, ['admin']);
+    await requireStatus(req, ['super_admin', 'admin']);
 
     const body = await req.json();
-    const { label, color } = body;
+    const { label, color, move_to_column_key } = body;
 
     if (!label || !color) {
       return errorResponse('label e color são obrigatórios', 400);
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     // Valida formato da cor (hex)
     if (!/^#[0-9A-Fa-f]{6}$/.test(color)) {
-      return errorResponse('Cor inválida. Use formato hexadecimal (ex: #8CD955)', 400);
+      return errorResponse('Cor inválida. Use formato hexadecimal (ex: #E86A24)', 400);
     }
 
     const { data: tag, error } = await supabaseServiceRole
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
       .insert({
         label: label.trim(),
         color: color.toUpperCase(),
+        move_to_column_key: typeof move_to_column_key === 'string' && move_to_column_key ? move_to_column_key : null,
       })
       .select()
       .single();

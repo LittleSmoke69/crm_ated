@@ -95,7 +95,7 @@ function SearchableSelect({
             return next;
           });
         }}
-        className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] flex items-center justify-between gap-2 text-left min-h-[52px]"
+        className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] flex items-center justify-between gap-2 text-left min-h-[52px]"
       >
         <span className={`truncate ${selected ? '' : 'text-gray-400 dark:text-gray-500'}`}>
           {isLoading ? 'Carregando…' : selected ? selected.label : placeholder}
@@ -113,7 +113,7 @@ function SearchableSelect({
                 value={q}
                 onChange={e => setQ(e.target.value)}
                 placeholder={searchPlaceholder || 'Pesquisar…'}
-                className="w-full rounded-md border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#2a2a2a] py-2 pl-9 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-1 focus:ring-[#8CD955]"
+                className="w-full rounded-md border border-gray-200 dark:border-[#555] bg-gray-50 dark:bg-[#2a2a2a] py-2 pl-9 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#E86A24] focus:outline-none focus:ring-1 focus:ring-[#E86A24]"
               />
             </div>
           </div>
@@ -125,8 +125,8 @@ function SearchableSelect({
                 <li key={o.value}>
                   <button
                     type="button"
-                    className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-[#8CD955]/15 dark:hover:bg-[#8CD955]/10 ${
-                      o.value === value ? 'bg-[#8CD955]/25 font-medium text-[#1a4d0d] dark:text-[#8CD955]' : 'text-gray-700 dark:text-gray-200'
+                    className={`w-full px-4 py-2.5 text-left text-sm transition hover:bg-[#E86A24]/15 dark:hover:bg-[#E86A24]/10 ${
+                      o.value === value ? 'bg-[#E86A24]/25 font-medium text-[#1a4d0d] dark:text-[#E86A24]' : 'text-gray-700 dark:text-gray-200'
                     }`}
                     onClick={() => {
                       onValueChange(o.value, o);
@@ -545,7 +545,7 @@ function AddToGroupPage() {
         {toasts.map(toast => (
           <div
             key={toast.id}
-            className={`flex items-center gap-3 min-w-[320px] px-6 py-4 rounded-lg shadow-lg text-white ${toast.type === 'success' ? 'bg-[#8CD955]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
+            className={`flex items-center gap-3 min-w-[320px] px-6 py-4 rounded-lg shadow-lg text-white ${toast.type === 'success' ? 'bg-[#E86A24]' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
               }`}
           >
             {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
@@ -609,7 +609,7 @@ function AddToGroupPage() {
                   }}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#E86A24]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#E86A24]"></div>
               </label>
               <label htmlFor="multiInstances" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Usar múltiplas instâncias em rodízio para adicionar ao grupo
@@ -631,7 +631,7 @@ function AddToGroupPage() {
                   value={instanceMultiSearch}
                   onChange={e => setInstanceMultiSearch(e.target.value)}
                   placeholder="Pesquisar instâncias…"
-                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30"
+                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#E86A24] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30"
                 />
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
@@ -646,8 +646,8 @@ function AddToGroupPage() {
                       type="button"
                       onClick={() => toggleInstanceForAdd(inst.instance_name)}
                       className={`px-4 py-3 rounded-lg border-2 transition font-medium text-left ${instancesForAdd.includes(inst.instance_name)
-                          ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
+                          ? 'border-[#E86A24] bg-[#E86A24]/25 dark:bg-[#E86A24]/20 text-[#1a4d0d] dark:text-[#E86A24] ring-2 ring-[#E86A24] ring-offset-2 shadow-sm'
+                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#E86A24]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
                         }`}
                     >
                       <span className="block truncate">{inst.instance_name}</span>
@@ -735,7 +735,7 @@ function AddToGroupPage() {
                   }}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#E86A24]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#E86A24]"></div>
               </label>
               <label htmlFor="multiGroups" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Adicionar mais de um grupo
@@ -758,7 +758,7 @@ function AddToGroupPage() {
                   onChange={e => setGroupsMultiSearch(e.target.value)}
                   placeholder="Pesquisar grupos…"
                   disabled={loadingDbGroups || dbGroups.length === 0}
-                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#8CD955] focus:outline-none focus:ring-2 focus:ring-[#8CD955]/30 disabled:opacity-50"
+                  className="w-full rounded-lg border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] py-2.5 pl-10 pr-3 text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 focus:border-[#E86A24] focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 disabled:opacity-50"
                 />
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
@@ -780,8 +780,8 @@ function AddToGroupPage() {
                         })
                       }
                       className={`px-4 py-3 rounded-lg border-2 transition font-medium text-left ${groupsForAdd.some(x => x.jid === g.group_id)
-                          ? 'border-[#8CD955] bg-[#8CD955]/25 dark:bg-[#8CD955]/20 text-[#1a4d0d] dark:text-[#8CD955] ring-2 ring-[#8CD955] ring-offset-2 shadow-sm'
-                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#8CD955]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
+                          ? 'border-[#E86A24] bg-[#E86A24]/25 dark:bg-[#E86A24]/20 text-[#1a4d0d] dark:text-[#E86A24] ring-2 ring-[#E86A24] ring-offset-2 shadow-sm'
+                          : 'border-gray-200 dark:border-[#555] text-gray-600 dark:text-gray-300 hover:border-[#E86A24]/50 hover:bg-gray-50 dark:hover:bg-[#404040]'
                         }`}
                     >
                       <span className="block truncate">{g.group_subject || g.group_id}</span>
@@ -821,7 +821,7 @@ function AddToGroupPage() {
                   }
                 }
               }}
-              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
             >
               <option value="">Todos os contatos disponíveis</option>
               {customLists.map(list => (
@@ -846,7 +846,7 @@ function AddToGroupPage() {
               onChange={e => setAddLimit(Number(e.target.value))}
               placeholder="Digite uma Quantidade*"
               min="1"
-              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
+              className="w-full px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
             />
           </div>
 
@@ -863,13 +863,13 @@ function AddToGroupPage() {
                 placeholder="Digite uma Quantidade*"
                 min="0"
                 disabled={addRandom}
-                className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
+                className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder-gray-500"
               />
               <select
                 value={addDelayUnit}
                 onChange={e => setAddDelayUnit(e.target.value as DelayUnit)}
                 disabled={addRandom}
-                className="w-full sm:w-auto px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
+                className="w-full sm:w-auto px-4 py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] disabled:opacity-50 text-gray-700 dark:text-white bg-white dark:bg-[#333]"
               >
                 <option value="seconds">Segundos</option>
                 <option value="minutes">Minutos</option>
@@ -884,7 +884,7 @@ function AddToGroupPage() {
                   onChange={e => setAddRandom(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#8CD955]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8CD955]"></div>
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[#E86A24]/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#E86A24]"></div>
               </label>
               <label htmlFor="randomTime" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
                 Random Time
@@ -922,7 +922,7 @@ function AddToGroupPage() {
             <button
               onClick={handleAddToGroup}
               disabled={addingToGroup || (!multiInstancesMode ? !selectedInstance : instancesForAdd.length === 0) || (!multiGroupsMode ? !selectedGroupJid : groupsForAdd.length === 0)}
-              className="w-full sm:flex-1 py-3 bg-[#8CD955] hover:bg-[#7BC84A] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full sm:flex-1 py-3 bg-[#E86A24] hover:bg-[#D95E1B] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <Plus className="w-5 h-5" />
               <span className="whitespace-nowrap">{addingToGroup ? 'Iniciando...' : 'Iniciar Inclusão'}</span>
@@ -930,7 +930,7 @@ function AddToGroupPage() {
             <button
               onClick={() => setAddPaused(!addPaused)}
               disabled={!addingToGroup}
-              className="w-full sm:w-auto px-6 py-3 border-2 border-[#8CD955] text-[#8CD955] dark:text-[#8CD955] rounded-lg font-medium hover:bg-[#8CD955]/10 dark:hover:bg-[#8CD955]/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3 border-2 border-[#E86A24] text-[#E86A24] dark:text-[#E86A24] rounded-lg font-medium hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {addPaused ? (
                 <>

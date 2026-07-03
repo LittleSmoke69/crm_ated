@@ -451,7 +451,7 @@ export default function BancaXAdsRanking({
             type="button"
             onClick={() => load(queryFrom, queryTo)}
             disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-[#8CD955] hover:bg-[#7AC444] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] hover:bg-[#7AC444] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {loading ? 'Atualizando…' : 'Atualizar'}

@@ -310,7 +310,7 @@ const PerfilPage = () => {
       <Layout>
         <div className="min-h-screen flex items-center justify-center">
           <div className="text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-[#8CD955] mx-auto mb-4" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto mb-4" />
             <p className="text-gray-600">Carregando perfil...</p>
           </div>
         </div>
@@ -326,7 +326,7 @@ const PerfilPage = () => {
             <p className="text-red-600 mb-4">{error}</p>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-[#8CD955] text-white rounded-xl hover:bg-[#7BC844] transition-colors"
+              className="px-4 py-2 bg-[#E86A24] text-white rounded-xl hover:bg-[#7BC844] transition-colors"
             >
               Tentar novamente
             </button>
@@ -358,10 +358,10 @@ const PerfilPage = () => {
         {/* Card Principal */}
         <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-lg border border-gray-200 dark:border-[#404040] overflow-hidden">
           {/* Header do Card */}
-          <div className="bg-gradient-to-r from-[#8CD955] to-[#7BC844] p-6">
+          <div className="bg-gradient-to-r from-[#E86A24] to-[#7BC844] p-6">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
-                <User className="w-8 h-8 text-[#8CD955]" />
+                <User className="w-8 h-8 text-[#E86A24]" />
               </div>
               <div className="flex-1">
                 <h2 className="text-2xl font-bold text-white mb-1">
@@ -404,7 +404,7 @@ const PerfilPage = () => {
                         setTelefoneValue(digits);
                       }}
                       placeholder="8195124779"
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-transparent outline-none placeholder:text-gray-400 dark:placeholder:text-[#888]"
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-transparent outline-none placeholder:text-gray-400 dark:placeholder:text-[#888]"
                       autoFocus
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -412,7 +412,7 @@ const PerfilPage = () => {
                     <button
                       onClick={handleSaveTelefone}
                       disabled={savingTelefone}
-                      className="p-2 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC844] transition-colors disabled:opacity-50"
+                      className="p-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7BC844] transition-colors disabled:opacity-50"
                       title="Salvar"
                     >
                       {savingTelefone ? (
@@ -429,7 +429,7 @@ const PerfilPage = () => {
                     </p>
                     <button
                       onClick={() => setEditingTelefone(true)}
-                      className="p-2 text-[#8CD955] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors"
+                      className="p-2 text-[#E86A24] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors"
                       title="Editar telefone"
                     >
                       <Edit2 className="w-4 h-4" />
@@ -513,7 +513,7 @@ const PerfilPage = () => {
                                 href={banca.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[#8CD955] dark:text-[#00ff00] hover:underline text-sm"
+                                className="text-[#E86A24] dark:text-[#00ff00] hover:underline text-sm"
                               >
                                 ({banca.url})
                               </a>
@@ -539,7 +539,7 @@ const PerfilPage = () => {
                 >
                   {loadingLoadBancas ? (
                     <div className="flex flex-col items-center justify-center py-8 gap-4">
-                      <Loader2 className="w-12 h-12 animate-spin text-[#8CD955] dark:text-[#00ff00]" />
+                      <Loader2 className="w-12 h-12 animate-spin text-[#E86A24] dark:text-[#00ff00]" />
                       <p className="text-gray-700 dark:text-gray-300 font-medium text-center">Estamos realizando a atualização das suas bancas.</p>
                       <p className="text-gray-500 dark:text-[#888] text-sm text-center">Isso pode levar alguns segundos. Aguarde...</p>
                     </div>
@@ -566,7 +566,7 @@ const PerfilPage = () => {
                         <button
                           type="button"
                           onClick={() => handleLoadBancas()}
-                          className="flex items-center gap-2 px-4 py-2.5 bg-[#8CD955] dark:bg-[#00ff00] text-white hover:bg-[#7BC844] dark:hover:bg-[#00e600] rounded-xl font-medium transition-colors"
+                          className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] dark:bg-[#00ff00] text-white hover:bg-[#7BC844] dark:hover:bg-[#00e600] rounded-xl font-medium transition-colors"
                         >
                           Sim, atualizar
                         </button>
@@ -605,7 +605,7 @@ const PerfilPage = () => {
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
                             placeholder="Pesquisar banca por nome ou URL..."
-                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-100 dark:bg-[#333] focus:bg-gray-50 dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#8CD955] dark:focus:ring-[#00ff00] focus:border-[#8CD955] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#888]"
+                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-100 dark:bg-[#333] focus:bg-gray-50 dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#888]"
                           />
                         </div>
                       </div>
@@ -613,7 +613,7 @@ const PerfilPage = () => {
                     <div className="p-4 overflow-y-auto flex-1 min-h-0">
                       {!bancasLoaded ? (
                         <div className="flex items-center justify-center py-8">
-                          <Loader2 className="w-8 h-8 animate-spin text-[#8CD955]" />
+                          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
                           <span className="ml-2 text-gray-600">Carregando bancas...</span>
                         </div>
                       ) : allBancas.length === 0 ? (
@@ -632,7 +632,7 @@ const PerfilPage = () => {
                                   type="checkbox"
                                   checked={selectedBancaIds.has(banca.id ?? '')}
                                   onChange={() => toggleBanca(banca.id ?? '')}
-                                  className="w-4 h-4 rounded border-gray-300 dark:border-[#555] text-[#8CD955] dark:text-[#00ff00] focus:ring-[#8CD955] dark:focus:ring-[#00ff00]"
+                                  className="w-4 h-4 rounded border-gray-300 dark:border-[#555] text-[#E86A24] dark:text-[#00ff00] focus:ring-[#E86A24] dark:focus:ring-[#00ff00]"
                                 />
                                 <span className="text-gray-900 dark:text-white font-medium">{banca.name}</span>
                                 {banca.url && (
@@ -662,7 +662,7 @@ const PerfilPage = () => {
                       type="button"
                       onClick={handleSaveBancas}
                       disabled={savingBancas || !bancasLoaded || allBancas.length === 0}
-                      className="flex items-center gap-2 px-4 py-2 bg-[#8CD955] dark:bg-[#00ff00] text-white rounded-xl hover:bg-[#7BC844] dark:hover:bg-[#00e600] transition-colors disabled:opacity-50 font-medium"
+                      className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] dark:bg-[#00ff00] text-white rounded-xl hover:bg-[#7BC844] dark:hover:bg-[#00e600] transition-colors disabled:opacity-50 font-medium"
                     >
                       {savingBancas ? (
                         <>
@@ -694,7 +694,7 @@ const PerfilPage = () => {
                     onClick={() => setTheme('light')}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'light'
-                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white shadow-md'
+                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white shadow-md'
                         : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
                     }`}
                   >
@@ -706,7 +706,7 @@ const PerfilPage = () => {
                     onClick={() => setTheme('dark')}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'dark'
-                        ? 'bg-[#8CD955] dark:bg-[#00ff00] text-white shadow-md'
+                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white shadow-md'
                         : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
                     }`}
                   >

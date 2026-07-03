@@ -53,6 +53,7 @@ export async function POST(
       targetUserId: targetProfile.id,
       targetEmail: targetProfile.email,
       targetName: targetProfile.full_name,
+      targetStatus: targetProfile.status,
       adminUserId: adminUserId,
       adminEmail: adminProfile.email,
     });

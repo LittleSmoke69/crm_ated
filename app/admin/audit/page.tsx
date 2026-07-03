@@ -267,7 +267,7 @@ export default function AdminAuditPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-100 flex items-center gap-2">
-                <ClipboardList className="h-8 w-8 text-[#8CD955]" />
+                <ClipboardList className="h-8 w-8 text-[#E86A24]" />
                 Auditoria de saídas
               </h1>
               <p className="mt-1 text-sm text-gray-400">
@@ -285,7 +285,7 @@ export default function AdminAuditPage() {
               onClick={() => { setMainTab('resumo'); setPage(1); setError(null); }}
               className={`px-4 py-3 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
                 mainTab === 'resumo'
-                  ? 'border-[#8CD955] text-[#8CD955] bg-[#8CD955]/10'
+                  ? 'border-[#E86A24] text-[#E86A24] bg-[#E86A24]/10'
                   : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#2a2a2a]'
               }`}
             >
@@ -299,7 +299,7 @@ export default function AdminAuditPage() {
               onClick={() => { setMainTab('raw'); setPage(1); setError(null); }}
               className={`px-4 py-3 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
                 mainTab === 'raw'
-                  ? 'border-[#8CD955] text-[#8CD955] bg-[#8CD955]/10'
+                  ? 'border-[#E86A24] text-[#E86A24] bg-[#E86A24]/10'
                   : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#2a2a2a]'
               }`}
             >
@@ -315,7 +315,7 @@ export default function AdminAuditPage() {
         <div className="mb-6 rounded-xl border border-[#404040] bg-[#2a2a2a] p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <CloudDownload className="h-5 w-5 text-[#8CD955]" />
+              <CloudDownload className="h-5 w-5 text-[#E86A24]" />
               <span className="text-sm font-medium text-gray-200">Nomes dos grupos</span>
               {toSyncCount != null && toSyncCount > 0 && (
                 <span className="text-xs text-gray-500">({toSyncCount} grupo(s) para sincronizar)</span>
@@ -325,7 +325,7 @@ export default function AdminAuditPage() {
               type="button"
               onClick={handleSyncNames}
               disabled={syncingNames || (toSyncCount != null && toSyncCount === 0)}
-              className="rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2"
+              className="rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2"
             >
               {syncingNames ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudDownload className="h-4 w-4" />}
               {syncingNames ? 'Buscando e salvando…' : 'Executar em segundo plano'}
@@ -335,7 +335,7 @@ export default function AdminAuditPage() {
             Usa o endpoint Evolution <code className="bg-[#1a1a1a] px-1 rounded text-gray-400">/group/findGroupInfos</code> para obter o nome de cada grupo e gravar na tabela <code className="bg-[#1a1a1a] px-1 rounded text-gray-400">audit_group_names</code>. O processo roda em segundo plano para evitar timeout.
           </p>
           {syncSuccessMsg && (
-            <p className="mt-2 text-sm text-[#8CD955] font-medium">{syncSuccessMsg}</p>
+            <p className="mt-2 text-sm text-[#E86A24] font-medium">{syncSuccessMsg}</p>
           )}
         </div>
 
@@ -348,14 +348,14 @@ export default function AdminAuditPage() {
                 type="date"
                 value={dateFrom}
                 onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
               />
               <span className="text-gray-500">até</span>
               <input
                 type="date"
                 value={dateTo}
                 onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955]"
+                className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
               />
             </div>
             <div className="flex items-center gap-1">
@@ -363,7 +363,7 @@ export default function AdminAuditPage() {
               <select
                 value={instanceFilter}
                 onChange={(e) => { setInstanceFilter(e.target.value); setPage(1); }}
-                className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#8CD955] min-w-[160px]"
+                className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#E86A24] min-w-[160px]"
                 title="Filtrar por instância WhatsApp (ex: GERALBANCAS, zapcontabo)"
               >
                 <option value="">Todas as instâncias</option>
@@ -381,13 +381,13 @@ export default function AdminAuditPage() {
                     placeholder="Nome do grupo"
                     value={groupNameFilter}
                     onChange={(e) => { setGroupNameFilter(e.target.value); setPage(1); }}
-                    className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm w-44 text-gray-200 placeholder-gray-500 focus:ring-2 focus:ring-[#8CD955]"
+                    className="rounded-lg border border-[#404040] bg-[#1a1a1a] px-3 py-2 text-sm w-44 text-gray-200 placeholder-gray-500 focus:ring-2 focus:ring-[#E86A24]"
                   />
                 </div>
                 <select
                   value={listMode}
                   onChange={(e) => { setListMode(e.target.value as ListMode); setPage(1); }}
-                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#8CD955]"
+                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#E86A24]"
                 >
                   <option value="recent">Saídas recentes</option>
                   <option value="unique_phones">Telefones únicos</option>
@@ -400,7 +400,7 @@ export default function AdminAuditPage() {
                 <select
                   value={env}
                   onChange={(e) => { setEnv(e.target.value as 'prod' | 'test' | ''); setPage(1); }}
-                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#8CD955]"
+                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#E86A24]"
                 >
                   <option value="">Todos os ambientes</option>
                   <option value="prod">Produção</option>
@@ -409,7 +409,7 @@ export default function AdminAuditPage() {
                 <select
                   value={actionFilter}
                   onChange={(e) => { setActionFilter(e.target.value as 'add' | 'remove' | ''); setPage(1); }}
-                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#8CD955]"
+                  className="rounded-lg border border-[#404040] px-3 py-2 text-sm bg-[#1a1a1a] text-gray-200 focus:ring-2 focus:ring-[#E86A24]"
                 >
                   <option value="">Todas as ações</option>
                   <option value="remove">Saída / Remoção</option>
@@ -421,7 +421,7 @@ export default function AdminAuditPage() {
               type="button"
               onClick={fetchData}
               disabled={loading}
-              className="rounded-lg bg-[#8CD955] px-4 py-2 text-sm font-medium text-white hover:bg-[#7BC84A] disabled:opacity-50 flex items-center gap-2"
+              className="rounded-lg bg-[#E86A24] px-4 py-2 text-sm font-medium text-white hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Atualizar
@@ -450,7 +450,7 @@ export default function AdminAuditPage() {
         <div className="rounded-xl border border-[#404040] bg-[#2a2a2a] shadow-sm overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-10 w-10 animate-spin text-[#8CD955]" />
+              <Loader2 className="h-10 w-10 animate-spin text-[#E86A24]" />
             </div>
           ) : mainTab === 'raw' ? (
             <>

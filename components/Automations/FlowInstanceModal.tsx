@@ -147,7 +147,7 @@ function MessagePreviewWithVariables({
               onDoubleClick={() => onDeleteVariable(part.start!, part.end!)}
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
               onDrop={(e) => handleDropInPreview(e, part.start!)}
-              className="text-[#5a8a2a] dark:text-[#8CD955] font-mono font-semibold bg-[#8CD955]/20 dark:bg-[#8CD955]/30 px-1 py-0.5 rounded cursor-pointer hover:bg-[#8CD955]/30 dark:hover:bg-[#8CD955]/40 select-none"
+              className="text-[#5a8a2a] dark:text-[#E86A24] font-mono font-semibold bg-[#E86A24]/20 dark:bg-[#E86A24]/30 px-1 py-0.5 rounded cursor-pointer hover:bg-[#E86A24]/30 dark:hover:bg-[#E86A24]/40 select-none"
               title="Duplo clique para remover | Arraste para reposicionar"
             >
               {part.text}
@@ -563,7 +563,7 @@ export default function FlowInstanceModal({
               onClick={() => setActiveTab('config')}
               className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
                 activeTab === 'config'
-                  ? 'border-[#8CD955] text-[#8CD955]'
+                  ? 'border-[#E86A24] text-[#E86A24]'
                   : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
             >
@@ -574,7 +574,7 @@ export default function FlowInstanceModal({
               onClick={() => setActiveTab('messages')}
               className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
                 activeTab === 'messages'
-                  ? 'border-[#8CD955] text-[#8CD955]'
+                  ? 'border-[#E86A24] text-[#E86A24]'
                   : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
               }`}
             >
@@ -596,7 +596,7 @@ export default function FlowInstanceModal({
                 <select
                   value={instanceName}
                   onChange={(e) => handleInstanceChange(e.target.value)}
-                  className="w-full px-4 py-2.5 border-2 border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] transition-colors shadow-sm"
+                  className="w-full px-4 py-2.5 border-2 border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] transition-colors shadow-sm"
                 >
                   <option value="">Selecione uma instância</option>
                   {instances.map((inst) => (
@@ -624,7 +624,7 @@ export default function FlowInstanceModal({
                         type="button"
                         onClick={fetchNewGroups}
                         disabled={fetchingGroups}
-                        className="text-xs text-[#8CD955] hover:text-[#7BC84A] font-semibold flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#8CD955]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="text-xs text-[#E86A24] hover:text-[#D95E1B] font-semibold flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#E86A24]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {fetchingGroups ? (
                           <><Loader2 className="w-3.5 h-3.5 animate-spin" />Buscando...</>
@@ -654,7 +654,7 @@ export default function FlowInstanceModal({
 
                 {loadingGroups ? (
                   <div className="flex items-center justify-center p-4">
-                    <Loader2 className="w-5 h-5 animate-spin text-[#8CD955]" />
+                    <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
                   </div>
                 ) : allGroups.length === 0 ? (
                   <div className="text-center py-8 text-gray-500 dark:text-gray-400">
@@ -678,30 +678,30 @@ export default function FlowInstanceModal({
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(gid); } }}
                             className={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
                               isSelected
-                                ? 'border-[#8CD955] bg-[#8CD955]/10 dark:bg-[#8CD955]/20 shadow-sm'
+                                ? 'border-[#E86A24] bg-[#E86A24]/10 dark:bg-[#E86A24]/20 shadow-sm'
                                 : 'border-gray-200 dark:border-[#404040] hover:border-gray-300 dark:hover:border-[#555] hover:bg-gray-50 dark:hover:bg-[#333]'
                             }`}
                           >
                             <div className="flex items-center gap-3">
                               <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                                isSaved ? 'bg-green-100 dark:bg-[#8CD955]/20 text-green-600 dark:text-[#8CD955]' : 'bg-blue-100 dark:bg-[#8CD955]/20 text-blue-600 dark:text-[#8CD955]'
+                                isSaved ? 'bg-green-100 dark:bg-[#E86A24]/20 text-green-600 dark:text-[#E86A24]' : 'bg-blue-100 dark:bg-[#E86A24]/20 text-blue-600 dark:text-[#E86A24]'
                               }`}>
                                 <Users className="w-5 h-5" />
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
-                                  <p className={`font-medium text-sm truncate ${isSelected ? 'text-[#8CD955]' : 'text-gray-900 dark:text-white'}`}>
+                                  <p className={`font-medium text-sm truncate ${isSelected ? 'text-[#E86A24]' : 'text-gray-900 dark:text-white'}`}>
                                     {group.group_subject || group.group_id}
                                   </p>
                                   {isSaved && (
-                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-xs font-medium bg-green-100 dark:bg-[#8CD955]/20 text-green-700 dark:text-[#8CD955] rounded">
+                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-xs font-medium bg-green-100 dark:bg-[#E86A24]/20 text-green-700 dark:text-[#E86A24] rounded">
                                       Salvo
                                     </span>
                                   )}
                                 </div>
                                 <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">{group.group_id}</p>
                               </div>
-                              {isSelected && <CheckCircle2 className="w-5 h-5 text-[#8CD955] flex-shrink-0" />}
+                              {isSelected && <CheckCircle2 className="w-5 h-5 text-[#E86A24] flex-shrink-0" />}
                             </div>
                           </div>
                         );
@@ -740,7 +740,7 @@ export default function FlowInstanceModal({
                                   onClick={() => setGroupsPage(page)}
                                   className={`relative inline-flex items-center px-3 py-2 text-sm font-semibold ${
                                     groupsPage === page
-                                      ? 'z-10 bg-[#8CD955] text-white'
+                                      ? 'z-10 bg-[#E86A24] text-white'
                                       : 'text-gray-900 dark:text-gray-300 ring-1 ring-inset ring-gray-300 dark:ring-[#555] hover:bg-gray-50 dark:hover:bg-[#404040]'
                                   }`}
                                 >
@@ -782,7 +782,7 @@ export default function FlowInstanceModal({
                   id="is_active_fi"
                   checked={isActive}
                   onChange={(e) => setIsActive(e.target.checked)}
-                  className="w-5 h-5 text-[#8CD955] border-gray-300 dark:border-[#555] rounded focus:ring-2 focus:ring-[#8CD955]"
+                  className="w-5 h-5 text-[#E86A24] border-gray-300 dark:border-[#555] rounded focus:ring-2 focus:ring-[#E86A24]"
                 />
                 <label htmlFor="is_active_fi" className="text-sm font-medium text-gray-900 dark:text-white cursor-pointer">
                   Automação ativa nos grupos selecionados
@@ -850,7 +850,7 @@ export default function FlowInstanceModal({
                     <span
                       key={v.label}
                       title={v.description}
-                      className="px-2 py-1 text-xs bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#5a8a2a] dark:text-[#8CD955] border border-[#8CD955]/40 rounded-md cursor-default font-mono select-all"
+                      className="px-2 py-1 text-xs bg-[#E86A24]/20 dark:bg-[#E86A24]/30 text-[#5a8a2a] dark:text-[#E86A24] border border-[#E86A24]/40 rounded-md cursor-default font-mono select-all"
                     >
                       {v.label}
                     </span>
@@ -885,7 +885,7 @@ export default function FlowInstanceModal({
                             <div className="flex items-center gap-2">
                               {hasCustom ? (
                                 <>
-                                  <span className="text-xs px-2 py-0.5 bg-[#8CD955]/20 text-[#5a8a2a] dark:text-[#8CD955] rounded font-medium">
+                                  <span className="text-xs px-2 py-0.5 bg-[#E86A24]/20 text-[#5a8a2a] dark:text-[#E86A24] rounded font-medium">
                                     Personalizada
                                   </span>
                                   <button
@@ -904,7 +904,7 @@ export default function FlowInstanceModal({
                                   <button
                                     onClick={() => setSlotMessage(node.id, idx, sysMsg)}
                                     title="Criar mensagem personalizada para este slot"
-                                    className="flex items-center gap-1 text-xs text-[#8CD955] hover:text-[#7BC84A] hover:bg-[#8CD955]/10 px-2 py-0.5 rounded transition-colors"
+                                    className="flex items-center gap-1 text-xs text-[#E86A24] hover:text-[#D95E1B] hover:bg-[#E86A24]/10 px-2 py-0.5 rounded transition-colors"
                                   >
                                     <Plus className="w-3 h-3" />
                                     Personalizar
@@ -931,7 +931,7 @@ export default function FlowInstanceModal({
                                       }}
                                       onClick={() => insertVariable(node.id, idx, v.label)}
                                       title={`Arraste para o texto ou clique para inserir: ${v.label}`}
-                                      className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-[#8CD955]/20 dark:bg-[#8CD955]/30 text-[#5a8a2a] dark:text-[#8CD955] border border-[#8CD955]/40 rounded-md hover:bg-[#8CD955]/40 cursor-grab active:cursor-grabbing transition-colors font-mono select-none"
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-[#E86A24]/20 dark:bg-[#E86A24]/30 text-[#5a8a2a] dark:text-[#E86A24] border border-[#E86A24]/40 rounded-md hover:bg-[#E86A24]/40 cursor-grab active:cursor-grabbing transition-colors font-mono select-none"
                                     >
                                       {v.label}
                                     </span>
@@ -945,7 +945,7 @@ export default function FlowInstanceModal({
                                   onDrop={(e) => handleTextareaDrop(e, node.id, idx)}
                                   rows={3}
                                   placeholder="Digite sua mensagem ou arraste as variáveis para cá..."
-                                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] resize-none"
+                                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-[#555] rounded-lg bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] resize-none"
                                 />
                                 {/* Prévia: variáveis em verde; duplo clique remove, arraste move */}
                                 <div className="mt-2 px-3 py-2.5 border border-gray-200 dark:border-[#404040] rounded-lg bg-gray-50 dark:bg-[#1f1f1f] min-h-[52px]">
@@ -991,7 +991,7 @@ export default function FlowInstanceModal({
           <button
             onClick={handleSave}
             disabled={saving || !instanceName || groupJids.length === 0}
-            className="px-5 py-2.5 bg-[#8CD955] text-white rounded-lg hover:bg-[#7BC84A] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm"
+            className="px-5 py-2.5 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm"
           >
             {saving ? (
               <><Loader2 className="w-4 h-4 animate-spin" />Salvando...</>

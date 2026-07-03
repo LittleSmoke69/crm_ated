@@ -154,7 +154,7 @@ const TreeNodeComponent: React.FC<{
           </span>
           <button
             onClick={() => onCopyPath(node.path)}
-            className="opacity-0 group-hover:opacity-100 ml-auto flex-shrink-0 px-2 py-1 text-xs text-gray-500 hover:text-[#8CD955] transition"
+            className="opacity-0 group-hover:opacity-100 ml-auto flex-shrink-0 px-2 py-1 text-xs text-gray-500 hover:text-[#E86A24] transition"
             title="Copiar path"
           >
             <Copy className="w-3 h-3" />
@@ -227,7 +227,7 @@ const TableView: React.FC<{ data: any[]; onCopyPath: (path: string) => void }> =
                     </span>
                     <button
                       onClick={() => onCopyPath(`json[${idx}].${key}`)}
-                      className="opacity-0 group-hover:opacity-100 px-1 py-0.5 text-xs text-gray-500 hover:text-[#8CD955] transition"
+                      className="opacity-0 group-hover:opacity-100 px-1 py-0.5 text-xs text-gray-500 hover:text-[#E86A24] transition"
                       title="Copiar path"
                     >
                       <Copy className="w-3 h-3" />
@@ -328,7 +328,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
               onClick={() => setSelectedSource('input')}
               className={`px-3 py-1 text-sm rounded transition ${
                 selectedSource === 'input'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
               }`}
             >
@@ -338,7 +338,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
               onClick={() => setSelectedSource('normalized')}
               className={`px-3 py-1 text-sm rounded transition ${
                 selectedSource === 'normalized'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
               }`}
             >
@@ -354,7 +354,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
               onClick={() => setViewMode('tree')}
               className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded transition ${
                 viewMode === 'tree'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
               }`}
             >
@@ -365,7 +365,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
               onClick={() => setViewMode('json')}
               className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded transition ${
                 viewMode === 'json'
-                  ? 'bg-[#8CD955] text-white'
+                  ? 'bg-[#E86A24] text-white'
                   : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
               }`}
             >
@@ -377,7 +377,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
                 onClick={() => setViewMode('table')}
                 className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded transition ${
                   viewMode === 'table'
-                    ? 'bg-[#8CD955] text-white'
+                    ? 'bg-[#E86A24] text-white'
                     : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
                 }`}
               >
@@ -411,7 +411,7 @@ export const PayloadViewer: React.FC<PayloadViewerProps> = ({ payload, normalize
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar chaves/valores..."
-                className="pl-8 pr-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8CD955] focus:border-[#8CD955] text-gray-900 placeholder:text-gray-500"
+                className="pl-8 pr-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] text-gray-900 placeholder:text-gray-500"
               />
             </div>
           </div>

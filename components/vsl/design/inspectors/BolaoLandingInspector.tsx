@@ -147,7 +147,7 @@ export function BolaoLandingInspector({ props, onChange, projectId }: BolaoLandi
                 if (file) uploadLogo(file);
                 e.target.value = '';
               }}
-              className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#8CD955]/20 file:text-[#8CD955] file:font-medium hover:file:bg-[#8CD955]/30 disabled:opacity-50"
+              className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#E86A24]/20 file:text-[#E86A24] file:font-medium hover:file:bg-[#E86A24]/30 disabled:opacity-50"
             />
           </div>
           <p className="text-xs text-gray-500 mt-1.5">Upload vai para o Storage e o render assina automaticamente.</p>
@@ -196,8 +196,8 @@ export function BolaoLandingInspector({ props, onChange, projectId }: BolaoLandi
                   aria-pressed={active}
                   onClick={() => update({ backgroundColor: p.value })}
                   className={[
-                    'h-9 w-9 rounded-lg border-2 shadow-sm transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-[#8CD955] focus:ring-offset-1',
-                    active ? 'border-[#8CD955] ring-2 ring-[#8CD955]/40' : 'border-gray-300 hover:border-gray-400',
+                    'h-9 w-9 rounded-lg border-2 shadow-sm transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-[#E86A24] focus:ring-offset-1',
+                    active ? 'border-[#E86A24] ring-2 ring-[#E86A24]/40' : 'border-gray-300 hover:border-gray-400',
                   ].join(' ')}
                   style={{ background: p.value }}
                 />
