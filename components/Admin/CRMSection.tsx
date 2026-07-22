@@ -36,6 +36,7 @@ import TemporalEvolutionChart from '@/components/Charts/TemporalEvolutionChart';
 import ConversionFunnelChart from '@/components/Charts/ConversionFunnelChart';
 import ActivityByWeekdayChart from '@/components/Charts/ActivityByWeekdayChart';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
+import LeadsSection from '@/components/Admin/LeadsSection';
 
 interface Banca {
   id: string;
@@ -388,6 +389,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
   const [newUrl, setNewUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showManagement, setShowManagement] = useState(false);
+  const [showLeads, setShowLeads] = useState(false);
   const [editingBanca, setEditingBanca] = useState<Banca | null>(null);
   
   // Tags state
@@ -669,9 +671,39 @@ export default function CRMSection({ userId }: CRMSectionProps) {
     );
   }
 
+  if (showLeads) {
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        <nav className="flex flex-wrap gap-2" aria-label="Atalhos do CRM">
+          <button
+            onClick={() => setShowLeads(false)}
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
+          >
+            ← Voltar ao CRM
+          </button>
+          <Link
+            href="/crm/kanban"
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
+          >
+            <Kanban className="h-3.5 w-3.5 shrink-0" />
+            Kanban
+          </Link>
+        </nav>
+        <LeadsSection userId={userId} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <nav className="flex flex-wrap gap-2" aria-label="Atalhos do CRM">
+        <button
+          onClick={() => setShowLeads(true)}
+          className="inline-flex items-center gap-2 rounded-xl bg-[#E86A24] px-3 py-2 text-xs font-bold text-white shadow-md transition-all hover:bg-[#D95E1B]"
+        >
+          <UserPlus className="h-3.5 w-3.5 shrink-0" />
+          Leads
+        </button>
         <Link
           href="/crm/kanban"
           className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:border-[#E86A24]/50 hover:bg-[#E86A24]/10 hover:text-[#C9531A] dark:border-[#404040] dark:bg-[#2a2a2a] dark:text-gray-300 dark:hover:bg-[#E86A24]/15 dark:hover:text-[#E86A24]"
@@ -1087,7 +1119,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
                 <Trophy className="w-4 h-4 text-amber-500" />
-                Top 5 Consultores
+                Top 5 Captadores
               </h3>
               <div className="flex items-center gap-2">
                 <label htmlFor="top5-sort" className="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Filtrar por:</label>
@@ -1115,7 +1147,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
             ) : top5List.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
                 <Trophy className="w-12 h-12 text-gray-300 mb-2" />
-                <p className="text-sm font-medium">Nenhum consultor no período</p>
+                <p className="text-sm font-medium">Nenhum captador no período</p>
               </div>
             ) : (
               <Top5ConsultoresCards list={top5List} showBancas={selectedBanca === 'all'} sortKey={top5Sort} />
@@ -1128,7 +1160,7 @@ export default function CRMSection({ userId }: CRMSectionProps) {
               {chartData?.status_distribution ? <StatusDistributionChart data={chartData.status_distribution} /> : <LoadingChart />}
             </ChartBox>
 
-            <ChartBox title="Lucratividade por Consultor" icon={Target} iconColor="text-[#E86A24]">
+            <ChartBox title="Lucratividade por Captador" icon={Target} iconColor="text-[#E86A24]">
               {chartData?.consultant_profitability ? <BancaRankingChart data={chartData.consultant_profitability} prefix="R$ " /> : <LoadingChart />}
             </ChartBox>
 

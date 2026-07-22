@@ -220,7 +220,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
           <div>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Relatório operacional</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Por banca (via gerente), gerente responsável, instância Evolution e consultor vinculado. O consultor enxerga no
+              Por banca (via gerente), gerente responsável, instância Evolution e captador vinculado. O captador enxerga no
               chat apenas as instâncias às quais o gerente o atribuiu.
             </p>
           </div>
@@ -231,14 +231,14 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
           />
           <span className="text-gray-500 text-sm">até</span>
           <input
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
           />
           <button
             type="button"
@@ -311,7 +311,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                               <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-[#404040]">
                                 <th className="pb-2 pr-3 font-medium">Instância</th>
                                 <th className="pb-2 pr-3 font-medium">Status</th>
-                                <th className="pb-2 pr-3 font-medium">Consultor</th>
+                                <th className="pb-2 pr-3 font-medium">Captador</th>
                                 <th className="pb-2 pr-3 font-medium text-right">Conversas</th>
                                 <th className="pb-2 pr-3 font-medium text-right">Abertas</th>
                                 <th className="pb-2 pr-3 font-medium text-right">Resolvidas</th>
@@ -329,7 +329,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                                     {row.consultores && row.consultores.length > 0
                                       ? row.consultores.map((c) => c.name).join(', ')
                                       : row.consultor_name || (
-                                          <span className="text-amber-600 dark:text-amber-400">Sem consultor</span>
+                                          <span className="text-amber-600 dark:text-amber-400">Sem captador</span>
                                         )}
                                   </td>
                                   <td className="py-2 pr-3 text-right">{row.conversations_total}</td>
@@ -354,14 +354,14 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
       )}
 
       <div className="rounded-lg border border-gray-200 dark:border-[#404040] bg-gray-50 dark:bg-[#252525] p-4 text-sm text-gray-600 dark:text-gray-400 space-y-2">
-        <p className="font-medium text-gray-800 dark:text-gray-200">Onde configurar instâncias e consultores</p>
+        <p className="font-medium text-gray-800 dark:text-gray-200">Onde configurar instâncias e captadores</p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
             <strong>Gerente:</strong>{' '}
             <Link href="/gerente/atendimento-chat" className="text-[#E86A24] underline">
               Instâncias de atendimento (Evolution)
             </Link>{' '}
-            — criar instância e atribuir consultor ao vínculo.
+            — criar instância e atribuir captador ao vínculo.
           </li>
           {isAdminFull && (
             <li>
@@ -396,14 +396,14 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                   type="date"
                   value={supFrom}
                   onChange={(e) => setSupFrom(e.target.value)}
-                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
                 />
                 <span className="text-gray-500">até</span>
                 <input
                   type="date"
                   value={supTo}
                   onChange={(e) => setSupTo(e.target.value)}
-                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
                 />
                 <button
                   type="button"
@@ -416,7 +416,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                 </button>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Usuários com cargo <strong>Suporte</strong>. &quot;Online&quot; = heartbeat nos últimos 2 minutos.
+                Usuários da equipe de suporte (atendimento). &quot;Online&quot; = heartbeat nos últimos 2 minutos.
                 Contagem pelo histórico de mensagens (quem do suporte respondeu): &quot;Atendimentos&quot; = conversas
                 distintas em que o usuário enviou mensagem no período; &quot;Mensagens&quot; = mensagens enviadas no
                 período; &quot;Em atendimento&quot; = conversas atendidas ainda em aberto e dentro da janela de 24h do
@@ -455,7 +455,7 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                   </div>
                   {support.byUser.length === 0 ? (
                     <p className="text-sm text-gray-500 py-4 text-center">
-                      Nenhum usuário com cargo Suporte encontrado.
+                      Nenhum usuário da equipe de suporte encontrado.
                     </p>
                   ) : (
                     <div className="overflow-x-auto">
@@ -542,14 +542,14 @@ export default function ChatGestaoReportSection({ userId, isAdminFull }: Props) 
                   type="date"
                   value={attFrom}
                   onChange={(e) => setAttFrom(e.target.value)}
-                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
                 />
                 <span className="text-gray-500">até</span>
                 <input
                   type="date"
                   value={attTo}
                   onChange={(e) => setAttTo(e.target.value)}
-                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a]"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none"
                 />
                 <button
                   type="button"

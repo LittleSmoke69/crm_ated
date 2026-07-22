@@ -17,7 +17,7 @@ function normalizeBancaUrl(url: string | null | undefined): string {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'admin']);
     let effectiveManagerId = userId;
 
     if (profile?.status === 'gestor') {

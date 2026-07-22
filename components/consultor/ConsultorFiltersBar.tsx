@@ -205,8 +205,8 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
             {consultoresLoading
               ? 'Carregando...'
               : selectedConsultorId === 'all'
-              ? 'Todos os consultores'
-              : selectedConsultor?.full_name || selectedConsultor?.email || 'Consultor'}
+              ? 'Todos os captadores'
+              : selectedConsultor?.full_name || selectedConsultor?.email || 'Captador'}
             <ChevronDown className={`w-4 h-4 transition-transform ${showConsultor ? 'rotate-180' : ''}`} />
           </button>
           {showConsultor && (
@@ -216,7 +216,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
                   <input
                     type="text"
-                    placeholder="Pesquisar consultor..."
+                    placeholder="Pesquisar captador..."
                     value={consultorSearch}
                     onChange={(e) => setConsultorSearch(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
@@ -237,7 +237,7 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                       : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
                   }`}
                 >
-                  Todos os consultores
+                  Todos os captadores
                 </button>
                 {filteredConsultores.map((c) => (
                   <button
@@ -256,14 +256,14 @@ export default function ConsultorFiltersBar(props: ConsultorFiltersBarProps) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate">{c.full_name || c.email}</span>
                       <span className="text-[10px] uppercase text-gray-500 dark:text-gray-400">
-                        {c.status || 'consultor'}
+                        {c.status || 'captador'}
                       </span>
                     </div>
                   </button>
                 ))}
                 {filteredConsultores.length === 0 && (
                   <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                    Nenhum consultor encontrado
+                    Nenhum captador encontrado
                   </div>
                 )}
               </div>

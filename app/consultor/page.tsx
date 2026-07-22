@@ -34,6 +34,8 @@ import TopPerformersChart from '@/components/Charts/TopPerformersChart';
 import StarsDistributionChart from '@/components/Charts/StarsDistributionChart';
 import ExportCsvMenu from '@/components/consultor/ExportCsvMenu';
 import InvestmentRoundsReadonly from '@/components/Meta/InvestmentRoundsReadonly';
+import { DateRangeFilter, KpiHero } from '@/components/ui';
+import { getDateRange as resolveDateRange, type DateRangeValue } from '@/lib/ui/date-range';
 
 interface ExternalKpis {
   total_leads: number;
@@ -163,22 +165,11 @@ export default function ConsultorPage() {
   const [adsConsultorFilter, setAdsConsultorFilter] = useState<string[]>([]);
   const [showAdsConsultorPicker, setShowAdsConsultorPicker] = useState(false);
 
-  // Filtro de data
-  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
-  const [customStartDate, setCustomStartDate] = useState<string>('');
-  const [customEndDate, setCustomEndDate] = useState<string>('');
-  const [appliedStartDate, setAppliedStartDate] = useState<string>('');
-  const [appliedEndDate, setAppliedEndDate] = useState<string>('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  // Filtro de data — resolvido via lib/ui/date-range
+  const [dateRange, setDateRange] = useState<DateRangeValue>({ preset: 'daily' });
 
   // Lista de ganhadores: banca do topo + período ao lado do título (filtro por last_winner_at)
-  type WinnersPeriod = 'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all';
-  const [winnersPeriod, setWinnersPeriod] = useState<WinnersPeriod>('30days');
-  const [winnersCustomStart, setWinnersCustomStart] = useState<string>('');
-  const [winnersCustomEnd, setWinnersCustomEnd] = useState<string>('');
-  const [winnersAppliedStart, setWinnersAppliedStart] = useState<string>('');
-  const [winnersAppliedEnd, setWinnersAppliedEnd] = useState<string>('');
-  const [showWinnersDatePicker, setShowWinnersDatePicker] = useState(false);
+  const [winnersRange, setWinnersRange] = useState<DateRangeValue>({ preset: '30days' });
   const [winners, setWinners] = useState<Array<{ id: string | number; name: string; phone: string; last_winner_at: string | null; last_winner_value: number; total_ganho: number }>>([]);
   const [winnersLoading, setWinnersLoading] = useState(false);
   const [winnersError, setWinnersError] = useState<string | null>(null);
@@ -195,64 +186,10 @@ export default function ConsultorPage() {
     return `${year}-${month}-${day}`;
   };
 
-  // Calcula as datas baseado no filtro selecionado
+  // Calcula as datas baseado no filtro selecionado — resolvido via lib/ui/date-range
   const getDateRange = () => {
-    // Usa a data atual no fuso horário local
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    let dateFrom: string | null = null;
-    let dateTo: string | null = null;
-    
-    switch (dateFilter) {
-      case 'daily':
-        // Hoje
-        dateFrom = formatDateLocal(today);
-        dateTo = formatDateLocal(today);
-        break;
-      case 'yesterday':
-        // Ontem (hoje - 1 dia)
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        dateFrom = formatDateLocal(yesterday);
-        dateTo = formatDateLocal(yesterday);
-        break;
-      case '7days':
-        // Últimos 7 dias (hoje até 7 dias atrás)
-        const sevenDaysAgo = new Date(today);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); // -6 porque inclui hoje (total 7 dias)
-        dateFrom = formatDateLocal(sevenDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      case '15days':
-        // Últimos 15 dias (hoje até 15 dias atrás)
-        const fifteenDaysAgo = new Date(today);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14); // -14 porque inclui hoje (total 15 dias)
-        dateFrom = formatDateLocal(fifteenDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      case '30days':
-        // Últimos 30 dias (hoje até 30 dias atrás)
-        const thirtyDaysAgo = new Date(today);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29); // -29 porque inclui hoje (total 30 dias)
-        dateFrom = formatDateLocal(thirtyDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      case 'custom':
-        // Personalizado: usa as datas aplicadas pelo usuário
-        if (appliedStartDate && appliedEndDate) {
-          dateFrom = appliedStartDate;
-          dateTo = appliedEndDate;
-        }
-        break;
-      case 'all':
-        // Todo o período: não envia filtro de data
-        dateFrom = null;
-        dateTo = null;
-        break;
-    }
-    
-    return { dateFrom, dateTo };
+    const range = resolveDateRange(dateRange);
+    return { dateFrom: range?.startDate ?? null, dateTo: range?.endDate ?? null };
   };
 
   // Período da lista de ganhadores (filtro por last_winner_at). Datas em America/São Paulo para bater com a API.
@@ -265,7 +202,7 @@ export default function ConsultorPage() {
 
     let dateFrom: string | null = null;
     let dateTo: string | null = null;
-    switch (winnersPeriod) {
+    switch (winnersRange.preset) {
       case 'daily':
         dateFrom = todaySP;
         dateTo = todaySP;
@@ -301,9 +238,9 @@ export default function ConsultorPage() {
         break;
       }
       case 'custom':
-        if (winnersAppliedStart && winnersAppliedEnd) {
-          dateFrom = winnersAppliedStart;
-          dateTo = winnersAppliedEnd;
+        if (winnersRange.startDate && winnersRange.endDate) {
+          dateFrom = winnersRange.startDate;
+          dateTo = winnersRange.endDate;
         }
         break;
       case 'all':
@@ -317,8 +254,6 @@ export default function ConsultorPage() {
     'super_admin',
     'admin',
     'gerente',
-    'gestor',
-    'dono_banca',
   ].includes(userStatus || '');
 
   useEffect(() => {
@@ -381,17 +316,15 @@ export default function ConsultorPage() {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.date-filter-container')) setShowDatePicker(false);
       if (!target.closest('.banca-filter-container')) setShowBancaFilter(false);
-      if (!target.closest('.winners-date-filter-container')) setShowWinnersDatePicker(false);
       if (!target.closest('.consultor-desempenho-filter-container')) { setShowConsultorDesempenhoFilter(false); setConsultorDesempenhoSearchTerm(''); }
       if (!target.closest('.ads-consultor-picker-container')) setShowAdsConsultorPicker(false);
     };
-    if (showDatePicker || showBancaFilter || showWinnersDatePicker || showConsultorDesempenhoFilter || showAdsConsultorPicker) {
+    if (showBancaFilter || showConsultorDesempenhoFilter || showAdsConsultorPicker) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showBancaFilter, showWinnersDatePicker, showConsultorDesempenhoFilter, showAdsConsultorPicker]);
+  }, [showBancaFilter, showConsultorDesempenhoFilter, showAdsConsultorPicker]);
 
   useEffect(() => {
     if (!selectedBanca || !userId) { setAdsConsultors([]); setAdsConsultorFilter([]); return; }
@@ -573,7 +506,7 @@ export default function ConsultorPage() {
           .filter((c) => Boolean(c.id) && Boolean(c.email))
           .filter((c) => adsFilterSet.size === 0 || adsFilterSet.has(c.id));
         const totalByStatus = scope.reduce((acc, item) => {
-          const key = String(item.status || 'consultor').toLowerCase();
+          const key = String(item.status || 'captador').toLowerCase();
           acc[key] = (acc[key] || 0) + 1;
           return acc;
         }, {} as Record<string, number>);
@@ -599,7 +532,7 @@ export default function ConsultorPage() {
         for (let i = 0; i < scope.length; i++) {
           if (controller.signal.aborted) return;
           const item = scope[i];
-          const statusKey = String(item.status || 'consultor').toLowerCase();
+          const statusKey = String(item.status || 'captador').toLowerCase();
           setDashboardProgress({
             mode: 'progressive',
             processed: i,
@@ -727,7 +660,7 @@ export default function ConsultorPage() {
     if (canFilterConsultorDesempenho && selectedConsultorId === 'all' && consultoresDaBanca.length === 0) return;
     loadDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, appliedStartDate, appliedEndDate, selectedBanca, selectedConsultorId, canFilterConsultorDesempenho, consultoresDaBanca.length, adsConsultorFilter.join(',')]);
+  }, [dateRange.preset, dateRange.startDate, dateRange.endDate, selectedBanca, selectedConsultorId, canFilterConsultorDesempenho, consultoresDaBanca.length, adsConsultorFilter.join(',')]);
 
   // Carrega lista de ganhadores quando banca, período ou consultor (admin) mudar
   useEffect(() => {
@@ -737,7 +670,7 @@ export default function ConsultorPage() {
     }
     loadWinners();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBanca, winnersPeriod, winnersAppliedStart, winnersAppliedEnd, canFilterConsultorDesempenho ? selectedConsultorId : null]);
+  }, [selectedBanca, winnersRange.preset, winnersRange.startDate, winnersRange.endDate, canFilterConsultorDesempenho ? selectedConsultorId : null]);
 
   useEffect(() => {
     return () => {
@@ -789,52 +722,9 @@ export default function ConsultorPage() {
       return `${d}/${m}/${y}`;
     };
 
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    let dateFrom: string | null = null;
-    let dateTo: string | null = null;
-    switch (winnersPeriod) {
-      case 'daily':
-        dateFrom = formatDateLocal(today);
-        dateTo = formatDateLocal(today);
-        break;
-      case 'yesterday': {
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        dateFrom = formatDateLocal(yesterday);
-        dateTo = formatDateLocal(yesterday);
-        break;
-      }
-      case '7days': {
-        const sevenDaysAgo = new Date(today);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        dateFrom = formatDateLocal(sevenDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      }
-      case '15days': {
-        const fifteenDaysAgo = new Date(today);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14);
-        dateFrom = formatDateLocal(fifteenDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      }
-      case '30days': {
-        const thirtyDaysAgo = new Date(today);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-        dateFrom = formatDateLocal(thirtyDaysAgo);
-        dateTo = formatDateLocal(today);
-        break;
-      }
-      case 'custom':
-        if (winnersAppliedStart && winnersAppliedEnd) {
-          dateFrom = winnersAppliedStart;
-          dateTo = winnersAppliedEnd;
-        }
-        break;
-      default:
-        break;
-    }
+    const winnersResolvedRange = resolveDateRange(winnersRange);
+    const dateFrom: string | null = winnersResolvedRange?.startDate ?? null;
+    const dateTo: string | null = winnersResolvedRange?.endDate ?? null;
 
     const dataPeriodoEscolhido =
       dateFrom && dateTo
@@ -887,12 +777,12 @@ export default function ConsultorPage() {
   const totalApostasBody = parsePtBrValue(betsDepositsData?.totals?.total_apostas);
   const totalDepositosBody = parsePtBrValue(betsDepositsData?.totals?.total_depositos);
   const totalComissaoBody = parsePtBrValue(betsDepositsData?.totals?.total_comissao);
-  const statusOrder = ['consultor', 'gerente', 'admin', 'gestor'];
+  const statusOrder = ['captador', 'gerente', 'admin', 'super_admin'];
   const statusLabel: Record<string, string> = {
-    consultor: 'consultor(es)',
+    captador: 'captador(es)',
     gerente: 'gerente(s)',
     admin: 'admin(s)',
-    gestor: 'gestor(es)',
+    super_admin: 'super admin(s)',
   };
   const progressTotalByStatus = dashboardProgress?.totalByStatus || {};
   const progressProcessedByStatus = dashboardProgress?.processedByStatus || {};
@@ -1004,10 +894,10 @@ export default function ConsultorPage() {
                   {consultoresLoading
                     ? 'Carregando...'
                     : selectedConsultorId === 'all'
-                      ? 'Todos os consultores'
+                      ? 'Todos os captadores'
                       : (consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.full_name ||
                         consultoresDaBanca.find((c) => c.id === selectedConsultorId)?.email ||
-                        'Consultor')}
+                        'Captador')}
                   <ChevronDown className="w-4 h-4" />
                 </button>
                 {showConsultorDesempenhoFilter && (
@@ -1017,7 +907,7 @@ export default function ConsultorPage() {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
                         <input
                           type="text"
-                          placeholder="Pesquisar consultor..."
+                          placeholder="Pesquisar captador..."
                           value={consultorDesempenhoSearchTerm}
                           onChange={(e) => setConsultorDesempenhoSearchTerm(e.target.value)}
                           className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
@@ -1057,14 +947,14 @@ export default function ConsultorPage() {
                             <div className="flex items-center justify-between gap-2">
                               <span className="truncate">{c.full_name || c.email}</span>
                               <span className="text-[10px] uppercase text-gray-500 dark:text-gray-400">
-                                {c.status || 'consultor'}
+                                {c.status || 'captador'}
                               </span>
                             </div>
                           </button>
                         ))}
                       {consultoresDaBanca.filter(c => (c.full_name || c.email || '').toLowerCase().includes(consultorDesempenhoSearchTerm.toLowerCase())).length === 0 && (
                         <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                          Nenhum consultor encontrado
+                          Nenhum captador encontrado
                         </div>
                       )}
                     </div>
@@ -1074,92 +964,7 @@ export default function ConsultorPage() {
             )}
 
             {/* Filtro de Data */}
-            <div className="relative date-filter-container">
-              <button
-                onClick={() => setShowDatePicker(!showDatePicker)}
-                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#333] transition-all shadow-sm"
-              >
-                <Calendar className="w-4 h-4 text-[#E86A24]" />
-                {dateFilter === 'daily' && 'Diário'}
-                {dateFilter === 'yesterday' && 'Ontem'}
-                {dateFilter === '7days' && 'Últimos 7 dias'}
-                {dateFilter === '15days' && 'Últimos 15 dias'}
-                {dateFilter === '30days' && 'Últimos 30 dias'}
-                {dateFilter === 'custom' && 'Personalizado'}
-                {dateFilter === 'all' && 'Todo o Período'}
-                <ChevronDown className="w-4 h-4" />
-              </button>
-              
-              {showDatePicker && (
-                <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 min-w-[200px]">
-                  <div className="p-2">
-                    {['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'].map((filter) => (
-                      <button
-                        key={filter}
-                        onClick={() => {
-                          if (filter !== 'custom') {
-                            setDateFilter(filter as any);
-                            setShowDatePicker(false);
-                          } else {
-                            setDateFilter('custom');
-                          }
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === filter ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
-                        }`}
-                      >
-                        {filter === 'daily' && 'Diário'}
-                        {filter === 'yesterday' && 'Ontem'}
-                        {filter === '7days' && 'Últimos 7 dias'}
-                        {filter === '15days' && 'Últimos 15 dias'}
-                        {filter === '30days' && 'Últimos 30 dias'}
-                        {filter === 'custom' && 'Personalizado'}
-                        {filter === 'all' && 'Todo o Período'}
-                      </button>
-                    ))}
-                    
-                    {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 dark:border-[#404040] space-y-3 mt-2">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Inicial</label>
-                          <input
-                            type="date"
-                            value={customStartDate}
-                            onChange={(e) => setCustomStartDate(e.target.value)}
-                            max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Final</label>
-                          <input
-                            type="date"
-                            value={customEndDate}
-                            onChange={(e) => setCustomEndDate(e.target.value)}
-                            min={customStartDate}
-                            max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (customStartDate && customEndDate) {
-                              setAppliedStartDate(customStartDate);
-                              setAppliedEndDate(customEndDate);
-                              setShowDatePicker(false);
-                            }
-                          }}
-                          disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                        >
-                          Aplicar
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <DateRangeFilter value={dateRange} onChange={setDateRange} />
 
             <ExportCsvMenu
               disabled={dataLoading}
@@ -1169,13 +974,13 @@ export default function ConsultorPage() {
                   : null
               }
               bancaUrl={selectedBanca}
-              dateFrom={appliedStartDate || null}
-              dateTo={appliedEndDate || null}
+              dateFrom={dateRange.startDate || null}
+              dateTo={dateRange.endDate || null}
               scope={(() => {
                 if (selectedConsultorId && selectedConsultorId !== 'all') {
                   const sel = consultoresDaBanca.find((c) => c.id === selectedConsultorId);
                   return sel
-                    ? `Perfil selecionado: ${sel.full_name || sel.email} (${sel.status || 'consultor'})`
+                    ? `Perfil selecionado: ${sel.full_name || sel.email} (${sel.status || 'captador'})`
                     : 'Perfil selecionado';
                 }
                 const consultants = data?.betsDepositsData?.consultant_scope?.consultants || [];
@@ -1222,20 +1027,23 @@ export default function ConsultorPage() {
           {(() => {
             if (dataLoading) {
               return (
-                <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 text-white min-h-[280px]">
-                  <div className="flex items-center justify-between gap-3 mb-6">
-                    <div className="flex items-center gap-2">
+                <KpiHero
+                  title={
+                    <span className="flex items-center gap-2">
                       <TrendingUp className="w-6 h-6 text-white" />
-                      <h2 className="text-xl font-bold">Resumo de Resultado de Novos Cadastro</h2>
-                    </div>
-                    <span className="text-xs font-bold bg-white/20 rounded-full px-3 py-1">Carregando dados...</span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-4">
-                    {Array.from({ length: 8 }).map((_, idx) => (
-                      <div key={`summary-skeleton-${idx}`} className="bg-white/15 p-4 rounded-xl border border-white/20 animate-pulse h-20" />
-                    ))}
-                  </div>
-                </div>
+                      Resumo de Resultado de Novos Cadastro
+                    </span>
+                  }
+                  actions={
+                    <span className="text-xs font-bold text-white bg-white/20 rounded-full px-3 py-1">
+                      Carregando dados...
+                    </span>
+                  }
+                  columns={4}
+                  loading
+                  items={[]}
+                  className="min-h-[280px]"
+                />
               );
             }
 
@@ -1250,78 +1058,54 @@ export default function ConsultorPage() {
             
             if (externalKpis) {
               return (
-                <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40 text-white">
-                  <div className="flex items-center gap-2 mb-6">
-                    <TrendingUp className="w-6 h-6 text-white" />
-                    <h2 className="text-xl font-bold">Resumo de Resultado de Novos Cadastro</h2>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-4">
-                    {/* 1. Total Leads */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Users className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Total Leads</p>
-                      </div>
-                      <p className="text-2xl font-bold">{externalKpis.total_leads || 0}</p>
-                    </div>
-                    
-                    {/* 2. Clientes Ativos */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <CheckCircle2 className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Clientes Ativos</p>
-                      </div>
-                      <p className="text-2xl font-bold">{externalKpis.active_leads || 0}</p>
-                    </div>
-                    
-                    {/* 3. Leads Inativos */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <AlertCircle className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Leads Inativos</p>
-                      </div>
-                      <p className="text-2xl font-bold">{(externalKpis.total_leads || 0) - (externalKpis.active_leads || 0)}</p>
-                    </div>
-                    
-                    {/* 4. Taxa de Conversão */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <p className="text-[10px] font-bold text-white/80 uppercase mb-1">Taxa de Conversão</p>
-                      <p className="text-2xl font-bold">{externalKpis.conversion_rate.toFixed(2)}%</p>
-                    </div>
-                    
-                    {/* 5. Clientes Afiliados */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <p className="text-[10px] font-bold text-white/80 uppercase mb-1">Clientes Afiliados</p>
-                      <p className="text-2xl font-bold">{chartData?.clientes_afiliados || 0}</p>
-                    </div>
-                    
-                    {/* 6. Total Depositado */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <p className="text-[10px] font-bold text-white/80 uppercase mb-1">Total Depositado</p>
-                      <p className="text-2xl font-bold">R$ {externalKpis.total_deposited.toLocaleString('pt-BR')}</p>
-                    </div>
-                    
-                    {/* 7. Total Premiado */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Award className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Total Premiado</p>
-                      </div>
-                      <p className="text-2xl font-bold">R$ {externalKpis.total_prizes.toLocaleString('pt-BR')}</p>
-                    </div>
-                    
-                    {/* 8. Clientes Premiados */}
-                    <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Award className="w-4 h-4 text-white/80" />
-                        <p className="text-[10px] font-bold text-white/80 uppercase">Clientes Premiados</p>
-                      </div>
-                      <p className="text-2xl font-bold">{externalKpis.clientes_premiados || 0}</p>
-                    </div>
-
-                  </div>
-                </div>
+                <KpiHero
+                  title={
+                    <span className="flex items-center gap-2">
+                      <TrendingUp className="w-6 h-6 text-white" />
+                      Resumo de Resultado de Novos Cadastro
+                    </span>
+                  }
+                  columns={4}
+                  items={[
+                    {
+                      icon: <Users className="w-4 h-4" />,
+                      label: 'Total Leads',
+                      value: externalKpis.total_leads || 0,
+                    },
+                    {
+                      icon: <CheckCircle2 className="w-4 h-4" />,
+                      label: 'Clientes Ativos',
+                      value: externalKpis.active_leads || 0,
+                    },
+                    {
+                      icon: <AlertCircle className="w-4 h-4" />,
+                      label: 'Leads Inativos',
+                      value: (externalKpis.total_leads || 0) - (externalKpis.active_leads || 0),
+                    },
+                    {
+                      label: 'Taxa de Conversão',
+                      value: `${externalKpis.conversion_rate.toFixed(2)}%`,
+                    },
+                    {
+                      label: 'Clientes Afiliados',
+                      value: chartData?.clientes_afiliados || 0,
+                    },
+                    {
+                      label: 'Total Depositado',
+                      value: `R$ ${externalKpis.total_deposited.toLocaleString('pt-BR')}`,
+                    },
+                    {
+                      icon: <Award className="w-4 h-4" />,
+                      label: 'Total Premiado',
+                      value: `R$ ${externalKpis.total_prizes.toLocaleString('pt-BR')}`,
+                    },
+                    {
+                      icon: <Award className="w-4 h-4" />,
+                      label: 'Clientes Premiados',
+                      value: externalKpis.clientes_premiados || 0,
+                    },
+                  ]}
+                />
               );
             }
             
@@ -1501,7 +1285,7 @@ export default function ConsultorPage() {
             </h2>
             {betsDepositsData?.consultant_scope && (
               <span className="text-xs text-gray-500 dark:text-gray-400">
-                Escopo: {betsDepositsData.consultant_scope.type === 'multi' ? 'Todos os consultores' : 'Consultor selecionado'} ({betsDepositsData.consultant_scope.count})
+                Escopo: {betsDepositsData.consultant_scope.type === 'multi' ? 'Todos os captadores' : 'Captador selecionado'} ({betsDepositsData.consultant_scope.count})
               </span>
             )}
           </div>
@@ -1605,12 +1389,12 @@ export default function ConsultorPage() {
                           onClick={() => setShowAdsConsultorPicker((v) => !v)}
                           className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${adsConsultorFilter.length > 0 ? 'bg-indigo-100 dark:bg-indigo-900/50 border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300' : 'border-gray-300 dark:border-[#404040] text-gray-500 dark:text-gray-400 hover:border-indigo-400 hover:text-indigo-600'}`}
                         >
-                          {adsConsultorFilter.length > 0 ? `${adsConsultorFilter.length} consultores` : 'Filtrar consultores'}
+                          {adsConsultorFilter.length > 0 ? `${adsConsultorFilter.length} captadores` : 'Filtrar captadores'}
                         </button>
                         {showAdsConsultorPicker && (
                           <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] shadow-lg p-1.5 space-y-0.5">
                             <div className="flex items-center justify-between px-1 pb-1 border-b border-gray-100 dark:border-[#3a3a3a]">
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Consultores com Ads</span>
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400 font-medium">Captadores com Ads</span>
                               {adsConsultorFilter.length > 0 && (
                                 <button type="button" onClick={() => setAdsConsultorFilter([])} className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline">Limpar</button>
                               )}
@@ -1674,7 +1458,7 @@ export default function ConsultorPage() {
                         <th className="px-4 py-2">Tipo</th>
                         <th className="px-4 py-2">Carteira</th>
                         <th className="px-4 py-2">Valor</th>
-                        <th className="px-4 py-2">Consultor</th>
+                        <th className="px-4 py-2">Captador</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1769,93 +1553,7 @@ export default function ConsultorPage() {
             </h2>
             {selectedBanca && (
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="relative winners-date-filter-container">
-                  <button
-                    type="button"
-                    onClick={() => setShowWinnersDatePicker(!showWinnersDatePicker)}
-                    className="flex items-center gap-2 bg-gray-100 dark:bg-[#333] hover:bg-gray-200 dark:hover:bg-[#3a3a3a] border border-gray-200 dark:border-[#404040] px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 transition-all"
-                  >
-                    <Calendar className="w-4 h-4 text-[#E86A24]" />
-                    {winnersPeriod === 'daily' && 'Diário'}
-                    {winnersPeriod === 'yesterday' && 'Ontem'}
-                    {winnersPeriod === '7days' && 'Últimos 7 dias'}
-                    {winnersPeriod === '15days' && 'Últimos 15 dias'}
-                    {winnersPeriod === '30days' && 'Últimos 30 dias'}
-                    {winnersPeriod === 'custom' && (winnersAppliedStart && winnersAppliedEnd ? `${winnersAppliedStart} a ${winnersAppliedEnd}` : 'Personalizado')}
-                    {winnersPeriod === 'all' && 'Todo o período'}
-                    <ChevronDown className={`w-4 h-4 ${showWinnersDatePicker ? 'rotate-180' : ''}`} />
-                  </button>
-                  {showWinnersDatePicker && (
-                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl shadow-lg z-50 min-w-[200px]">
-                    <div className="p-2">
-                      {(['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'] as const).map((filter) => (
-                        <button
-                          key={filter}
-                          type="button"
-                          onClick={() => {
-                            if (filter !== 'custom') {
-                              setWinnersPeriod(filter);
-                              setShowWinnersDatePicker(false);
-                            } else {
-                              setWinnersPeriod('custom');
-                            }
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                            winnersPeriod === filter ? 'bg-[#E86A2415] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#333]'
-                          }`}
-                        >
-                          {filter === 'daily' && 'Diário'}
-                          {filter === 'yesterday' && 'Ontem'}
-                          {filter === '7days' && 'Últimos 7 dias'}
-                          {filter === '15days' && 'Últimos 15 dias'}
-                          {filter === '30days' && 'Últimos 30 dias'}
-                          {filter === 'custom' && 'Personalizado'}
-                          {filter === 'all' && 'Todo o período'}
-                        </button>
-                      ))}
-                      {winnersPeriod === 'custom' && (
-                        <div className="p-3 border-t border-gray-200 dark:border-[#404040] space-y-3 mt-2">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data inicial</label>
-                            <input
-                              type="date"
-                              value={winnersCustomStart}
-                              onChange={(e) => setWinnersCustomStart(e.target.value)}
-                              max={winnersCustomEnd || new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data final</label>
-                            <input
-                              type="date"
-                              value={winnersCustomEnd}
-                              onChange={(e) => setWinnersCustomEnd(e.target.value)}
-                              min={winnersCustomStart}
-                              max={new Date().toISOString().split('T')[0]}
-                              className="w-full px-3 py-2 border border-gray-200 dark:border-[#404040] dark:bg-[#333] dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (winnersCustomStart && winnersCustomEnd) {
-                                setWinnersAppliedStart(winnersCustomStart);
-                                setWinnersAppliedEnd(winnersCustomEnd);
-                                setShowWinnersDatePicker(false);
-                              }
-                            }}
-                            disabled={!winnersCustomStart || !winnersCustomEnd}
-                            className="w-full bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                          >
-                            Aplicar
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  )}
-                </div>
+                <DateRangeFilter value={winnersRange} onChange={setWinnersRange} />
                 <button
                   type="button"
                   onClick={handleGerarListaWhatsApp}

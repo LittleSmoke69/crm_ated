@@ -23,7 +23,7 @@ function normalizeCrmBancaId(raw: unknown): string | null {
 
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'dono_banca', 'super_admin', 'admin']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'super_admin', 'admin']);
 
     let listQuery = supabaseServiceRole
       .from('atendimento_chat_assignments')

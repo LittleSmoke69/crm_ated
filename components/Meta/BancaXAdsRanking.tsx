@@ -12,6 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { withTenantSlug } from '@/lib/utils/tenant-href';
 import {
   Trophy,
   DollarSign,
@@ -451,7 +452,7 @@ export default function BancaXAdsRanking({
             type="button"
             onClick={() => load(queryFrom, queryTo)}
             disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] hover:bg-[#7AC444] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl font-medium text-sm transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {loading ? 'Atualizando…' : 'Atualizar'}
@@ -589,7 +590,7 @@ export default function BancaXAdsRanking({
                         type="button"
                         onClick={() => toggleExpanded(r.banca_id)}
                         className="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        title={isExpanded ? 'Recolher consultores' : 'Ver consultores e grupos (Gestão de Tráfego)'}
+                        title={isExpanded ? 'Recolher captadores' : 'Ver captadores e grupos (Gestão de Tráfego)'}
                         aria-expanded={isExpanded}
                       >
                         {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -608,7 +609,7 @@ export default function BancaXAdsRanking({
                       <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1 flex-wrap">
                         <Users className="w-3 h-3 shrink-0" />
                         <span>
-                          {gestor!.consultores_count} consultor{gestor!.consultores_count === 1 ? '' : 'es'} · Dep.{' '}
+                          {gestor!.consultores_count} captador{gestor!.consultores_count === 1 ? '' : 'es'} · Dep.{' '}
                           {formatBRL(gestor!.total_deposited_via_gestor)}
                         </span>
                         {(gestor!.total_daily_spend_estimate ?? 0) > 0 && (
@@ -669,10 +670,10 @@ export default function BancaXAdsRanking({
                     <td colSpan={10} className="px-4 py-4">
                       <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
                         <a
-                          href={`/gestor-trafego?banca_id=${encodeURIComponent(r.banca_id)}`}
+                          href={withTenantSlug(`/gestor-trafego?banca_id=${encodeURIComponent(r.banca_id)}`)}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-[17px] font-medium text-emerald-700 dark:text-emerald-300 hover:underline"
+                          className="inline-flex items-center gap-1.5 text-base font-medium text-emerald-700 dark:text-emerald-300 hover:underline"
                         >
                           <ExternalLink className="w-5 h-5" />
                           Abrir na Gestão de Tráfego
@@ -686,14 +687,14 @@ export default function BancaXAdsRanking({
                           >
                             <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                               <div className="min-w-0">
-                                <p className="text-[19px] font-semibold text-gray-900 dark:text-gray-100 truncate">
+                                <p className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
                                   Campanha Meta Ads: {campaign.campaign_name || campaign.campaign_id}
                                 </p>
-                                <p className="text-[14px] text-gray-500 dark:text-gray-400 font-mono truncate">
+                                <p className="text-sm text-gray-500 dark:text-gray-400 font-mono truncate">
                                   {campaign.campaign_id}
                                 </p>
                               </div>
-                              <div className="text-right text-[17px] shrink-0">
+                              <div className="text-right text-base shrink-0">
                                 <p className="text-gray-500 dark:text-gray-400">Gasto · Dep. · Est. diário</p>
                                 <p className="font-semibold text-gray-800 dark:text-gray-100 tabular-nums">
                                   {formatBRL(campaign.spend, 2)} · {formatBRL(campaign.consultor_total_deposited)}
@@ -710,7 +711,7 @@ export default function BancaXAdsRanking({
                                 return (
                                   <>
                                     {sharedGroupsCount > 1 ? (
-                                      <p className="text-[16px] text-emerald-700 dark:text-emerald-300 font-medium mb-1">
+                                      <p className="text-base text-emerald-700 dark:text-emerald-300 font-medium mb-1">
                                         {sharedGroupsCount} grupos compartilhados nesta campanha
                                       </p>
                                     ) : null}
@@ -720,17 +721,17 @@ export default function BancaXAdsRanking({
                                   className="rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-800/50 p-2.5"
                                 >
                                   {group.whatsapp_group_name ? (
-                                    <p className="text-[16px] font-semibold text-gray-700 dark:text-gray-200 uppercase tracking-wide">
+                                    <p className="text-base font-semibold text-gray-700 dark:text-gray-200 uppercase tracking-wide">
                                       Grupo: {group.whatsapp_group_name}
                                       {group.consultors.length > 1 ? (
                                         <span className="ml-1 normal-case font-medium text-emerald-700 dark:text-emerald-300">
-                                          · {group.consultors.length} consultores no mesmo grupo
+                                          · {group.consultors.length} captadores no mesmo grupo
                                         </span>
                                       ) : null}
                                     </p>
                                   ) : (
-                                    <p className="text-[16px] font-semibold text-amber-600 dark:text-amber-400 italic">
-                                      Consultores sem grupo WhatsApp
+                                    <p className="text-base font-semibold text-amber-600 dark:text-amber-400 italic">
+                                      Captadores sem grupo WhatsApp
                                     </p>
                                   )}
                                   {group.whatsapp_group_invite_url ? (
@@ -738,7 +739,7 @@ export default function BancaXAdsRanking({
                                       href={group.whatsapp_group_invite_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="text-[16px] text-blue-600 dark:text-blue-400 hover:underline truncate block mt-0.5"
+                                      className="text-base text-blue-600 dark:text-blue-400 hover:underline truncate block mt-0.5"
                                     >
                                       {group.whatsapp_group_invite_url}
                                     </a>
@@ -747,7 +748,7 @@ export default function BancaXAdsRanking({
                                     {group.consultors.map((consultor) => (
                                       <div
                                         key={consultor.id}
-                                        className="inline-flex items-start gap-1.5 px-2 py-1.5 rounded-lg text-[16px] font-medium bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-100"
+                                        className="inline-flex items-start gap-1.5 px-2 py-1.5 rounded-lg text-base font-medium bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-100"
                                         title={consultor.email}
                                       >
                                         <div className="min-w-0">
@@ -759,7 +760,7 @@ export default function BancaXAdsRanking({
                                               {formatBRL(consultor.total_deposited)}
                                             </span>
                                           </div>
-                                          <p className="text-[14px] font-normal text-gray-500 dark:text-gray-400 mt-0.5">
+                                          <p className="text-sm font-normal text-gray-500 dark:text-gray-400 mt-0.5">
                                             Gerente:{' '}
                                             {consultor.gerente_name ? (
                                               <span className="text-gray-700 dark:text-gray-300">
@@ -770,13 +771,13 @@ export default function BancaXAdsRanking({
                                             )}
                                           </p>
                                           {(consultor.daily_spend_estimate ?? 0) > 0 && (
-                                            <p className="text-[14px] font-normal text-amber-600 dark:text-amber-400 mt-0.5 tabular-nums">
+                                            <p className="text-sm font-normal text-amber-600 dark:text-amber-400 mt-0.5 tabular-nums">
                                               Est. diário: {formatBRL(consultor.daily_spend_estimate ?? 0)}
                                             </p>
                                           )}
                                         </div>
                                         <a
-                                          href={`/crm/kanban?userId=${encodeURIComponent(consultor.id)}`}
+                                          href={withTenantSlug(`/crm/kanban?userId=${encodeURIComponent(consultor.id)}`)}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           className="inline-flex items-center justify-center shrink-0 p-1 rounded-md text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 border border-purple-200/80 dark:border-purple-800/60 transition-colors"
@@ -788,7 +789,7 @@ export default function BancaXAdsRanking({
                                     ))}
                                   </div>
                                   {(group.consultors.length > 1 || (group.total_daily_spend_estimate ?? 0) > 0) && (
-                                    <p className="text-[16px] text-gray-500 dark:text-gray-400 mt-2 tabular-nums">
+                                    <p className="text-base text-gray-500 dark:text-gray-400 mt-2 tabular-nums">
                                       {group.consultors.length > 1 && (
                                         <span>Total do grupo: {formatBRL(group.total_deposited)}</span>
                                       )}

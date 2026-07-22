@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Valida hierarquia técnica (Consultor abaixo de Gerente)
-    const validation = await validateHierarchy('', 'consultor', managerId);
+    const validation = await validateHierarchy('', 'captador', managerId);
     if (!validation.valid) {
       return errorResponse(validation.error || 'Hierarquia inválida', 400);
     }
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
         email: email.trim().toLowerCase(),
         full_name: fullName || null,
         password_hash: passwordHash,
-        status: 'consultor',
+        status: 'captador',
         enroller: managerId,
         created_at: new Date().toISOString(),
       })

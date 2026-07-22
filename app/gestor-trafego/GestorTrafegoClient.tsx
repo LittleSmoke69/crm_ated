@@ -41,6 +41,8 @@ import {
   Unlock
 } from 'lucide-react';
 import Layout from '@/components/Layout';
+import DateRangeFilter from '@/components/ui/DateRangeFilter';
+import { DateRangeValue, getDateRange as getPresetDateRange } from '@/lib/ui/date-range';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { buildGestorEffectiveHeaders } from '@/lib/utils/gestor-effective-headers';
 import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
@@ -657,11 +659,8 @@ export default function GestorTrafegoClient({
   
   // Filtro de data
   const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
-  const [customStartDate, setCustomStartDate] = useState<string>('');
-  const [customEndDate, setCustomEndDate] = useState<string>('');
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
   const [appliedEndDate, setAppliedEndDate] = useState<string>('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -763,60 +762,21 @@ export default function GestorTrafegoClient({
     return `${y}-${m}-${day}`;
   };
 
-  // Calcula as datas baseado no filtro selecionado
-  const getDateRange = () => {
-    const now = new Date();
-    const todayStr = toLocalDateString(now);
-
-    let dateFrom: string | null = null;
-    let dateTo: string | null = null;
-
-    switch (dateFilter) {
-      case 'daily':
-        // Hoje (data local)
-        dateFrom = todayStr;
-        dateTo = todayStr;
-        break;
-      case 'yesterday':
-        // Ontem (data local)
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = toLocalDateString(yesterday);
-        dateFrom = yesterdayStr;
-        dateTo = yesterdayStr;
-        break;
-      case '7days':
-        const sevenDaysAgo = new Date(now);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        dateFrom = toLocalDateString(sevenDaysAgo);
-        dateTo = todayStr;
-        break;
-      case '15days':
-        const fifteenDaysAgo = new Date(now);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14);
-        dateFrom = toLocalDateString(fifteenDaysAgo);
-        dateTo = todayStr;
-        break;
-      case '30days':
-        const thirtyDaysAgo = new Date(now);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-        dateFrom = toLocalDateString(thirtyDaysAgo);
-        dateTo = todayStr;
-        break;
-      case 'custom':
-        if (appliedStartDate && appliedEndDate) {
-          dateFrom = appliedStartDate;
-          dateTo = appliedEndDate;
+  // Estado do filtro mapeado para o valor do DateRangeFilter do kit
+  const dateRangeValue: DateRangeValue =
+    dateFilter === 'custom'
+      ? {
+          preset: 'custom',
+          ...(appliedStartDate && appliedEndDate
+            ? { startDate: appliedStartDate, endDate: appliedEndDate }
+            : {}),
         }
-        break;
-      case 'all':
-        // Não envia parâmetros de data
-        dateFrom = null;
-        dateTo = null;
-        break;
-    }
-    
-    return { dateFrom, dateTo };
+      : { preset: dateFilter };
+
+  // Calcula as datas baseado no filtro selecionado (delegado à lib de presets)
+  const getDateRange = () => {
+    const range = getPresetDateRange(dateRangeValue);
+    return { dateFrom: range?.startDate ?? null, dateTo: range?.endDate ?? null };
   };
 
   /** Rótulo do período para exibir nos dados da Meta e no funil (ex: "Hoje (08/02/2026)", "08/02 a 14/02/2026"). */
@@ -1751,21 +1711,6 @@ export default function GestorTrafegoClient({
     }
   };
 
-  // Fecha o seletor de data ao clicar fora
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('.date-filter-container')) {
-        setShowDatePicker(false);
-      }
-    };
-    
-    if (showDatePicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showDatePicker]);
-
   useEffect(() => {
     // Preserva seleção em andamento no modal (permite marcar vários antes de salvar).
     if (consultorModalOpen) return;
@@ -1890,7 +1835,7 @@ export default function GestorTrafegoClient({
             </h2>
             
             {/* Período + dropdown de banca (mesmo estilo) */}
-            <div className="flex flex-wrap items-center gap-2 date-filter-container">
+            <div className="flex flex-wrap items-center gap-2">
               {showBancaDropdown && (
                 <div className="relative order-1">
                   {loadingDonos ? (
@@ -1929,7 +1874,7 @@ export default function GestorTrafegoClient({
                         }}
                         disabled={bancasGestor.length === 0}
                         aria-label="Selecionar banca"
-                        className="appearance-none flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 pl-10 pr-10 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[160px] max-w-[220px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed truncate"
+                        className="appearance-none flex items-center gap-2 min-h-[44px] bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 pl-10 pr-10 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm min-w-[160px] max-w-[220px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed truncate"
                       >
                         {bancasGestor.length === 0 ? (
                           <option value="">Nenhuma banca</option>
@@ -1951,162 +1896,20 @@ export default function GestorTrafegoClient({
                 </div>
               )}
 
-              <div className={`relative ${showBancaDropdown ? 'order-2' : 'order-1'}`}>
-                <button
-                  type="button"
-                  onClick={() => setShowDatePicker(!showDatePicker)}
-                  className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                >
-                  <Calendar className="w-4 h-4 text-[#E86A24]" />
-                  <span>
-                    {dateFilter === 'daily' && 'Hoje'}
-                    {dateFilter === 'yesterday' && 'Ontem'}
-                    {dateFilter === '7days' && 'Últimos 7 dias'}
-                    {dateFilter === '15days' && 'Últimos 15 dias'}
-                    {dateFilter === '30days' && 'Últimos 30 dias'}
-                    {dateFilter === 'custom' && 'Personalizado'}
-                    {dateFilter === 'all' && 'Todo o Período'}
-                  </span>
-                  <ChevronDown className="w-4 h-4" />
-                </button>
-                
-                {showDatePicker && (
-                  <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
-                    <div className="p-2">
-                      <button
-                        onClick={() => {
-                          setDateFilter('daily');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'daily' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Hoje
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('yesterday');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'yesterday' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Ontem
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('7days');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '7days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Últimos 7 dias
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('15days');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '15days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Últimos 15 dias
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('30days');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === '30days' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Últimos 30 dias
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('custom');
-                          // Restaura as datas aplicadas nos campos de input se existirem
-                          if (appliedStartDate) setCustomStartDate(appliedStartDate);
-                          if (appliedEndDate) setCustomEndDate(appliedEndDate);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'custom' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Personalizado
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDateFilter('all');
-                          setAppliedStartDate('');
-                          setAppliedEndDate('');
-                          setShowDatePicker(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          dateFilter === 'all' ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                        }`}
-                      >
-                        Todo o Período
-                      </button>
-                    </div>
-                    
-                    {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Inicial</label>
-                          <input
-                            type="date"
-                            value={customStartDate}
-                            onChange={(e) => setCustomStartDate(e.target.value)}
-                            max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Data Final</label>
-                          <input
-                            type="date"
-                            value={customEndDate}
-                            onChange={(e) => setCustomEndDate(e.target.value)}
-                            min={customStartDate}
-                            max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (customStartDate && customEndDate) {
-                              setAppliedStartDate(customStartDate);
-                              setAppliedEndDate(customEndDate);
-                              setShowDatePicker(false);
-                            }
-                          }}
-                          disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                        >
-                          Aplicar
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              <DateRangeFilter
+                className={showBancaDropdown ? 'order-2' : 'order-1'}
+                value={dateRangeValue}
+                onChange={(v) => {
+                  setDateFilter(v.preset);
+                  if (v.preset === 'custom') {
+                    setAppliedStartDate(v.startDate ?? '');
+                    setAppliedEndDate(v.endDate ?? '');
+                  } else {
+                    setAppliedStartDate('');
+                    setAppliedEndDate('');
+                  }
+                }}
+              />
 
             </div>
           </div>
@@ -2399,7 +2202,7 @@ export default function GestorTrafegoClient({
 
           <div className="relative">
             {/* Resumo Geral: skeleton nos valores enquanto carrega (evita confundir com zero real) */}
-            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
+            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] dark:from-[#9c4514] dark:to-[#7a350e] p-4 sm:p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="w-6 h-6 text-white" />
                 <h2 className="text-xl font-bold text-white">Resumo Geral - {bancaName || 'Banca'} (Primeiro Depósito)</h2>

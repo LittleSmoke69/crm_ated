@@ -73,7 +73,7 @@ export async function fetchConsultantsForBanca(
     .from('profiles')
     .select('id, full_name, email')
     .in('id', uids)
-    .eq('status', 'consultor')
+    .eq('status', 'captador')
     .order('full_name', { ascending: true, nullsFirst: false });
   return profs ?? [];
 }
@@ -85,7 +85,7 @@ export async function fetchConsultantsForProject(
   const { data: profs } = await supabaseServiceRole
     .from('profiles')
     .select('id, full_name, email')
-    .eq('status', 'consultor')
+    .eq('status', 'captador')
     .order('full_name', { ascending: true, nullsFirst: false })
     .limit(500);
   return profs ?? [];

@@ -146,7 +146,6 @@ const InstancesPage = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isConsultor, setIsConsultor] = useState(false);
   const [isGerente, setIsGerente] = useState(false);
-  const [isDonoBanca, setIsDonoBanca] = useState(false);
   const [linkAtendimentoModalInstance, setLinkAtendimentoModalInstance] = useState<WhatsAppInstance | null>(null);
   const [linkAtendimentoConsultores, setLinkAtendimentoConsultores] = useState<
     { id: string; full_name: string | null; email: string | null }[]
@@ -295,12 +294,10 @@ const InstancesPage = () => {
         .single();
       setIsAdmin(
         data?.status === 'admin' ||
-          data?.status === 'super_admin' ||
-          data?.status === 'auditoria'
+          data?.status === 'super_admin'
       );
-      setIsConsultor(data?.status === 'consultor');
+      setIsConsultor(data?.status === 'captador');
       setIsGerente(data?.status === 'gerente');
-      setIsDonoBanca(data?.status === 'dono_banca');
     };
     checkRole();
   }, [userId]);
@@ -869,13 +866,13 @@ const InstancesPage = () => {
       if (json.success && Array.isArray(json.data)) {
         setLinkAtendimentoConsultores(json.data);
         if (json.data.length === 0) {
-          showToast('Nenhum consultor encontrado na sua hierarquia.', 'info');
+          showToast('Nenhum captador encontrado na sua hierarquia.', 'info');
         }
       } else {
-        showToast(json.error || json.message || 'Não foi possível carregar consultores', 'error');
+        showToast(json.error || json.message || 'Não foi possível carregar captadores', 'error');
       }
     } catch {
-      showToast('Erro ao carregar consultores', 'error');
+      showToast('Erro ao carregar captadores', 'error');
     } finally {
       setLinkAtendimentoListLoading(false);
     }
@@ -884,7 +881,7 @@ const InstancesPage = () => {
   const handleSubmitLinkAtendimento = async () => {
     if (!userId || !linkAtendimentoModalInstance?.id) return;
     if (linkAtendimentoConsultorIds.length === 0) {
-      showToast('Selecione pelo menos um consultor', 'error');
+      showToast('Selecione pelo menos um captador', 'error');
       return;
     }
     setLinkAtendimentoSubmitting(true);
@@ -901,7 +898,7 @@ const InstancesPage = () => {
       if (json.success) {
         showToast(
           json.message ||
-            'Vínculo salvo. O consultor verá esta instância em Chat Atendimento após atualizar a página.',
+            'Vínculo salvo. O captador verá esta instância em Chat Atendimento após atualizar a página.',
           'success'
         );
         setLinkAtendimentoModalInstance(null);
@@ -920,7 +917,7 @@ const InstancesPage = () => {
     if (!userId || !inst.id) return;
     const assignment = atendimentoAssignmentByInstanceId[inst.id];
     if (!assignment?.assignmentId) return;
-    const label = assignment.consultorLabel || 'consultor(es) atual(is)';
+    const label = assignment.consultorLabel || 'captador(es) atual(is)';
     if (!confirm(`Deseja desvincular a instância ${inst.instance_name} de ${label}?`)) return;
 
     try {
@@ -931,13 +928,13 @@ const InstancesPage = () => {
       });
       const json = await res.json();
       if (json.success) {
-        showToast('Instância desvinculada do consultor com sucesso.', 'success');
+        showToast('Instância desvinculada do captador com sucesso.', 'success');
         await loadAtendimentoAssignments();
       } else {
         showToast(json.error || json.message || 'Falha ao desvincular', 'error');
       }
     } catch {
-      showToast('Erro ao desvincular consultor da instância', 'error');
+      showToast('Erro ao desvincular captador da instância', 'error');
     }
   };
 
@@ -1764,7 +1761,7 @@ const InstancesPage = () => {
                                       undefined
                                     }
                                   >
-                                    Consultor:{' '}
+                                    Captador:{' '}
                                     {atendimentoAssignmentByInstanceId[inst.id!]?.consultorLabel?.trim() ||
                                       inst.owner_display_name ||
                                       '—'}
@@ -1935,7 +1932,7 @@ const InstancesPage = () => {
                                     type="button"
                                     onClick={() => handleUnlinkAtendimento(inst)}
                                     className="w-full h-10 px-3 mt-2 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/35 border border-red-200 dark:border-red-800 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2"
-                                    title="Remove o vínculo desta instância com os consultores no Chat Atendimento"
+                                    title="Remove o vínculo desta instância com os captadores no Chat Atendimento"
                                   >
                                     <UserPlus className="w-4 h-4 shrink-0" />
                                     {`Desvincular consultores (${assignment.consultorLabel || 'vínculo ativo'})`}
@@ -1947,7 +1944,7 @@ const InstancesPage = () => {
                                   type="button"
                                   onClick={() => handleOpenLinkAtendimentoModal(inst)}
                                   className="w-full h-10 px-3 mt-2 bg-teal-50 dark:bg-teal-900/25 text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-900/40 border border-teal-200 dark:border-teal-800 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-2"
-                                  title="Libera a instância para o consultor no Chat Atendimento"
+                                  title="Libera a instância para o captador no Chat Atendimento"
                                 >
                                   <UserPlus className="w-4 h-4 shrink-0" />
                                   Vincular ao chat atendimento
@@ -2287,20 +2284,20 @@ const InstancesPage = () => {
             </div>
             <p className="text-sm text-gray-600 dark:text-[#aaa] mb-4">
               Instância <span className="font-medium text-gray-800 dark:text-white">{linkAtendimentoModalInstance.instance_name}</span>
-              . Escolha um ou mais consultores que poderão atender neste WhatsApp na página{' '}
+              . Escolha um ou mais captadores que poderão atender neste WhatsApp na página{' '}
               <span className="font-medium">Chat Atendimento</span>.
             </p>
             {linkAtendimentoListLoading ? (
               <div className="flex items-center justify-center py-8 gap-2 text-gray-500 dark:text-[#888]">
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Carregando consultores…
+                Carregando captadores…
               </div>
             ) : (
               <div className="space-y-3">
-                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc]">Consultores</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-[#ccc]">Captadores</label>
                 <div className="max-h-48 overflow-y-auto rounded-lg border-2 border-gray-200 dark:border-[#404040] bg-white dark:bg-[#333] px-3 py-2 space-y-2">
                   {linkAtendimentoConsultores.length === 0 ? (
-                    <p className="text-sm text-gray-500 dark:text-[#888]">Nenhum consultor na hierarquia.</p>
+                    <p className="text-sm text-gray-500 dark:text-[#888]">Nenhum captador na hierarquia.</p>
                   ) : (
                     linkAtendimentoConsultores.map((c) => {
                       const label = [c.full_name, c.email].filter(Boolean).join(' · ') || c.id;

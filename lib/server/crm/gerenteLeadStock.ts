@@ -134,7 +134,7 @@ export async function isConsultantDirectReportOfGerente(gerenteUserId: string, c
     .select('id')
     .ilike('email', em)
     .eq('enroller', gerenteUserId)
-    .eq('status', 'consultor')
+    .eq('status', 'captador')
     .maybeSingle();
   return !!data?.id;
 }

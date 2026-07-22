@@ -340,7 +340,7 @@ export default function BancaAnalysisCard({
               onClick={() => setShowConsultors(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold"
             >
-              <Users className="w-4 h-4" /> Ver consultores <ArrowRight className="w-4 h-4" />
+              <Users className="w-4 h-4" /> Ver captadores <ArrowRight className="w-4 h-4" />
             </button>
           ) : data && showConsultors ? (
             <button
@@ -443,20 +443,20 @@ export default function BancaAnalysisCard({
                         : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
                     }`}
                   >
-                    {tab === 'ads' ? `Consultores ADS (${data.ads_consultants.length})` : `Geral (${data.consultants.length})`}
+                    {tab === 'ads' ? `Captadores ADS (${data.ads_consultants.length})` : `Geral (${data.consultants.length})`}
                   </button>
                 ))}
               </div>
 
               {consultorTab === 'ads' ? (
                 data.ads_consultants.length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor atribuído às campanhas.</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum captador atribuído às campanhas.</p>
                 ) : (
                   <div className="overflow-x-auto max-h-[420px] overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
                     <table className="w-full text-sm border-collapse">
                       <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-800">
                         <tr className="text-left text-[11px] text-gray-600 dark:text-gray-300 uppercase">
-                          <th className="px-3 py-2 font-bold">Consultor</th>
+                          <th className="px-3 py-2 font-bold">Captador</th>
                           <th className="px-3 py-2 font-bold text-right">ADS</th>
                           <th className="px-3 py-2 font-bold text-right">Cadastros</th>
                           <th className="px-3 py-2 font-bold text-right">Faturamento</th>
@@ -504,13 +504,13 @@ export default function BancaAnalysisCard({
                   </div>
                 )
               ) : data.consultants.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum consultor no período.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">Nenhum captador no período.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[420px] overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700">
                   <table className="w-full text-sm border-collapse">
                     <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-800">
                       <tr className="text-left text-[11px] text-gray-600 dark:text-gray-300 uppercase">
-                        <th className="px-3 py-2 font-bold">Consultor</th>
+                        <th className="px-3 py-2 font-bold">Captador</th>
                         <th className="px-3 py-2 font-bold text-right">ADS</th>
                         <th className="px-3 py-2 font-bold text-right">Faturamento</th>
                         <th className="px-3 py-2 font-bold text-right">LTV</th>

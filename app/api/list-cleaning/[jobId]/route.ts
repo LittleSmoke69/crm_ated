@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
-    const { userId, profile } = await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente']);
+    const { userId, profile } = await requireStatus(req, ['super_admin', 'admin', 'gerente']);
     const { jobId } = await params;
     if (!jobId) return errorResponse('jobId obrigatório', 400);
 

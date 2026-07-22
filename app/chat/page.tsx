@@ -717,7 +717,7 @@ function MessageContent({
   );
 }
 
-type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
+type UserStatus = 'super_admin' | 'admin' | string | null;
 
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
@@ -889,7 +889,7 @@ export default function ChatPage() {
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
-    userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    userStatus === 'super_admin' || userStatus === 'admin';
 
   const handleSignOut = async () => {
     if (typeof window !== 'undefined') {
@@ -1344,7 +1344,7 @@ export default function ChatPage() {
 
   // Etiquetas disponíveis (criadas pelo admin) para filtro e para marcar conversas
   useEffect(() => {
-    if (!userId || !(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin')) return;
+    if (!userId || !(userStatus === 'admin' || userStatus === 'super_admin')) return;
     fetch('/api/chat/tags', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
@@ -1361,7 +1361,7 @@ export default function ChatPage() {
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
       loadConversationsFromApi(true);
-      if (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') {
+      if (userStatus === 'admin' || userStatus === 'super_admin') {
         fetch('/api/chat/tags', { headers: authHeaders() })
           .then((r) => r.json())
           .then((data) => {
@@ -1640,7 +1640,7 @@ export default function ChatPage() {
 
     const filterCol = selectedChannel.type === 'evolution' ? 'instance_id' : 'whatsapp_config_id';
     const filterVal = selectedChannel.id;
-    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    const canNotify = userStatus === 'super_admin' || userStatus === 'admin';
 
     const channel = supabase
       .channel(`chat_conversations_${selectedChannel.type}_${selectedChannel.id}`)
@@ -1733,7 +1733,7 @@ export default function ChatPage() {
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
-    const canNotify = userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte';
+    const canNotify = userStatus === 'super_admin' || userStatus === 'admin';
     if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
     if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }, [userStatus]);
@@ -3482,7 +3482,7 @@ export default function ChatPage() {
                           : conversationFilter === 'unassigned'
                             ? 'Nenhuma conversa no histórico (template ou resolvidas).'
                             : 'Nenhuma conversa encontrada.'}
-                        {(userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'suporte') && (
+                        {(userStatus === 'super_admin' || userStatus === 'admin') && (
                           <p className="mt-1 text-xs">
                             Novas mensagens aparecerão aqui automaticamente.
                           </p>
@@ -3676,7 +3676,7 @@ export default function ChatPage() {
                         </span>
                       </div>
                     </div>
-                    {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                    {(userStatus === 'admin' || userStatus === 'super_admin') && (
                       <div ref={tagsPopoverRef} className="relative">
                         <button
                           type="button"
@@ -3750,7 +3750,7 @@ export default function ChatPage() {
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Resolvida
                       </span>
-                    ) : (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') ? (
+                    ) : (userStatus === 'admin' || userStatus === 'super_admin') ? (
                       <button
                         onClick={handleResolveConversation}
                         disabled={resolvingConversation}
@@ -3778,7 +3778,7 @@ export default function ChatPage() {
                       {showConvMenu && (
                         <div className="absolute right-0 top-full mt-1 z-30 w-52 py-1 zap-chat-panel border border-[#E86A24]/12 rounded-lg shadow-lg">
                           {selectedConversation.attendance_status === 'resolvido' &&
-                            (userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                            (userStatus === 'admin' || userStatus === 'super_admin') && (
                             <button
                               type="button"
                               onClick={handleReopenConversation}
@@ -3789,7 +3789,7 @@ export default function ChatPage() {
                               Reabrir conversa
                             </button>
                           )}
-                          {(userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin') && (
+                          {(userStatus === 'admin' || userStatus === 'super_admin') && (
                             <button
                               type="button"
                               onClick={() => { setShowTagsPopover(true); setShowConvMenu(false); }}
@@ -3846,7 +3846,7 @@ export default function ChatPage() {
                           new Date(messages[index - 1].timestamp * 1000).toDateString();
                       const isHovered = hoveredMessageId === msg.id;
                       const isDeleting = deletingMessageId === msg.id;
-                      const canDelete = userStatus === 'suporte' || userStatus === 'admin' || userStatus === 'super_admin';
+                      const canDelete = userStatus === 'admin' || userStatus === 'super_admin';
 
                       return (
                         <React.Fragment key={msg.id}>

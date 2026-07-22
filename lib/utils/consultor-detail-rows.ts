@@ -98,7 +98,7 @@ function buildConsultantLookup(data: BetsDepositsLike | null | undefined) {
       if (!c?.email) continue;
       map.set(c.email.toLowerCase(), {
         name: c.full_name || c.email,
-        status: (c.status as string) || 'consultor',
+        status: (c.status as string) || 'captador',
       });
     }
   }
@@ -115,7 +115,7 @@ function resolveConsultant(
   return {
     consultant_email: email || '',
     consultant_name: fromScope?.name || fallbackName || email || '',
-    consultant_status: fromScope?.status || 'consultor',
+    consultant_status: fromScope?.status || 'captador',
   };
 }
 

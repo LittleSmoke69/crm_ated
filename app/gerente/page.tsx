@@ -18,7 +18,6 @@ import {
   BarChart3,
   DollarSign,
   Award,
-  Calendar,
   ChevronDown,
   AlertCircle,
   Filter,
@@ -44,6 +43,8 @@ import InvestmentRoundsReadonly from '@/components/Meta/InvestmentRoundsReadonly
 import TagsSummaryChart from '@/components/Charts/TagsSummaryChart';
 import { useToast } from '@/hooks/useToast';
 import ToastContainer from '@/components/Toast/ToastContainer';
+import { DateRangeFilter, KpiHero, CardSkeleton } from '@/components/ui';
+import { getDateRange as resolveDateRange, type DateRangeValue } from '@/lib/ui/date-range';
 
 /** Máximo de leads por solicitação no modal “Solicitação de leads”. */
 const SOLICITATION_MAX_LEADS = 1000;
@@ -170,13 +171,8 @@ export default function GerentePage() {
   const [tagsLoadingInBackground, setTagsLoadingInBackground] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Filtro de data (inicial: todo o período)
-  const [dateFilter, setDateFilter] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('all');
-  const [customStartDate, setCustomStartDate] = useState<string>('');
-  const [customEndDate, setCustomEndDate] = useState<string>('');
-  const [appliedStartDate, setAppliedStartDate] = useState<string>('');
-  const [appliedEndDate, setAppliedEndDate] = useState<string>('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  // Filtro de data (inicial: todo o período) — resolvido via lib/ui/date-range
+  const [dateRange, setDateRange] = useState<DateRangeValue>({ preset: 'all' });
 
   // Form state
   const [formData, setFormData] = useState({
@@ -379,66 +375,10 @@ export default function GerentePage() {
     return { gerenteTotalKpis, chartData };
   }, []);
 
-  // Calcula as datas baseado no filtro selecionado
+  // Calcula as datas baseado no filtro selecionado — resolvido via lib/ui/date-range
   const getDateRange = () => {
-    let dateFrom: string | null = null;
-    let dateTo: string | null = null;
-
-    switch (dateFilter) {
-      case 'daily':
-        // Usa a data de hoje
-        const todayDate = new Date();
-        todayDate.setHours(0, 0, 0, 0); // Início do dia de hoje
-        const todayStr = todayDate.toISOString().split('T')[0];
-        dateFrom = todayStr;
-        dateTo = todayStr;
-        break;
-      case 'yesterday':
-        // Calcula a data de ontem (hoje - 1 dia)
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        yesterday.setHours(0, 0, 0, 0); // Início do dia de ontem
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
-        dateFrom = yesterdayStr;
-        dateTo = yesterdayStr;
-        break;
-      case '7days':
-        const today7 = new Date();
-        today7.setHours(0, 0, 0, 0);
-        const sevenDaysAgo = new Date(today7);
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-        dateFrom = sevenDaysAgo.toISOString().split('T')[0];
-        dateTo = today7.toISOString().split('T')[0];
-        break;
-      case '15days':
-        const today15 = new Date();
-        today15.setHours(0, 0, 0, 0);
-        const fifteenDaysAgo = new Date(today15);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 14);
-        dateFrom = fifteenDaysAgo.toISOString().split('T')[0];
-        dateTo = today15.toISOString().split('T')[0];
-        break;
-      case '30days':
-        const today30 = new Date();
-        today30.setHours(0, 0, 0, 0);
-        const thirtyDaysAgo = new Date(today30);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-        dateFrom = thirtyDaysAgo.toISOString().split('T')[0];
-        dateTo = today30.toISOString().split('T')[0];
-        break;
-      case 'custom':
-        if (appliedStartDate && appliedEndDate) {
-          dateFrom = appliedStartDate;
-          dateTo = appliedEndDate;
-        }
-        break;
-      case 'all':
-        dateFrom = null;
-        dateTo = null;
-        break;
-    }
-
-    return { dateFrom, dateTo };
+    const range = resolveDateRange(dateRange);
+    return { dateFrom: range?.startDate ?? null, dateTo: range?.endDate ?? null };
   };
 
   // Zaplink: buscar notificações o mais cedo possível (antes de bancas/dados) para modal aparecer de imediato
@@ -556,8 +496,7 @@ export default function GerentePage() {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.date-filter-container') && !target.closest('.banca-filter-container') && !target.closest('.consultor-filter-container') && !target.closest('.gerente-filter-container')) {
-        setShowDatePicker(false);
+      if (!target.closest('.banca-filter-container') && !target.closest('.consultor-filter-container') && !target.closest('.gerente-filter-container')) {
         setShowBancaFilter(false);
         setShowConsultorFilter(false);
         setConsultorSearchTerm('');
@@ -565,11 +504,11 @@ export default function GerentePage() {
         setGerenteSearchTerm('');
       }
     };
-    if (showDatePicker || showBancaFilter || showConsultorFilter || showGerenteFilter) {
+    if (showBancaFilter || showConsultorFilter || showGerenteFilter) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showBancaFilter, showConsultorFilter, showGerenteFilter]);
+  }, [showBancaFilter, showConsultorFilter, showGerenteFilter]);
 
   // Ajusta página da tabela "Sua equipe" quando o total de itens filtrados diminui (evita página em branco)
   const consultorMetricsForCount = data?.consultorMetrics ?? [];
@@ -1007,12 +946,12 @@ export default function GerentePage() {
 
       const result = await response.json();
       if (result.success) {
-        setFormSuccess('Consultor cadastrado com sucesso!');
+        setFormSuccess('Captador cadastrado com sucesso!');
         setFormData({ email: '', fullName: '', password: '' });
         loadData();
         setTimeout(() => setIsModalOpen(false), 2000);
       } else {
-        setFormError(result.error || 'Erro ao cadastrar consultor');
+        setFormError(result.error || 'Erro ao cadastrar captador');
       }
     } catch (error) {
       setFormError('Erro de conexão');
@@ -1051,10 +990,10 @@ export default function GerentePage() {
         });
         setAllConsultores((prev) => prev.filter((c) => c.id !== deletedId));
       } else {
-        alert(result.error || 'Erro ao deletar consultor');
+        alert(result.error || 'Erro ao deletar captador');
       }
     } catch (error) {
-      alert('Erro de conexão ao deletar consultor');
+      alert('Erro de conexão ao deletar captador');
     } finally {
       setIsDeleting(false);
     }
@@ -1101,7 +1040,7 @@ export default function GerentePage() {
         const editedId = consultorToEdit.id;
         const newName = editFormData.fullName.trim() || editFormData.email.trim();
         const newEmail = editFormData.email.trim();
-        setEditFormSuccess('Consultor atualizado com sucesso!');
+        setEditFormSuccess('Captador atualizado com sucesso!');
         setData((prev) => {
           if (!prev) return prev;
           return {
@@ -1119,7 +1058,7 @@ export default function GerentePage() {
           setConsultorToEdit(null);
         }, 1500);
       } else {
-        setEditFormError(result.error || 'Erro ao atualizar consultor');
+        setEditFormError(result.error || 'Erro ao atualizar captador');
       }
     } catch {
       setEditFormError('Erro de conexão');
@@ -1184,7 +1123,7 @@ export default function GerentePage() {
   const handleSolicitationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!solicitationConsultorId?.trim()) {
-      setSolicitationError('Selecione o consultor que receberá os leads.');
+      setSolicitationError('Selecione o captador que receberá os leads.');
       return;
     }
     if (!solicitationBancaId?.trim()) {
@@ -1427,7 +1366,7 @@ export default function GerentePage() {
             {zaplinkBulkSendConfigOpen ? (
               <>
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Configurar disparo em massa</h2>
-                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">Mensagem que será enviada aos novos consultores (use {'{{nome}}'} para personalizar):</p>
+                <p className="text-sm text-gray-600 dark:text-[#aaa] mb-3">Mensagem que será enviada aos novos captadores (use {'{{nome}}'} para personalizar):</p>
                 <textarea
                   value={zaplinkBulkSendMessage}
                   onChange={(e) => setZaplinkBulkSendMessage(e.target.value)}
@@ -1489,7 +1428,7 @@ export default function GerentePage() {
               </>
             ) : (
               <>
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos consultores atribuídos a você (Zaplink)</h2>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Novos captadores atribuídos a você (Zaplink)</h2>
                 <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
                   {zaplinkNotifications.map((n) => (
                     <div key={n.id} className="rounded-lg border border-gray-200 dark:border-gray-600 p-3 bg-gray-50 dark:bg-[#1f1f1f]">
@@ -1742,8 +1681,8 @@ export default function GerentePage() {
                 >
                   <Users className="w-4 h-4 text-[#E86A24]" />
                   {selectedConsultor === 'all'
-                    ? 'Todos os Consultores'
-                    : allConsultores.find(c => c.id === selectedConsultor)?.name || 'Consultor'}
+                    ? 'Todos os Captadores'
+                    : allConsultores.find(c => c.id === selectedConsultor)?.name || 'Captador'}
                   <ChevronDown className="w-4 h-4" />
                 </button>
 
@@ -1754,7 +1693,7 @@ export default function GerentePage() {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
                         <input
                           type="text"
-                          placeholder="Pesquisar consultor..."
+                          placeholder="Pesquisar captador..."
                           value={consultorSearchTerm}
                           onChange={(e) => setConsultorSearchTerm(e.target.value)}
                           className="w-full pl-9 pr-3 py-2 bg-gray-100 dark:bg-[#333] border border-gray-200 dark:border-[#404040] rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none placeholder:text-gray-500 dark:placeholder:text-gray-500"
@@ -1792,7 +1731,7 @@ export default function GerentePage() {
                         ))}
                       {allConsultores.filter(c => (c.name || c.email || '').toLowerCase().includes(consultorSearchTerm.toLowerCase())).length === 0 && consultorSearchTerm && (
                         <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                          Nenhum consultor encontrado
+                          Nenhum captador encontrado
                         </div>
                       )}
                     </div>
@@ -1802,91 +1741,7 @@ export default function GerentePage() {
             )}
 
             {/* Filtro de Data */}
-            <div className="relative date-filter-container">
-              <button
-                onClick={() => setShowDatePicker(!showDatePicker)}
-                className="flex items-center gap-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all shadow-sm"
-              >
-                <Calendar className="w-4 h-4 text-[#E86A24]" />
-                {dateFilter === 'daily' && 'Diário'}
-                {dateFilter === 'yesterday' && 'Ontem'}
-                {dateFilter === '7days' && 'Últimos 7 dias'}
-                {dateFilter === '15days' && 'Últimos 15 dias'}
-                {dateFilter === '30days' && 'Últimos 30 dias'}
-                {dateFilter === 'custom' && 'Personalizado'}
-                {dateFilter === 'all' && 'Todo o Período'}
-                <ChevronDown className="w-4 h-4" />
-              </button>
-
-              {showDatePicker && (
-                <div className="absolute right-0 mt-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 rounded-xl shadow-lg z-50 min-w-[200px]">
-                  <div className="p-2">
-                    {['daily', 'yesterday', '7days', '15days', '30days', 'custom', 'all'].map((filter) => (
-                      <button
-                        key={filter}
-                        onClick={() => {
-                          if (filter !== 'custom') {
-                            setDateFilter(filter as any);
-                            setShowDatePicker(false);
-                          } else {
-                            setDateFilter('custom');
-                          }
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${dateFilter === filter ? 'bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-                          }`}
-                      >
-                        {filter === 'daily' && 'Diário'}
-                        {filter === 'yesterday' && 'Ontem'}
-                        {filter === '7days' && 'Últimos 7 dias'}
-                        {filter === '15days' && 'Últimos 15 dias'}
-                        {filter === '30days' && 'Últimos 30 dias'}
-                        {filter === 'custom' && 'Personalizado'}
-                        {filter === 'all' && 'Todo o Período'}
-                      </button>
-                    ))}
-
-                    {dateFilter === 'custom' && (
-                      <div className="p-3 border-t border-gray-200 dark:border-gray-600 space-y-3 mt-2">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Inicial</label>
-                          <input
-                            type="date"
-                            value={customStartDate}
-                            onChange={(e) => setCustomStartDate(e.target.value)}
-                            max={customEndDate || new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data Final</label>
-                          <input
-                            type="date"
-                            value={customEndDate}
-                            onChange={(e) => setCustomEndDate(e.target.value)}
-                            min={customStartDate}
-                            max={new Date().toISOString().split('T')[0]}
-                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24]"
-                          />
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (customStartDate && customEndDate) {
-                              setAppliedStartDate(customStartDate);
-                              setAppliedEndDate(customEndDate);
-                              setShowDatePicker(false);
-                            }
-                          }}
-                          disabled={!customStartDate || !customEndDate}
-                          className="w-full bg-[#E86A24] hover:bg-[#D95E1B] disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                        >
-                          Aplicar
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <DateRangeFilter value={dateRange} onChange={setDateRange} />
 
             <button
               type="button"
@@ -1927,7 +1782,7 @@ export default function GerentePage() {
           <div className="flex flex-wrap items-center gap-2 text-sm text-[#E86A24] bg-[#E86A2410] dark:bg-[#E86A2415] border border-[#E86A2430] dark:border-[#E86A2440] rounded-xl px-4 py-3 shadow-sm">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#E86A24] border-t-transparent shrink-0" />
             <span className="font-medium">
-              Buscando consultores {loadingConsultoresProgress.from}-{loadingConsultoresProgress.to} de {loadingConsultoresProgress.total || '…'}
+              Buscando captadores {loadingConsultoresProgress.from}-{loadingConsultoresProgress.to} de {loadingConsultoresProgress.total || '…'}
               {loadingConsultoresProgress.bancaTotal != null && loadingConsultoresProgress.bancaTotal > 0 && (
                 <> · Banca {loadingConsultoresProgress.bancaCurrent}/{loadingConsultoresProgress.bancaTotal}{loadingConsultoresProgress.bancaName ? ` (${loadingConsultoresProgress.bancaName})` : ''}</>
               )}
@@ -1939,125 +1794,74 @@ export default function GerentePage() {
         )}
 
         {/* Resumo Geral do Gerente */}
-        <div className="relative">
-          {(dataLoading || initialLoading) && !gerenteTotalKpis && consultorMetrics.length === 0 && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
-            </div>
-          )}
-          {gerenteTotalKpis ? (
-            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
-              <div className="flex items-center gap-2 mb-6">
-                <Briefcase className="w-6 h-6 text-white" />
-                <h2 className="text-xl font-bold text-white">Resumo Geral - {gerenteInfo.name || 'Gerente'}</h2>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-4">
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Users className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Total de Leads</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.total_leads || 0}</p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <CheckCircle2 className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Ativos</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">{gerenteTotalKpis.active_leads || 0}</p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Total Depositado</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Target className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Total Apostado</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Award className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Total Prêmios</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Trophy className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Clientes Premiados</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    {gerenteTotalKpis.awarded_clients_count || 0}
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Wallet className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Lucro Líquido</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <BarChart3 className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">Taxa de Conversão</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    {(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%
-                  </p>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <TrendingUp className="w-4 h-4 text-white" />
-                    <p className="text-xs font-bold text-white/90 uppercase">LTV Médio</p>
-                  </div>
-                  <p className="text-2xl font-bold text-white">
-                    R$ {(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-gradient-to-br from-[#EF9057] to-[#E86A24] p-6 rounded-2xl shadow-lg border border-[#E86A24]/40">
-              <div className="text-center py-8">
-                <AlertCircle className="w-12 h-12 text-white/80 mx-auto mb-4" />
-                <p className="text-white font-medium">Dados não encontrados</p>
-              </div>
-            </div>
-          )}
-        </div>
+        <KpiHero
+          title={
+            <span className="flex items-center gap-2">
+              <Briefcase className="w-6 h-6 text-white" />
+              Resumo Geral - {gerenteInfo.name || 'Gerente'}
+            </span>
+          }
+          columns={9}
+          loading={(dataLoading || initialLoading) && !gerenteTotalKpis && consultorMetrics.length === 0}
+          emptyMessage="Dados não encontrados"
+          items={
+            gerenteTotalKpis
+              ? [
+                  {
+                    icon: <Users className="w-4 h-4" />,
+                    label: 'Total de Leads',
+                    value: gerenteTotalKpis.total_leads || 0,
+                  },
+                  {
+                    icon: <CheckCircle2 className="w-4 h-4" />,
+                    label: 'Clientes Ativos',
+                    value: gerenteTotalKpis.active_leads || 0,
+                  },
+                  {
+                    icon: <DollarSign className="w-4 h-4" />,
+                    label: 'Total Depositado',
+                    value: `R$ ${(gerenteTotalKpis.total_deposited || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
+                  },
+                  {
+                    icon: <Target className="w-4 h-4" />,
+                    label: 'Total Apostado',
+                    value: `R$ ${(gerenteTotalKpis.total_bets || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
+                  },
+                  {
+                    icon: <Award className="w-4 h-4" />,
+                    label: 'Total Prêmios',
+                    value: `R$ ${(gerenteTotalKpis.total_prizes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
+                  },
+                  {
+                    icon: <Trophy className="w-4 h-4" />,
+                    label: 'Clientes Premiados',
+                    value: gerenteTotalKpis.awarded_clients_count || 0,
+                  },
+                  {
+                    icon: <Wallet className="w-4 h-4" />,
+                    label: 'Lucro Líquido',
+                    value: `R$ ${(gerenteTotalKpis.net_profit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
+                  },
+                  {
+                    icon: <BarChart3 className="w-4 h-4" />,
+                    label: 'Taxa de Conversão',
+                    value: `${(gerenteTotalKpis.conversion_rate || 0).toFixed(2)}%`,
+                  },
+                  {
+                    icon: <TrendingUp className="w-4 h-4" />,
+                    label: 'LTV Médio',
+                    value: `R$ ${(gerenteTotalKpis.ltv_avg || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  },
+                ]
+              : []
+          }
+        />
 
         {/* Gráficos */}
         <div className="relative">
-          {(dataLoading || initialLoading) && !chartData && consultorMetrics.length === 0 && (
-            <div className="absolute inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm rounded-2xl z-10 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E86A24]"></div>
-            </div>
-          )}
-          {chartData ? (
+          {(dataLoading || initialLoading) && !chartData && consultorMetrics.length === 0 ? (
+            <CardSkeleton />
+          ) : chartData ? (
             <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
                 <BarChart3 className="w-5 h-5 text-[#E86A24]" />
@@ -2241,7 +2045,7 @@ export default function GerentePage() {
           ) : (
             <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
               <Trophy className="w-16 h-16 text-gray-300 dark:text-gray-600 mb-4" />
-              <p className="text-base font-medium">Nenhum consultor com vendas no período selecionado</p>
+              <p className="text-base font-medium">Nenhum captador com vendas no período selecionado</p>
               <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">Altere o filtro de data para ver os resultados</p>
             </div>
           )}
@@ -2277,11 +2081,11 @@ export default function GerentePage() {
             </div>
           )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Uso de Etiquetas por Consultor */}
+          {/* Uso de Etiquetas por Captador */}
           <div className="bg-white dark:bg-[#2a2a2a] p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
               <Tag className="w-5 h-5 text-[#E86A24]" />
-              Uso de Etiquetas por Consultor
+              Uso de Etiquetas por Captador
             </h2>
 
             <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
@@ -2423,7 +2227,7 @@ export default function GerentePage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500 dark:text-gray-400" />
                   <input
                     type="text"
-                    placeholder="Buscar consultor..."
+                    placeholder="Buscar captador..."
                     value={tableSearchTerm}
                     onChange={(e) => {
                       setTableSearchTerm(e.target.value);
@@ -2439,7 +2243,7 @@ export default function GerentePage() {
                   className="flex items-center justify-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-[#E86A24]/20 w-full sm:w-auto"
                 >
                   <UserPlus className="w-4 h-4" />
-                  Novo Consultor
+                  Novo Captador
                 </button>
               </div>
               </div>
@@ -2456,7 +2260,7 @@ export default function GerentePage() {
                         className="px-6 py-4 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase cursor-pointer hover:text-[#E86A24] transition-colors"
                       >
                         <div className="flex items-center gap-1">
-                          Consultor
+                          Captador
                           {sortBy === 'name' && (sortOrder === 'asc' ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />)}
                         </div>
                       </th>
@@ -2600,7 +2404,7 @@ export default function GerentePage() {
               <div className="hidden md:block p-8 text-center">
                 <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-600 dark:text-gray-400 font-medium">
-                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
+                  {tableSearchTerm ? 'Nenhum captador encontrado com este nome' : 'Nenhum captador trouxe resultado na busca para a banca e período selecionados'}
                 </p>
               </div>
             )}
@@ -2693,7 +2497,7 @@ export default function GerentePage() {
               <div className="md:hidden p-8 text-center">
                 <AlertCircle className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 <p className="text-gray-600 dark:text-gray-400 font-medium">
-                  {tableSearchTerm ? 'Nenhum consultor encontrado com este nome' : 'Nenhum consultor trouxe resultado na busca para a banca e período selecionados'}
+                  {tableSearchTerm ? 'Nenhum captador encontrado com este nome' : 'Nenhum captador trouxe resultado na busca para a banca e período selecionados'}
                 </p>
               </div>
             )}
@@ -2724,7 +2528,7 @@ export default function GerentePage() {
                 <div className="flex flex-wrap items-center gap-3 mb-4">
                   <div className="flex items-center gap-2">
                     <Filter className="w-4 h-4 text-gray-500 dark:text-gray-400" aria-hidden />
-                    <label htmlFor="hist-consultor" className="text-xs font-medium text-gray-600 dark:text-gray-400">Consultor</label>
+                    <label htmlFor="hist-consultor" className="text-xs font-medium text-gray-600 dark:text-gray-400">Captador</label>
                     <select
                       id="hist-consultor"
                       value={leadRequestHistoryConsultorFilter}
@@ -2771,7 +2575,7 @@ export default function GerentePage() {
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Data</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Banca</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Tipo de lead</th>
-                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Consultores / Qtd</th>
+                        <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Captadores / Qtd</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase max-w-[220px]">Envio (admin)</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Prazo (dias)</th>
                         <th className="px-4 py-3 text-xs font-bold text-gray-400 dark:text-gray-500 uppercase text-center">Situação</th>
@@ -2914,7 +2718,7 @@ export default function GerentePage() {
                   <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-xl p-3">
                     <div className="flex items-center gap-2 text-amber-700 dark:text-amber-200">
                       <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                      <p className="text-sm font-medium">Consultor não cadastrado na banca selecionada</p>
+                      <p className="text-sm font-medium">Captador não cadastrado na banca selecionada</p>
                     </div>
                   </div>
                 ) : (
@@ -3027,7 +2831,7 @@ export default function GerentePage() {
                   className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-[#E86A24] text-[#E86A24] dark:text-[#E86A24] font-bold py-3.5 rounded-xl hover:bg-[#E86A24]/10 dark:hover:bg-[#E86A24]/10 transition-colors"
                 >
                   <UserPlus className="w-5 h-5" />
-                  Consultor
+                  Captador
                 </button>
               </div>
             </div>
@@ -3054,14 +2858,14 @@ export default function GerentePage() {
                   {solicitationSuccess && <div className="bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] p-3 rounded-xl text-sm font-medium border border-[#E86A24]/30">{solicitationSuccess}</div>}
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Consultor que receberá os leads</label>
+                    <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Captador que receberá os leads</label>
                     <select
                       required
                       value={solicitationConsultorId}
                       onChange={(e) => setSolicitationConsultorId(e.target.value)}
                       className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] px-3 py-2.5 text-sm text-gray-900 dark:text-gray-100 font-medium"
                     >
-                      <option value="">Selecione um consultor</option>
+                      <option value="">Selecione um captador</option>
                       {[...(allConsultores.length > 0 ? allConsultores : consultorMetrics)]
                         .sort((a, b) => (a.name || a.email || '').localeCompare((b.name || b.email || ''), 'pt-BR', { sensitivity: 'base' }))
                         .map((c) => (
@@ -3074,7 +2878,7 @@ export default function GerentePage() {
                     <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Banca para qual os leads serão transferidos</label>
                     {!solicitationConsultorId?.trim() ? (
                       <p className="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl">
-                        Selecione um consultor para carregar as bancas em que ele está cadastrado
+                        Selecione um captador para carregar as bancas em que ele está cadastrado
                       </p>
                     ) : solicitationBancasLoading ? (
                       <div className="flex items-center gap-2 py-2 text-sm text-gray-500 dark:text-gray-400">
@@ -3083,7 +2887,7 @@ export default function GerentePage() {
                       </div>
                     ) : solicitationBancasForConsultant.length === 0 ? (
                       <p className="py-2.5 px-3 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
-                        Nenhuma banca encontrada para este consultor na sua base
+                        Nenhuma banca encontrada para este captador na sua base
                       </p>
                     ) : (
                       <select
@@ -3231,7 +3035,7 @@ export default function GerentePage() {
                     ))}
                   </select>
                 )}
-                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Número de consultores</label>
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-2 ml-1">Número de captadores</label>
                 <input
                   type="number"
                   min={1}
@@ -3268,7 +3072,7 @@ export default function GerentePage() {
               <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-[#EF9057] to-[#E86A24] text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <UserPlus className="w-6 h-6" />
-                  Novo Consultor
+                  Novo Captador
                 </h2>
                 <button onClick={() => setIsModalOpen(false)} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
                   <X className="w-6 h-6" />
@@ -3280,7 +3084,7 @@ export default function GerentePage() {
                 {formSuccess && <div className="bg-[#E86A2415] dark:bg-[#E86A2425] text-[#E86A24] p-3 rounded-xl text-sm font-medium border border-[#E86A24]/30">{formSuccess}</div>}
 
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Consultor</label>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome do Captador</label>
                   <input
                     type="text"
                     required
@@ -3316,7 +3120,7 @@ export default function GerentePage() {
                 <div className="pt-4 flex gap-3">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-bold py-3 rounded-xl">Cancelar</button>
                   <button type="submit" disabled={isSubmitting} className="flex-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white font-bold py-3 rounded-xl disabled:opacity-50 transition-colors">
-                    {isSubmitting ? 'Cadastrando...' : 'Cadastrar Consultor'}
+                    {isSubmitting ? 'Cadastrando...' : 'Cadastrar Captador'}
                   </button>
                 </div>
               </form>
@@ -3331,7 +3135,7 @@ export default function GerentePage() {
               <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <Pencil className="w-6 h-6" />
-                  Editar Consultor
+                  Editar Captador
                 </h2>
                 <button onClick={() => { setEditModalOpen(false); setConsultorToEdit(null); }} className="hover:bg-white/20 p-1.5 rounded-xl transition-colors">
                   <X className="w-6 h-6" />
@@ -3345,7 +3149,7 @@ export default function GerentePage() {
                   <input
                     type="text"
                     required
-                    placeholder="Nome do consultor"
+                    placeholder="Nome do captador"
                     className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 font-medium transition-all"
                     value={editFormData.fullName}
                     onChange={e => setEditFormData({ ...editFormData, fullName: e.target.value })}
@@ -3454,7 +3258,7 @@ export default function GerentePage() {
                     ) : (
                       <>
                         <Trash2 className="w-4 h-4" />
-                        Deletar Consultor
+                        Deletar Captador
                       </>
                     )}
                   </button>

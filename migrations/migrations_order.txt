@@ -204,3 +204,7 @@ fix_claim_maturation_steps_instance_name_conflict.sql
 create_meta_investment_rounds.sql
 add_chat_conversation_resolutions.sql
 add_chat_media_recovery_columns.sql
+
+new_role_line_super_admin_admin_gerente_captador.sql
+crm_leads_capture_management.sql
+add_sidebar_crm_leads_item.sql

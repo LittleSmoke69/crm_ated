@@ -13,7 +13,7 @@ const MAX_NUMBERS = 1000;
  */
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente']);
+    const { userId } = await requireStatus(req, ['super_admin', 'admin', 'gerente']);
 
     const body = await req.json().catch(() => ({}));
     const rawText = body.rawText as string | undefined;
@@ -118,7 +118,7 @@ const MAX_PER_PAGE = 50;
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente']);
+    const { userId, profile } = await requireStatus(req, ['super_admin', 'admin', 'gerente']);
 
     const isAdmin = profile?.status === 'admin' || profile?.status === 'super_admin';
     const url = new URL(req.url);

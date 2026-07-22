@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, Loader2, RefreshCw, Calendar } from 'lucide-react';
+import { Users, RefreshCw, Calendar } from 'lucide-react';
 import ZapCard from '@/components/ui/ZapCard';
+import { Button, Banner, EmptyState, Skeleton, TableSkeletonRows } from '@/components/ui';
 import {
   zapInput,
   zapStatCard,
@@ -95,11 +96,12 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Calendar className="h-4 w-4 text-gray-500" />
+            <Calendar className="h-4 w-4 text-gray-500" aria-hidden="true" />
             <input
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
+              aria-label="Data inicial"
               className={`px-2 py-1.5 text-sm ${zapInput}`}
             />
             <span className="text-gray-500">até</span>
@@ -107,17 +109,17 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
+              aria-label="Data final"
               className={`px-2 py-1.5 text-sm ${zapInput}`}
             />
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={fetchSupport}
-              disabled={loading}
-              className="flex items-center gap-2 rounded-lg bg-[#E86A24] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+              loading={loading}
+              icon={<RefreshCw className="h-4 w-4" />}
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Atualizar
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -127,9 +129,23 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
         </p>
 
         {loading && !support ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className={zapStatCard}>
+                  <Skeleton className="mb-2 h-3 w-20" />
+                  <Skeleton className="h-7 w-14" />
+                </div>
+              ))}
+            </div>
+            <div className={zapTableWrap}>
+              <table className="w-full min-w-[720px] text-sm">
+                <tbody>
+                  <TableSkeletonRows rows={5} cols={7} />
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : support ? (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -156,12 +172,15 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
             </div>
 
             {support.byUser.length === 0 ? (
-              <p className="py-8 text-center text-sm text-gray-500">
-                Nenhum atendente encontrado.
-              </p>
+              <EmptyState
+                compact
+                icon={<Users className="w-5 h-5" />}
+                title="Nenhum atendente encontrado"
+                description="Cadastre usuários com cargo Atendente para acompanhar as métricas aqui."
+              />
             ) : (
               <div className={zapTableWrap}>
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[720px] text-sm">
                   <thead>
                     <tr className={zapTableHead}>
                       <th className="px-4 py-3 font-medium">Atendente</th>
@@ -205,7 +224,22 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
             )}
           </>
         ) : (
-          <p className="py-8 text-center text-sm text-gray-500">Não foi possível carregar os dados.</p>
+          <Banner
+            variant="error"
+            title="Não foi possível carregar os dados."
+            action={
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={fetchSupport}
+                icon={<RefreshCw className="h-4 w-4" />}
+              >
+                Tentar novamente
+              </Button>
+            }
+          >
+            Verifique sua conexão e tente novamente.
+          </Banner>
         )}
       </section>
     </ZapCard>

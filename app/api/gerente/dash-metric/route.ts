@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireStatusOrSidebarPermission(
       req,
-      ['gerente', 'gestor', 'super_admin', 'admin'],
+      ['gerente', 'admin', 'super_admin'],
       'gestao_consultores'
     );
 

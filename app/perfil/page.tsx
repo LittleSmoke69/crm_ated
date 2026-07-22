@@ -33,9 +33,9 @@ interface UserProfile {
   theme_preference?: 'light' | 'dark';
 }
 
-const ROLES_COM_BANCAS = ['consultor', 'gerente', 'gestor', 'super_admin'] as const;
+const ROLES_COM_BANCAS = ['captador', 'gerente', 'super_admin'] as const;
 /** Perfis que podem usar "Carregar bancas" (busca por email nas APIs das bancas). */
-const ROLES_CARREGAR_BANCAS_POR_EMAIL = ['consultor', 'gerente'] as const;
+const ROLES_CARREGAR_BANCAS_POR_EMAIL = ['captador', 'gerente'] as const;
 
 const PerfilPage = () => {
   const { checking, userId } = useRequireAuth();
@@ -190,12 +190,8 @@ const PerfilPage = () => {
     const labels: Record<string, string> = {
       super_admin: 'Super Admin',
       admin: 'Administrador',
-      dono_banca: 'Dono de Banca',
       gerente: 'Gerente',
-      gestor: 'Gestor',
-      consultor: 'Consultor',
-      auditoria: 'Auditoria',
-      suporte: 'Suporte',
+      captador: 'Captador',
     };
     return labels[status || ''] || status || 'Não definido';
   };
@@ -204,12 +200,8 @@ const PerfilPage = () => {
     const colors: Record<string, string> = {
       super_admin: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
       admin: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
-      dono_banca: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
       gerente: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
-      gestor: 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300',
-      consultor: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300',
-      auditoria: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
-      suporte: 'bg-gray-100 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300',
+      captador: 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300',
     };
     return colors[status || ''] || 'bg-gray-100 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300';
   };
@@ -326,7 +318,7 @@ const PerfilPage = () => {
             <p className="text-red-600 mb-4">{error}</p>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-[#E86A24] text-white rounded-xl hover:bg-[#7BC844] transition-colors"
+              className="px-4 py-2 bg-[#E86A24] text-white rounded-xl hover:bg-[#D95E1B] transition-colors"
             >
               Tentar novamente
             </button>
@@ -358,7 +350,7 @@ const PerfilPage = () => {
         {/* Card Principal */}
         <div className="bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-lg border border-gray-200 dark:border-[#404040] overflow-hidden">
           {/* Header do Card */}
-          <div className="bg-gradient-to-r from-[#E86A24] to-[#7BC844] p-6">
+          <div className="bg-gradient-to-r from-[#EF9057] to-[#E86A24] p-6">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
                 <User className="w-8 h-8 text-[#E86A24]" />
@@ -390,7 +382,7 @@ const PerfilPage = () => {
             {/* Telefone */}
             <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
               <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-                <Phone className="w-5 h-5 text-green-600 dark:text-[#00ff00]" />
+                <Phone className="w-5 h-5 text-green-600 dark:text-green-400" />
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-1">Telefone</label>
@@ -404,7 +396,7 @@ const PerfilPage = () => {
                         setTelefoneValue(digits);
                       }}
                       placeholder="8195124779"
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-transparent outline-none placeholder:text-gray-400 dark:placeholder:text-[#888]"
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-[#555] bg-white dark:bg-[#333] text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#E86A24] focus:border-transparent outline-none placeholder:text-gray-400 dark:placeholder:text-[#888]"
                       autoFocus
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -412,7 +404,7 @@ const PerfilPage = () => {
                     <button
                       onClick={handleSaveTelefone}
                       disabled={savingTelefone}
-                      className="p-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7BC844] transition-colors disabled:opacity-50"
+                      className="p-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition-colors disabled:opacity-50"
                       title="Salvar"
                     >
                       {savingTelefone ? (
@@ -429,7 +421,7 @@ const PerfilPage = () => {
                     </p>
                     <button
                       onClick={() => setEditingTelefone(true)}
-                      className="p-2 text-[#E86A24] dark:text-[#00ff00] hover:bg-green-50 dark:hover:bg-[#00ff0015] rounded-lg transition-colors"
+                      className="p-2 text-[#E86A24] dark:text-[#EF9057] hover:bg-green-50 dark:hover:bg-[#E86A2415] rounded-lg transition-colors"
                       title="Editar telefone"
                     >
                       <Edit2 className="w-4 h-4" />
@@ -442,8 +434,8 @@ const PerfilPage = () => {
               </div>
             </div>
 
-            {/* Meu gerente (consultor) */}
-            {profile.status === 'consultor' && profile.gerente && (
+            {/* Meu gerente (captador) */}
+            {profile.status === 'captador' && profile.gerente && (
               <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
                 <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
                   <UserCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
@@ -513,7 +505,7 @@ const PerfilPage = () => {
                                 href={banca.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[#E86A24] dark:text-[#00ff00] hover:underline text-sm"
+                                className="text-[#E86A24] dark:text-[#EF9057] hover:underline text-sm"
                               >
                                 ({banca.url})
                               </a>
@@ -539,7 +531,7 @@ const PerfilPage = () => {
                 >
                   {loadingLoadBancas ? (
                     <div className="flex flex-col items-center justify-center py-8 gap-4">
-                      <Loader2 className="w-12 h-12 animate-spin text-[#E86A24] dark:text-[#00ff00]" />
+                      <Loader2 className="w-12 h-12 animate-spin text-[#E86A24] dark:text-[#EF9057]" />
                       <p className="text-gray-700 dark:text-gray-300 font-medium text-center">Estamos realizando a atualização das suas bancas.</p>
                       <p className="text-gray-500 dark:text-[#888] text-sm text-center">Isso pode levar alguns segundos. Aguarde...</p>
                     </div>
@@ -566,7 +558,7 @@ const PerfilPage = () => {
                         <button
                           type="button"
                           onClick={() => handleLoadBancas()}
-                          className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] dark:bg-[#00ff00] text-white hover:bg-[#7BC844] dark:hover:bg-[#00e600] rounded-xl font-medium transition-colors"
+                          className="flex items-center gap-2 px-4 py-2.5 bg-[#E86A24] dark:bg-[#E86A24] text-white hover:bg-[#D95E1B] dark:hover:bg-[#D95E1B] rounded-xl font-medium transition-colors"
                         >
                           Sim, atualizar
                         </button>
@@ -595,7 +587,7 @@ const PerfilPage = () => {
                       <X className="w-5 h-5" />
                     </button>
                   </div>
-                  <div className="flex-1 flex flex-col min-h-0 bg-white">
+                  <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-[#2a2a2a]">
                     {bancasLoaded && allBancas.length > 0 && (
                       <div className="p-4 pt-0 shrink-0">
                         <div className="relative">
@@ -605,7 +597,7 @@ const PerfilPage = () => {
                             value={bancaSearchTerm}
                             onChange={(e) => setBancaSearchTerm(e.target.value)}
                             placeholder="Pesquisar banca por nome ou URL..."
-                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-100 dark:bg-[#333] focus:bg-gray-50 dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] outline-none text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#888]"
+                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 dark:border-[#555] rounded-xl bg-gray-100 dark:bg-[#333] focus:bg-gray-50 dark:focus:bg-[#3a3a3a] focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#E86A24] focus:border-[#E86A24] dark:focus:border-[#E86A24] outline-none text-gray-900 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#888]"
                           />
                         </div>
                       </div>
@@ -614,14 +606,14 @@ const PerfilPage = () => {
                       {!bancasLoaded ? (
                         <div className="flex items-center justify-center py-8">
                           <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
-                          <span className="ml-2 text-gray-600">Carregando bancas...</span>
+                          <span className="ml-2 text-gray-600 dark:text-gray-300">Carregando bancas...</span>
                         </div>
                       ) : allBancas.length === 0 ? (
-                        <p className="text-gray-500 py-4">Nenhuma banca cadastrada no sistema. Peça ao administrador para cadastrar bancas.</p>
+                        <p className="text-gray-500 dark:text-gray-400 py-4">Nenhuma banca cadastrada no sistema. Peça ao administrador para cadastrar bancas.</p>
                       ) : (
                         <div className="space-y-2">
                           {filteredBancasModal.length === 0 ? (
-                            <p className="text-gray-600 py-4">Nenhuma banca encontrada para &quot;{bancaSearchTerm}&quot;</p>
+                            <p className="text-gray-600 dark:text-gray-400 py-4">Nenhuma banca encontrada para &quot;{bancaSearchTerm}&quot;</p>
                           ) : (
                             filteredBancasModal.map((banca) => (
                               <label
@@ -632,7 +624,7 @@ const PerfilPage = () => {
                                   type="checkbox"
                                   checked={selectedBancaIds.has(banca.id ?? '')}
                                   onChange={() => toggleBanca(banca.id ?? '')}
-                                  className="w-4 h-4 rounded border-gray-300 dark:border-[#555] text-[#E86A24] dark:text-[#00ff00] focus:ring-[#E86A24] dark:focus:ring-[#00ff00]"
+                                  className="w-4 h-4 rounded border-gray-300 dark:border-[#555] text-[#E86A24] dark:text-[#EF9057] focus:ring-[#E86A24] dark:focus:ring-[#E86A24]"
                                 />
                                 <span className="text-gray-900 dark:text-white font-medium">{banca.name}</span>
                                 {banca.url && (
@@ -646,7 +638,7 @@ const PerfilPage = () => {
                         </div>
                       )}
                       {error && (
-                        <p className="mt-3 text-sm text-red-600">{error}</p>
+                        <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
                       )}
                     </div>
                   </div>
@@ -662,7 +654,7 @@ const PerfilPage = () => {
                       type="button"
                       onClick={handleSaveBancas}
                       disabled={savingBancas || !bancasLoaded || allBancas.length === 0}
-                      className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] dark:bg-[#00ff00] text-white rounded-xl hover:bg-[#7BC844] dark:hover:bg-[#00e600] transition-colors disabled:opacity-50 font-medium"
+                      className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] dark:bg-[#E86A24] text-white rounded-xl hover:bg-[#D95E1B] dark:hover:bg-[#D95E1B] transition-colors disabled:opacity-50 font-medium"
                     >
                       {savingBancas ? (
                         <>
@@ -684,7 +676,7 @@ const PerfilPage = () => {
             {/* Tema (Light / Dark) */}
             <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-[#333] rounded-xl">
               <div className="p-2 bg-gray-100 dark:bg-[#404040] rounded-lg">
-                <Sun className="w-5 h-5 text-gray-600 dark:text-[#00ff00]" />
+                <Sun className="w-5 h-5 text-gray-600 dark:text-[#EF9057]" />
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-2">Aparência</label>
@@ -694,7 +686,7 @@ const PerfilPage = () => {
                     onClick={() => setTheme('light')}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'light'
-                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white shadow-md'
+                        ? 'bg-[#E86A24] dark:bg-[#E86A24] text-white shadow-md'
                         : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
                     }`}
                   >
@@ -706,7 +698,7 @@ const PerfilPage = () => {
                     onClick={() => setTheme('dark')}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'dark'
-                        ? 'bg-[#E86A24] dark:bg-[#00ff00] text-white shadow-md'
+                        ? 'bg-[#E86A24] dark:bg-[#E86A24] text-white shadow-md'
                         : 'bg-gray-200 dark:bg-[#404040] text-gray-700 dark:text-[#ccc] hover:bg-gray-300 dark:hover:bg-[#4a4a4a]'
                     }`}
                   >

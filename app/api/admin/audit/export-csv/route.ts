@@ -15,7 +15,7 @@ function escapeCsv(s: string): string {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'gerente']);
     const { searchParams } = req.nextUrl;
     const dateFrom = searchParams.get('date_from') || undefined;
     const dateTo = searchParams.get('date_to') || undefined;

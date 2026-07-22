@@ -9,7 +9,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function GET(req: NextRequest) {
   try {
-    const { userId } = await requireStatus(req, ['consultor']);
+    const { userId } = await requireStatus(req, ['captador']);
 
     // Busca leads do consultor (usando searches como base de leads)
     const { data: leads, error } = await supabaseServiceRole

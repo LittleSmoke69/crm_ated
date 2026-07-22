@@ -150,7 +150,7 @@ export async function POST(
           full_name: submission.full_name || null,
           telefone: submission.phone ? submission.phone.trim() : null,
           password_hash: passwordHash,
-          status: 'consultor',
+          status: 'captador',
           enroller: gerenteId,
           created_at: new Date().toISOString(),
         })

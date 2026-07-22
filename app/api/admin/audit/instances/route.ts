@@ -11,7 +11,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'gerente']);
 
     const set = new Set<string>();
 

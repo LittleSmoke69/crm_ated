@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       const rows = (data ?? []) as ContactRow[];
       const profile = await getUserProfile(userId);
       const st = (profile?.status || '').toLowerCase();
-      if (st === 'consultor' || st === 'gerente') {
+      if (st === 'captador' || st === 'gerente') {
         const assigned = await getBancasDoUsuario(userId);
         const allowedIds = new Set(assigned.map((b) => b.id));
         const filtered = rows.filter((r) => contactVisibleForConsultorGerenteBancas(r, allowedIds));
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
     if (c) {
       const profile = await getUserProfile(userId);
       const st = (profile?.status || '').toLowerCase();
-      if (st === 'consultor' || st === 'gerente') {
+      if (st === 'captador' || st === 'gerente') {
         const assigned = await getBancasDoUsuario(userId);
         const allowedIds = new Set(assigned.map((b) => b.id));
         if (!contactVisibleForConsultorGerenteBancas(c, allowedIds)) {

@@ -193,7 +193,7 @@ export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const profile = await getUserProfile(userId);
-    if (!profile || (profile.status !== 'consultor' && profile.status !== 'gerente')) {
+    if (!profile || (profile.status !== 'captador' && profile.status !== 'gerente')) {
       return errorResponse(
         'Sincronização com o CRM está disponível apenas para consultores e gerentes.',
         403

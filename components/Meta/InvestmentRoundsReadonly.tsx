@@ -295,7 +295,7 @@ export default function InvestmentRoundsReadonly({
             onChange={(e) => setFilterConsultorId(e.target.value)}
             className="min-w-[200px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
           >
-            <option value="">Todos os consultores</option>
+            <option value="">Todos os captadores</option>
             {consultors.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.full_name || c.email}
@@ -310,7 +310,7 @@ export default function InvestmentRoundsReadonly({
         <div className="flex items-center justify-between text-xs mb-1.5">
           <span className="font-semibold text-gray-700 dark:text-gray-200">
             {showAggregate ? 'Total da equipe' : 'Progresso da meta de gasto'}
-            {showAggregate && filterConsultorId ? ' (consultor selecionado)' : ''}
+            {showAggregate && filterConsultorId ? ' (captador selecionado)' : ''}
           </span>
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#E86A24]" /> : null}
         </div>

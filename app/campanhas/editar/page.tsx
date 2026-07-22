@@ -39,11 +39,11 @@ const EditCampaignsPage = () => {
     }
   }, [userId, loadInitialData]);
 
-  // Verifica se o usuário é suporte
+  // Verifica se o usuário é admin (antigo cargo "suporte" foi absorvido por admin)
   useEffect(() => {
     const checkUserStatus = async () => {
       if (!userId) return;
-      
+
       try {
         const response = await fetch('/api/user/profile', {
           method: 'GET',
@@ -56,8 +56,8 @@ const EditCampaignsPage = () => {
 
         if (response.ok) {
           const result = await response.json();
-          if (result.success && result.data?.status !== 'suporte') {
-            // Redireciona se não for suporte
+          if (result.success && !['admin', 'super_admin'].includes(result.data?.status)) {
+            // Redireciona se não for admin/super_admin
             window.location.href = withTenantSlug('/');
           }
         }
@@ -293,9 +293,9 @@ const EditCampaignsPage = () => {
         <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 p-4 rounded-xl flex items-start gap-3">
           <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div>
-            <h3 className="font-semibold text-lg mb-1">Permissões de Suporte</h3>
+            <h3 className="font-semibold text-lg mb-1">Permissões de Administração</h3>
             <p className="text-sm dark:text-blue-200/90">
-              Como usuário de suporte, você pode visualizar informações das campanhas, pausar/retomar campanhas, 
+              Como administrador, você pode visualizar informações das campanhas, pausar/retomar campanhas,
               verificar instâncias e editar configurações das campanhas.
             </p>
           </div>

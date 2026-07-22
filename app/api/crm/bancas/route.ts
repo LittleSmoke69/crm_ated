@@ -296,7 +296,7 @@ export async function getBancasVisiveis(
   }
 
   // Consultor (sem forceSearchAllBancas): prioriza user_bancas para não fazer filtro por API ao carregar kanban/transferidos.
-  if (profile?.status === 'consultor' && !forceSearchAllBancas) {
+  if (profile?.status === 'captador' && !forceSearchAllBancas) {
     const bancasDoUsuario = await getBancasDoUsuario(userId);
     if (bancasDoUsuario.length > 0) {
       crmLog('[CRM Bancas] Consultor: usando user_bancas (', bancasDoUsuario.length, ' bancas) — sem filtro por API');
@@ -310,7 +310,7 @@ export async function getBancasVisiveis(
   // Consultor ou Gerente (página /perfil — botão "Carregar bancas"): filtro por API externa em TODAS as bancas.
   // total-indicateds-by-consultant?consultant=email — 200 = cadastrado (apto); 404 = não cadastrado (não apto).
   // O curl de cada requisição é exibido no terminal.
-  if ((profile?.status === 'consultor' || profile?.status === 'gerente') && email && apiKey) {
+  if ((profile?.status === 'captador' || profile?.status === 'gerente') && email && apiKey) {
     const ctxPerfil = forceSearchAllBancas ? ' [página /perfil — botão Carregar bancas]' : '';
     crmLog('[CRM Bancas] Busca em TODAS as bancas (filtro total-indicateds-by-consultant)' + ctxPerfil + ' | perfil:', profile?.status, '| total:', bancas.length, '| email:', email.slice(0, 3) + '***');
     const bancasVisiveis: BancaRow[] = [];
@@ -350,7 +350,7 @@ export async function getBancasVisiveis(
     return fallback.length > 0 ? fallback : bancas;
   }
 
-  if (profile?.status === 'consultor' || profile?.status === 'gerente') {
+  if (profile?.status === 'captador' || profile?.status === 'gerente') {
     if (forceSearchAllBancas && (!apiKey || !email)) {
       crmLog('[CRM Bancas] Carregar bancas (' + profile?.status + '): CRM_API_KEY ou email ausente — curl não será exibido. Fallback: user_bancas ou todas.');
     }

@@ -158,7 +158,7 @@ export async function POST(
           full_name: sub.full_name || null,
           telefone: (sub.phone || '').trim() || null,
           password_hash: passwordHash,
-          status: 'consultor',
+          status: 'captador',
           enroller: gerenteId,
           created_at: new Date().toISOString(),
         })
@@ -216,7 +216,7 @@ export async function POST(
           const phoneNorm = normalizePhone(sub.phone);
           if (phoneNorm.length >= 12) {
             const numberOnly = phoneNorm.includes('@') ? phoneNorm.replace(/@.*$/, '') : phoneNorm;
-            const welcomeMsg = `Olá, ${sub.full_name || 'consultor'}! Seu cadastro foi aprovado. Você foi atribuído à banca *${bancaName.replace(/\*/g, '')}* e seu gerente *${gerenteName}* entrará em contato em breve.`;
+            const welcomeMsg = `Olá, ${sub.full_name || 'captador'}! Seu cadastro foi aprovado. Você foi atribuído à banca *${bancaName.replace(/\*/g, '')}* e seu gerente *${gerenteName}* entrará em contato em breve.`;
             await evolutionService.sendText(
               evolution.instance_name,
               evolution.apikey,

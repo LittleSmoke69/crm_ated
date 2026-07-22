@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireStatusOrSidebarPermission(
       req,
-      ['consultor', 'super_admin', 'admin', 'gerente', 'gestor', 'dono_banca'],
+      ['captador', 'super_admin', 'admin', 'gerente'],
       'meu_desempenho'
     );
 
@@ -79,14 +79,14 @@ export async function GET(req: NextRequest) {
       const ok = await gerenteCanViewConsultorPerformance(userId, consultorIdFilter);
       if (!ok) {
         return errorResponse(
-          'Acesso negado: você só pode ver o desempenho seu e dos seus consultores.',
+          'Acesso negado: você só pode ver o desempenho seu e dos seus captadores.',
           403
         );
       }
       effectiveUserId = consultorIdFilter;
     } else if (isAdminOrSuperAdmin && consultorIdFilter) {
       const targetProfile = await getUserProfile(consultorIdFilter);
-      if (['consultor', 'gerente', 'admin', 'gestor'].includes(String(targetProfile?.status || ''))) {
+      if (['captador', 'gerente', 'admin'].includes(String(targetProfile?.status || ''))) {
         effectiveUserId = consultorIdFilter;
       }
     }
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
         bancaUrl = scopeForDefault.defaultBancaUrl;
       } else {
         const hierarchyPath = await getHierarchyPath(effectiveUserId);
-        const donoBanca = hierarchyPath.find((p) => p.status === 'dono_banca');
+        const donoBanca = hierarchyPath.find((p) => p.status === 'gerente');
         if (donoBanca) {
           const { data: donoProfile } = await supabaseServiceRole
             .from('profiles')
@@ -114,28 +114,7 @@ export async function GET(req: NextRequest) {
       }
     }
     if (isAdminOrSuperAdmin && consultorIdFilter && !bancaUrl) {
-      return errorResponse('Para visualizar desempenho de um consultor, informe banca_url e consultor_id.', 400);
-    }
-
-    if (
-      consultorIdFilter &&
-      (profile?.status === 'dono_banca' || profile?.status === 'gestor') &&
-      bancaUrl
-    ) {
-      const scopedCheck = await getDashboardScopeForUser({ userId, bancaUrl });
-      if (!scopedCheck.allowed) {
-        return errorResponse(
-          scopedCheck.reason === 'banca_out_of_scope'
-            ? 'Esta banca está fora do seu escopo.'
-            : 'Acesso negado.',
-          403
-        );
-      }
-      const inScope = scopedCheck.consultantProfiles.some((p) => p.id === consultorIdFilter);
-      if (!inScope) {
-        return errorResponse('Perfil fora do seu escopo para esta banca.', 403);
-      }
-      effectiveUserId = consultorIdFilter;
+      return errorResponse('Para visualizar desempenho de um captador, informe banca_url e consultor_id.', 400);
     }
 
     const consultorProfile = await getUserProfile(effectiveUserId);
@@ -218,7 +197,7 @@ export async function GET(req: NextRequest) {
       });
       const countsByStatus = consultantProfilesScope.reduce(
         (acc, p) => {
-          const key = String(p.status || 'consultor');
+          const key = String(p.status || 'captador');
           acc[key] = (acc[key] || 0) + 1;
           return acc;
         },
@@ -233,7 +212,7 @@ export async function GET(req: NextRequest) {
 
       for (let i = 0; i < consultantProfilesScope.length; i++) {
         const profileScope = consultantProfilesScope[i];
-        const statusKey = String(profileScope.status || 'consultor');
+        const statusKey = String(profileScope.status || 'captador');
         const remainingTotalBefore = consultantProfilesScope.length - i;
         console.log('[Consultor Dashboard API] Bets/deposits consultant request', {
           index: i + 1,

@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
       });
 
     // Atribui bancas ao consultor/gerente (opcional; permite várias bancas e banca sem dono)
-    if ((status === 'consultor' || status === 'gerente') && Array.isArray(bancaIds) && bancaIds.length > 0) {
+    if ((status === 'captador' || status === 'gerente') && Array.isArray(bancaIds) && bancaIds.length > 0) {
       const validIds = bancaIds.filter((id: unknown) => typeof id === 'string');
       if (validIds.length > 0) {
         const { data: existing } = await supabaseServiceRole

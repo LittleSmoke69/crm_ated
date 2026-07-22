@@ -204,7 +204,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
-        setError(data.error || 'Erro ao atualizar consultor');
+        setError(data.error || 'Erro ao atualizar captador');
         return;
       }
       await loadAll();
@@ -222,7 +222,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
             Instâncias de atendimento (Evolution)
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Crie instâncias vinculadas ao webhook Zaploto e atribua consultores. O atendimento em tempo real é feito em{' '}
+            Crie instâncias vinculadas ao webhook Zaploto e atribua captadores. O atendimento em tempo real é feito em{' '}
             <Link href="/chat-atendimento" className="text-[#E86A24] font-medium underline">
               Chat Atendimento
             </Link>
@@ -317,11 +317,11 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-              Consultores (opcional)
+              Captadores (opcional)
             </label>
             <div className={`max-h-32 overflow-y-auto px-2 py-2 space-y-1.5 text-sm ${zapInput}`}>
               {consultores.length === 0 ? (
-                <span className="text-gray-500 text-xs">Nenhum consultor listado</span>
+                <span className="text-gray-500 text-xs">Nenhum captador listado</span>
               ) : (
                 consultores.map((c) => (
                   <label key={c.id} className="flex items-center gap-2 cursor-pointer">
@@ -381,7 +381,7 @@ export default function AtendimentoChatInstancesPanel({ userId, mode }: Props) {
                   <th className="px-4 py-3 font-medium">Instância</th>
                   {mode === 'admin' && <th className="px-4 py-3 font-medium">Gerente</th>}
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Consultores</th>
+                  <th className="px-4 py-3 font-medium">Captadores</th>
                 </tr>
               </thead>
               <tbody>

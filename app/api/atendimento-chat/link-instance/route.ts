@@ -12,12 +12,7 @@ import { validateConsultorIdsForAtendimentoAssignment } from '@/lib/server/atend
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, [
-      'gerente',
-      'dono_banca',
-      'super_admin',
-      'admin',
-    ]);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'super_admin', 'admin']);
 
     const body = (await req.json().catch(() => ({}))) as {
       evolution_instance_id?: string;

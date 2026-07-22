@@ -18,7 +18,7 @@ export async function GET(
   { params }: { params: Promise<{ consultorId: string }> }
 ) {
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'admin']);
     const { consultorId } = await params;
 
     let requesterIdForAccess = userId;

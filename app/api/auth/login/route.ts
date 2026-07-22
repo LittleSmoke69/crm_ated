@@ -4,6 +4,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getTenantByIdOrSlug } from '@/lib/services/zaploto-tenant-service';
 import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { appendSessionCookie } from '@/lib/server/session-token';
+import { normalizeStatus } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 
 const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
@@ -46,6 +47,16 @@ export async function POST(req: NextRequest) {
       return errorResponse('Credenciais inválidas.', 401);
     }
 
+    // Usuário desativado (user_settings.is_active = false) não pode entrar
+    const { data: settings } = await supabaseServiceRole
+      .from('user_settings')
+      .select('is_active')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (settings?.is_active === false) {
+      return errorResponse('Conta desativada. Fale com o administrador.', 403);
+    }
+
     if (tenantSlug) {
       const tenant = await getTenantByIdOrSlug(tenantSlug);
       if (!tenant) {
@@ -68,7 +79,7 @@ export async function POST(req: NextRequest) {
     const res = successResponse({
       userId: user.id,
       email: user.email,
-      status: user.status ?? null,
+      status: normalizeStatus(user.status) ?? null,
       zaploto_id:
         (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID,
     });

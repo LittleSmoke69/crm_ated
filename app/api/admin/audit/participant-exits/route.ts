@@ -21,7 +21,7 @@ type ListMode = 'recent' | 'unique_phones' | 'groups_evasion';
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'gerente']);
     const { searchParams } = req.nextUrl;
 
     const bancaId = searchParams.get('banca_id') || undefined;

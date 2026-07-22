@@ -8,6 +8,22 @@ import { getInternalAppPathname } from '@/lib/utils/white-label-path';
 /** Confirmação pontual de que o userId ainda existe em `profiles` (evita GET /profile a cada navegação admin). */
 const ADMIN_PROFILE_SESSION_OK_KEY = 'zaploto_v1_admin_profile_session_ok_uid';
 
+/** Cargos legados → cargos atuais (super_admin | admin | gerente | captador). */
+const LEGACY_STATUS_MAP: Record<string, string> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+/** Normaliza status legado (sessões antigas em sessionStorage / respostas antigas da API). */
+function normalizeLegacyStatus(status: string | null | undefined): string | null {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return null;
+  return LEGACY_STATUS_MAP[raw] ?? raw;
+}
+
 /** Remove artefatos locais de sessão (cookie + storage) quando o backend indica 401. */
 function clearClientAuthSlice() {
   if (typeof window === 'undefined') return;
@@ -52,7 +68,7 @@ export function useRequireAuth() {
       sessionStorage.getItem('user_id') ||
       sessionStorage.getItem('profile_id') ||
       localStorage.getItem('profile_id');
-    const statusFromStorage = sessionStorage.getItem('profile_status')?.trim() || null;
+    const statusFromStorage = normalizeLegacyStatus(sessionStorage.getItem('profile_status'));
 
     // Se estiver numa rota pública (incluindo vitrine da Academy), não redireciona para login
     if (publicPaths.includes(routePath) || isAcademyPublic) {
@@ -99,7 +115,9 @@ export function useRequireAuth() {
               }
             }
             const st =
-              json.success && json.data?.status != null ? String(json.data.status).trim() : null;
+              json.success && json.data?.status != null
+                ? normalizeLegacyStatus(String(json.data.status))
+                : null;
             if (st) {
               setUserStatus(st);
               try {

@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart3, Loader2, RefreshCw, Calendar } from 'lucide-react';
+import { BarChart3, Calendar, RefreshCw, Tag } from 'lucide-react';
+import { Banner, Button, EmptyState, Skeleton, TableSkeletonRows } from '@/components/ui';
 import {
   zapInput,
   zapStatCard,
@@ -111,6 +112,7 @@ export default function ChatGestaoTagsReport({
           <select
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
+            aria-label="Filtrar por etiqueta"
             className={`px-2 py-1.5 text-sm ${zapInput}`}
           >
             <option value="">Todas as etiquetas</option>
@@ -120,11 +122,12 @@ export default function ChatGestaoTagsReport({
               </option>
             ))}
           </select>
-          <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+          <Calendar className="w-4 h-4 text-gray-500 shrink-0" aria-hidden="true" />
           <input
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
+            aria-label="Data inicial"
             className={`px-2 py-1.5 text-sm ${zapInput}`}
           />
           <span className="text-sm text-gray-500">até</span>
@@ -132,24 +135,38 @@ export default function ChatGestaoTagsReport({
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
+            aria-label="Data final"
             className={`px-2 py-1.5 text-sm ${zapInput}`}
           />
-          <button
-            type="button"
+          <Button
+            size="sm"
             onClick={() => fetchReport()}
-            disabled={loading}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#E86A24] text-white disabled:opacity-60"
+            loading={loading}
+            icon={<RefreshCw className="w-4 h-4" />}
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Atualizar
-          </button>
+          </Button>
         </div>
       </div>
 
       {loading && !report ? (
-        <div className="flex justify-center py-10">
-          <Loader2 className="w-7 h-7 animate-spin text-gray-500" />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className={zapStatCard}>
+                <Skeleton className="mb-2 h-3 w-24" />
+                <Skeleton className="h-6 w-12" />
+              </div>
+            ))}
+          </div>
+          <div className={zapTableWrap}>
+            <table className="w-full min-w-[680px] text-sm">
+              <tbody>
+                <TableSkeletonRows rows={5} cols={5} />
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : report ? (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -176,7 +193,8 @@ export default function ChatGestaoTagsReport({
                   key={item.tag}
                   type="button"
                   onClick={() => setTagFilter(item.tag === tagFilter ? '' : item.tag)}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                  aria-pressed={tagFilter === item.tag}
+                  className={`min-h-[32px] rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                     tagFilter === item.tag
                       ? 'border-[#E86A24] bg-[#E86A24] text-white'
                       : 'border-[#404040] bg-[#333] text-gray-300 hover:border-[#E86A24]'
@@ -189,12 +207,15 @@ export default function ChatGestaoTagsReport({
           )}
 
           {report.conversations.length === 0 ? (
-            <p className="text-sm text-gray-500 py-6 text-center">
-              Nenhuma conversa com etiqueta encontrada no período.
-            </p>
+            <EmptyState
+              compact
+              icon={<Tag className="w-5 h-5" />}
+              title="Nenhuma conversa com etiqueta encontrada no período"
+              description="Ajuste o período ou o filtro de etiqueta, ou marque conversas no chat para vê-las aqui."
+            />
           ) : (
             <div className={zapTableWrap}>
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[680px] text-sm">
                 <thead>
                   <tr className={zapTableHead}>
                     <th className="py-3 px-4 font-medium">Contato</th>
@@ -222,21 +243,21 @@ export default function ChatGestaoTagsReport({
                           ))}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-gray-600 dark:text-gray-300">
+                      <td className="py-3 px-4 text-gray-300">
                         {conv.attendant_name || '—'}
                       </td>
                       <td className="py-3 px-4">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                             conv.attendance_status === 'resolvido'
-                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-                              : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                              ? 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
                           }`}
                         >
                           {statusLabel(conv.attendance_status)}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                      <td className="py-3 px-4 text-gray-300 whitespace-nowrap">
                         {formatDateTime(conv.last_message_at)}
                       </td>
                     </tr>
@@ -247,7 +268,22 @@ export default function ChatGestaoTagsReport({
           )}
         </>
       ) : (
-        <p className="text-sm text-gray-500 py-6 text-center">Não foi possível carregar o relatório.</p>
+        <Banner
+          variant="error"
+          title="Não foi possível carregar o relatório."
+          action={
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => fetchReport()}
+              icon={<RefreshCw className="w-4 h-4" />}
+            >
+              Tentar novamente
+            </Button>
+          }
+        >
+          Verifique sua conexão e tente novamente.
+        </Banner>
       )}
     </div>
   );

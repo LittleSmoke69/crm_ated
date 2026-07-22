@@ -5,12 +5,8 @@
 export const ZAPLOTO_ACADEMY_ROLE_OPTIONS: { code: string; label: string }[] = [
   { code: 'super_admin', label: 'Super Admin' },
   { code: 'admin', label: 'Admin' },
-  { code: 'suporte', label: 'Suporte' },
-  { code: 'auditoria', label: 'Auditoria' },
-  { code: 'dono_banca', label: 'Dono de Banca' },
-  { code: 'gestor', label: 'Gestor de Tráfego' },
   { code: 'gerente', label: 'Gerente' },
-  { code: 'consultor', label: 'Consultor' },
+  { code: 'captador', label: 'Captador' },
 ];
 
 export function isLessonVisibleForProfile(

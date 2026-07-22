@@ -38,7 +38,7 @@ const Dashboard = () => {
     loadInitialData,
   } = useDashboardData();
 
-  // Consultores: redireciona para o próprio dashboard (/consultor) em segundo plano
+  // Captadores: redireciona para o próprio dashboard (/consultor) em segundo plano
   useEffect(() => {
     if (checking || !userId) return;
 
@@ -55,10 +55,8 @@ const Dashboard = () => {
 
         if (response.ok) {
           const result = await response.json();
-          if (result.success && result.data?.status === 'consultor') {
+          if (result.success && result.data?.status === 'captador') {
             router.replace('/consultor');
-          } else if (result.success && result.data?.status === 'suporte') {
-            router.replace('/crm/kanban');
           }
         }
       } catch (error) {

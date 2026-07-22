@@ -30,7 +30,7 @@ function parseSubject(data: any): string | null {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'dono_banca', 'gerente', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin', 'gerente']);
     const { searchParams } = req.nextUrl;
     const groupId = searchParams.get('group_id');
     const instanceName = searchParams.get('instance_name');
@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin']);
     const body = await req.json().catch(() => ({}));
     const instanceName = body?.instanceName ?? body?.instance_name;
     const groupJids = Array.isArray(body?.groupJids) ? body.groupJids : Array.isArray(body?.group_jids) ? body.group_jids : [];

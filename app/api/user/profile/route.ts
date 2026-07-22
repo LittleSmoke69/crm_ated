@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
     const bancas = await getUserBancas(userId);
 
     let needs_bancas_choice = false;
-    const canHaveBancas = ['consultor', 'gerente', 'gestor', 'super_admin'].includes(profile.status || '');
+    const canHaveBancas = ['captador', 'gerente', 'super_admin'].includes(profile.status || '');
     if (canHaveBancas) {
       const { data: ubRow } = await supabaseServiceRole
         .from('user_bancas')

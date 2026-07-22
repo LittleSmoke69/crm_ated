@@ -5,21 +5,21 @@ import { withTenantSlug } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import { useDashboardData, WhatsAppInstance, Contact } from '@/hooks/useDashboardData';
-import { Users, Plus, Loader2, CheckCircle2, XCircle, UserPlus, Menu, X, AlertCircle, Info } from 'lucide-react';
+import { Users, Plus, Loader2, CheckCircle2, XCircle, UserPlus, Menu } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { ToastProvider, useToast } from '@/components/ui/ToastProvider';
 
-const GroupsPage = () => {
+const GroupsPageInner = () => {
   const { checking } = useRequireAuth();
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const {
     userId,
     instances,
     contacts,
-    showToast,
     loadInitialData,
-    toasts,
-    setToasts,
   } = useDashboardData();
+  const toast = useToast();
+  const showToast = toast.show;
 
   const [selectedInstance, setSelectedInstance] = useState('');
   const [subject, setSubject] = useState('');
@@ -171,9 +171,9 @@ const GroupsPage = () => {
 
   if (checking || !userId) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Carregando...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1a1a1a]">
+        <div className="bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg p-6 border border-gray-200 dark:border-gray-600 text-center">
+          <p className="text-gray-700 dark:text-gray-200 font-medium">Carregando...</p>
         </div>
       </div>
     );
@@ -187,40 +187,17 @@ const GroupsPage = () => {
 
   return (
     <Layout onSignOut={handleSignOut}>
-      {/* Toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
-        {toasts.map(toast => (
-          <div
-            key={toast.id}
-            className={`flex items-center gap-3 min-w-[320px] px-6 py-4 rounded-lg shadow-lg text-white ${
-              toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-amber-500'
-            }`}
-          >
-            {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
-            {toast.type === 'error' && <AlertCircle className="w-5 h-5 flex-shrink-0" />}
-            {toast.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
-            <p className="flex-1 font-medium">{toast.message}</p>
-            <button
-              onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
-              className="hover:bg-white/20 rounded p-1 transition"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
-      </div>
-
       <div className="space-y-6 w-full">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">CRM - Grupos</h1>
-            <p className="text-sm sm:text-base text-gray-600">Crie grupos via Evolution API</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mb-2">CRM - Grupos</h1>
+            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400">Crie grupos via Evolution API</p>
           </div>
           {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
           <div className="lg:hidden flex-shrink-0">
             <button
               onClick={() => setIsMobileOpen(!isMobileOpen)}
-              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 transition text-gray-600 shadow-md bg-white"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] transition text-gray-600 dark:text-gray-300 shadow-md bg-white dark:bg-[#2a2a2a] dark:border dark:border-gray-600"
               aria-label="Toggle sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -228,13 +205,13 @@ const GroupsPage = () => {
           </div>
         </div>
 
-        <div className="bg-gray-100 rounded-xl shadow-md p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Criar Novo Grupo</h2>
+        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-gray-200 dark:border-gray-600">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Criar Novo Grupo</h2>
 
           <div className="space-y-4">
             {/* Seleção de Instância */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Instância *
               </label>
               <select
@@ -259,7 +236,7 @@ const GroupsPage = () => {
 
             {/* Nome do Grupo */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Nome do Grupo (Subject) *
               </label>
               <input
@@ -274,7 +251,7 @@ const GroupsPage = () => {
 
             {/* Descrição */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Descrição (Opcional)
               </label>
               <textarea
@@ -361,6 +338,12 @@ const GroupsPage = () => {
     </Layout>
   );
 };
+
+const GroupsPage = () => (
+  <ToastProvider>
+    <GroupsPageInner />
+  </ToastProvider>
+);
 
 export default GroupsPage;
 

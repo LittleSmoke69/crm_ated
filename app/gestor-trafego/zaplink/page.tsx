@@ -3,20 +3,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import Layout from '@/components/Layout';
+import { ConfirmDialog, ToastProvider, useToast } from '@/components/ui';
 import {
   FileText,
   Users,
   User,
-  BarChart3,
   Check,
   Copy,
   ExternalLink,
   Loader2,
-  AlertCircle,
   ArrowRightLeft,
   ClipboardList,
   Trash2,
-  X,
 } from 'lucide-react';
 
 interface ZaplinkForm {
@@ -84,7 +82,16 @@ interface ConsultantRequest {
 const SUBMISSIONS_LIMIT = 20;
 
 export default function GestorTrafegoZaplinkPage() {
+  return (
+    <ToastProvider>
+      <GestorTrafegoZaplinkContent />
+    </ToastProvider>
+  );
+}
+
+function GestorTrafegoZaplinkContent() {
   const { checking, userId } = useRequireAuth();
+  const toast = useToast();
   const [forms, setForms] = useState<ZaplinkForm[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [submissionsTotal, setSubmissionsTotal] = useState(0);
@@ -96,7 +103,8 @@ export default function GestorTrafegoZaplinkPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'forms' | 'submissions' | 'requests'>('forms');
   const [submissionsFilter, setSubmissionsFilter] = useState<'pending' | 'assigned'>('pending');
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Submission | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [reassignModal, setReassignModal] = useState<Submission | null>(null);
   const [reassignBanca, setReassignBanca] = useState('');
   const [reassignGerente, setReassignGerente] = useState('');
@@ -108,8 +116,8 @@ export default function GestorTrafegoZaplinkPage() {
   const [creatingForm, setCreatingForm] = useState(false);
 
   const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 4000);
+    if (type === 'success') toast.success(message);
+    else toast.error(message);
   };
 
   const loadData = useCallback(async () => {
@@ -240,9 +248,15 @@ export default function GestorTrafegoZaplinkPage() {
     }
   };
 
-  const handleDeletePending = async (s: Submission) => {
+  const handleDeletePending = (s: Submission) => {
     if (s.status !== 'pending') return;
-    if (!window.confirm(`Apagar o lead "${s.full_name}" (${s.email})? Esta ação não pode ser desfeita.`)) return;
+    setDeleteTarget(s);
+  };
+
+  const confirmDeletePending = async () => {
+    const s = deleteTarget;
+    if (!s) return;
+    setDeleting(true);
     try {
       const res = await fetch(`/api/gestor-trafego/zaplink/submissions/${s.id}`, {
         method: 'DELETE',
@@ -251,12 +265,15 @@ export default function GestorTrafegoZaplinkPage() {
       const json = await res.json();
       if (json.success) {
         showToast('success', json.message || 'Lead removido');
+        setDeleteTarget(null);
         loadData();
       } else {
         showToast('error', json.error || 'Erro ao apagar');
       }
     } catch {
       showToast('error', 'Erro ao apagar');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -299,7 +316,7 @@ export default function GestorTrafegoZaplinkPage() {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="w-8 h-8 animate-spin text-green-500" />
+          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
         </div>
       </Layout>
     );
@@ -311,23 +328,6 @@ export default function GestorTrafegoZaplinkPage() {
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Zaplink — Meus formulários e leads</h1>
         </div>
-
-        {toast && (
-          <div
-            className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg flex items-center gap-2 ${
-              toast.type === 'success'
-                ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200'
-                : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-            }`}
-          >
-            {toast.type === 'success' ? (
-              <Check className="w-5 h-5" />
-            ) : (
-              <AlertCircle className="w-5 h-5" />
-            )}
-            {toast.message}
-          </div>
-        )}
 
         {metrics && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
@@ -369,7 +369,7 @@ export default function GestorTrafegoZaplinkPage() {
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 font-medium border-b-2 -mb-px transition ${
                 activeTab === tab
-                  ? 'border-green-500 text-green-600 dark:text-green-400'
+                  ? 'border-[#E86A24] text-[#E86A24]'
                   : 'border-transparent text-gray-600 dark:text-[#aaa] hover:text-gray-900 dark:hover:text-white'
               }`}
             >
@@ -386,14 +386,17 @@ export default function GestorTrafegoZaplinkPage() {
               <button
                 type="button"
                 onClick={() => setShowCreateFormModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
+                className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-xl hover:bg-[#D95E1B] text-sm font-medium"
               >
                 <FileText className="w-4 h-4" />
                 Criar formulário
               </button>
             </div>
             {loading ? (
-              <div className="p-8 text-center text-gray-500">Carregando...</div>
+              <div className="p-8 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
+                Carregando...
+              </div>
             ) : forms.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
                 Nenhum formulário ainda. Crie um novo com o botão acima ou o admin pode transferir formulários para você em Admin → Zaplink.
@@ -480,7 +483,10 @@ export default function GestorTrafegoZaplinkPage() {
             </div>
             <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
               {loading ? (
-                <div className="p-8 text-center text-gray-500">Carregando...</div>
+                <div className="p-8 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
+                Carregando...
+              </div>
               ) : submissions.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">
                   {submissionsFilter === 'pending' ? 'Nenhum lead pendente' : 'Nenhum lead atribuído'}
@@ -606,7 +612,10 @@ export default function GestorTrafegoZaplinkPage() {
         {activeTab === 'requests' && (
           <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-x-auto">
             {consultantRequestsLoading ? (
-              <div className="p-8 text-center text-gray-500">Carregando...</div>
+              <div className="p-8 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" />
+                Carregando...
+              </div>
             ) : consultantRequests.length === 0 ? (
               <div className="p-8 text-center text-gray-500">Nenhuma solicitação de consultor (de gerentes que receberam leads dos seus formulários).</div>
             ) : (
@@ -646,6 +655,21 @@ export default function GestorTrafegoZaplinkPage() {
             )}
           </div>
         )}
+
+        {/* Confirmação de exclusão de lead pendente */}
+        <ConfirmDialog
+          open={!!deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={confirmDeletePending}
+          loading={deleting}
+          title="Apagar lead"
+          description={
+            deleteTarget
+              ? `Apagar o lead "${deleteTarget.full_name}" (${deleteTarget.email})? Esta ação não pode ser desfeita.`
+              : undefined
+          }
+          confirmLabel="Apagar"
+        />
 
         {/* Modal Mover */}
         {reassignModal && (
@@ -781,7 +805,7 @@ export default function GestorTrafegoZaplinkPage() {
                   <button
                     type="submit"
                     disabled={creatingForm}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+                    className="px-4 py-2 bg-[#E86A24] text-white rounded-xl hover:bg-[#D95E1B] disabled:opacity-50 flex items-center gap-2"
                   >
                     {creatingForm && <Loader2 className="w-4 h-4 animate-spin" />}
                     Criar

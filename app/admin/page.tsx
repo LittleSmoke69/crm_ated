@@ -88,10 +88,14 @@ import { Zap } from 'lucide-react';
 import { Tag as TagIcon2 } from 'lucide-react';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
+import UsersManagementSection from '@/components/Admin/UsersManagementSection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
 import { TenantSwitcher } from '@/components/Admin/TenantSwitcher';
+import { ConfirmDialog, Skeleton, StatCardSkeleton, CardSkeleton } from '@/components/ui';
+import ToastContainer from '@/components/Toast/ToastContainer';
+import type { Toast as ToastMessage } from '@/components/Toast/Toast';
 
 interface AdminStats {
   overview: {
@@ -283,6 +287,18 @@ export default function AdminDashboard() {
   const instancesPerPage = 10;
   const [instancesSearch, setInstancesSearch] = useState('');
   const [deletingDisconnectedInstances, setDeletingDisconnectedInstances] = useState(false);
+
+  // Toasts e confirmações (substituem alert()/confirm() nativos)
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDeleteDisconnectedCount, setConfirmDeleteDisconnectedCount] = useState<number | null>(null);
+  const pushToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setToasts((prev) => [...prev, { id, message, type }]);
+  }, []);
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Reset página quando busca mudar
   useEffect(() => {
@@ -557,10 +573,14 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteInstance = async (instanceId: string, instanceName: string) => {
-    if (!confirm(`Tem certeza que deseja excluir a instância "${instanceName}"? Esta ação não pode ser desfeita.`)) {
-      return;
-    }
+  const handleDeleteInstance = (instanceId: string, instanceName: string) => {
+    setConfirmDeleteTarget({ id: instanceId, name: instanceName });
+  };
+
+  const confirmDeleteInstance = async () => {
+    if (!confirmDeleteTarget) return;
+    const instanceId = confirmDeleteTarget.id;
+    setConfirmDeleteTarget(null);
 
     try {
       const res = await fetch(`/api/admin/evolution/instances/${instanceId}`, {
@@ -571,7 +591,7 @@ export default function AdminDashboard() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        alert('Instância excluída com sucesso!');
+        pushToast('Instância excluída com sucesso!', 'success');
         loadInstances();
         // Ajusta página se necessário
         const totalPages = Math.ceil((instances.length - 1) / instancesPerPage);
@@ -579,11 +599,11 @@ export default function AdminDashboard() {
           setInstancesCurrentPage(totalPages);
         }
       } else {
-        alert(data.message || 'Erro ao excluir instância');
+        pushToast(data.message || 'Erro ao excluir instância', 'error');
       }
     } catch (error) {
       console.error('Erro ao excluir instância:', error);
-      alert('Erro ao excluir instância');
+      pushToast('Erro ao excluir instância', 'error');
     }
   };
 
@@ -609,11 +629,11 @@ export default function AdminDashboard() {
     }
 
     if (deleted > 0 && failed === 0) {
-      alert(`${deleted} instância(s) ${modeLabel} removida(s) com sucesso.`);
+      pushToast(`${deleted} instância(s) ${modeLabel} removida(s) com sucesso.`, 'success');
     } else if (deleted > 0) {
-      alert(`${deleted} instância(s) removida(s) e ${failed} falha(s) ao remover.`);
+      pushToast(`${deleted} instância(s) removida(s) e ${failed} falha(s) ao remover.`, 'info');
     } else {
-      alert(`Não foi possível remover as instâncias ${modeLabel}.`);
+      pushToast(`Não foi possível remover as instâncias ${modeLabel}.`, 'error');
     }
 
     await loadInstances();
@@ -623,16 +643,20 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteDisconnectedInstances = async () => {
+  const handleDeleteDisconnectedInstances = () => {
     const disconnected = instances.filter((inst: any) => !evolutionDbStatusIsConnected(inst.status));
     if (disconnected.length === 0) {
-      alert('Não há instâncias desconectadas para remover.');
+      pushToast('Não há instâncias desconectadas para remover.', 'info');
       return;
     }
 
-    if (!confirm(`Tem certeza que deseja excluir ${disconnected.length} instância(s) desconectada(s)?`)) {
-      return;
-    }
+    setConfirmDeleteDisconnectedCount(disconnected.length);
+  };
+
+  const confirmDeleteDisconnectedInstances = async () => {
+    setConfirmDeleteDisconnectedCount(null);
+    const disconnected = instances.filter((inst: any) => !evolutionDbStatusIsConnected(inst.status));
+    if (disconnected.length === 0) return;
 
     setDeletingDisconnectedInstances(true);
     try {
@@ -798,7 +822,22 @@ export default function AdminDashboard() {
   if (loading) {
     return (
       <Layout onSignOut={handleSignOut}>
-        <div className="flex items-center justify-center min-h-[50vh]" />
+        <div className="space-y-8 w-full">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-80" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <CardSkeleton />
+            <CardSkeleton />
+          </div>
+        </div>
       </Layout>
     );
   }
@@ -831,12 +870,6 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
             {isSuperAdmin && <TenantSwitcher />}
-            <button className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white dark:bg-[#2a2a2a] rounded-lg shadow border border-gray-200 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333] text-gray-800 dark:text-white text-sm sm:text-base">
-              <Calendar className="w-4 h-4" />
-              <span className="hidden sm:inline">Últimos 7 dias</span>
-              <span className="sm:hidden">7 dias</span>
-              <ChevronDown className="w-4 h-4" />
-            </button>
             {/* Botão Toggle da Sidebar - Apenas no mobile, no topo direito */}
             <div className="lg:hidden">
               <button
@@ -1175,8 +1208,9 @@ export default function AdminDashboard() {
                       </div>
                     </div>
                     {loadingInstances ? (
-                      <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24] mx-auto" />
+                      <div className="flex items-center justify-center gap-2 py-4">
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24]" />
+                        <span className="text-sm text-gray-500 dark:text-gray-400">Carregando...</span>
                       </div>
                     ) : (
                       <div>
@@ -1226,7 +1260,7 @@ export default function AdminDashboard() {
                                           )}
                                           {isBlocked && (
                                             <span
-                                              className="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 flex items-center gap-1"
+                                              className="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300 flex items-center gap-1"
                                               title="API Evolution bloqueada para criação de novas instâncias"
                                             >
                                               <Lock className="w-3 h-3" />
@@ -1306,8 +1340,9 @@ export default function AdminDashboard() {
                       <Users className="w-5 h-5 text-[#E86A24]" />
                     </div>
                     {loadingGroups ? (
-                      <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24] mx-auto" />
+                      <div className="flex items-center justify-center gap-2 py-4">
+                        <RefreshCw className="w-5 h-5 animate-spin text-[#E86A24]" />
+                        <span className="text-sm text-gray-500 dark:text-gray-400">Carregando...</span>
                       </div>
                     ) : (
                       <div>
@@ -1357,8 +1392,9 @@ export default function AdminDashboard() {
                       <CheckCircle2 className="w-5 h-5 text-amber-600" />
                     </div>
                     {loadingFinishedCampaigns ? (
-                      <div className="text-center py-4">
-                        <RefreshCw className="w-5 h-5 animate-spin text-amber-600 mx-auto" />
+                      <div className="flex items-center justify-center gap-2 py-4">
+                        <RefreshCw className="w-5 h-5 animate-spin text-amber-600" />
+                        <span className="text-sm text-gray-500 dark:text-gray-400">Carregando...</span>
                       </div>
                     ) : (
                       <div>
@@ -1387,7 +1423,7 @@ export default function AdminDashboard() {
                                         <Eye className="w-4 h-4" />
                                       </button>
                                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap ${
-                                        c.status === 'completed' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                        c.status === 'completed' ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
                                       }`}>
                                         {c.status === 'completed' ? 'concluída' : c.status === 'failed' ? 'falhou' : c.status}
                                       </span>
@@ -1417,16 +1453,10 @@ export default function AdminDashboard() {
           )}
 
           {activeSection === 'users' && (
-            <UsersSection
-              users={users}
-              onUserSelect={setSelectedUser}
-              selectedUser={selectedUser}
-              usersLoadError={usersLoadError}
-              onRetryLoad={loadData}
-              isSuperAdmin={isSuperAdmin}
-              zaplotoRoles={zaplotoRoles}
-              getTenantHeader={getTenantHeader}
+            <UsersManagementSection
               adminUserId={userId}
+              isSuperAdmin={isSuperAdmin}
+              getTenantHeader={getTenantHeader}
             />
           )}
 
@@ -1854,11 +1884,11 @@ export default function AdminDashboard() {
                         <div>
                           <span className="text-gray-500">Status:</span>
                           <span className={`ml-2 px-2 py-1 rounded text-xs font-medium ${
-                            selectedCampaign.status === 'completed' 
-                              ? 'bg-blue-100 text-blue-700' 
+                            selectedCampaign.status === 'completed'
+                              ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
                               : selectedCampaign.status === 'failed'
-                              ? 'bg-red-100 text-red-700'
-                              : 'bg-gray-100 text-gray-700'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+                              : 'bg-gray-100 text-gray-700 dark:bg-gray-500/15 dark:text-gray-300'
                           }`}>
                             {selectedCampaign.status === 'completed' ? 'Concluída' : selectedCampaign.status === 'failed' ? 'Falhou' : selectedCampaign.status}
                           </span>
@@ -1998,6 +2028,24 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteTarget !== null}
+        onClose={() => setConfirmDeleteTarget(null)}
+        onConfirm={confirmDeleteInstance}
+        title="Excluir instância"
+        description={`Tem certeza que deseja excluir a instância "${confirmDeleteTarget?.name ?? ''}"? Esta ação não pode ser desfeita.`}
+        confirmLabel="Excluir"
+      />
+      <ConfirmDialog
+        open={confirmDeleteDisconnectedCount !== null}
+        onClose={() => setConfirmDeleteDisconnectedCount(null)}
+        onConfirm={confirmDeleteDisconnectedInstances}
+        title="Remover instâncias desconectadas"
+        description={`Tem certeza que deseja excluir ${confirmDeleteDisconnectedCount ?? 0} instância(s) desconectada(s)?`}
+        confirmLabel="Excluir"
+      />
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }
@@ -2016,7 +2064,7 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
         <div className="flex items-center justify-between mb-3 sm:mb-4">
           <div className={`${bgColor} p-2 sm:p-3 rounded-lg text-white shadow-md`}>{icon}</div>
         </div>
-        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#E86A24] to-[#EF9057] dark:from-[#00ff00] dark:to-[#D95E1B]' : isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500 dark:from-gray-400 dark:to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-400 dark:to-blue-500'} bg-clip-text text-transparent`}>
+        <div className={`text-2xl sm:text-3xl font-extrabold mb-1 ${isEmerald ? 'bg-gradient-to-r from-[#E86A24] to-[#EF9057] dark:from-[#EF9057] dark:to-[#D95E1B]' :isGray ? 'bg-gradient-to-r from-gray-600 to-gray-500 dark:from-gray-400 dark:to-gray-500' : 'bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-400 dark:to-blue-500'} bg-clip-text text-transparent`}>
           {value}
         </div>
         <div className="text-xs sm:text-sm text-gray-600 dark:text-[#aaa] font-medium">{title}</div>
@@ -2027,7 +2075,7 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
 
 type ZaplotoRole = { id: string; code: string; label: string };
 
-const HIDDEN_USER_ROLE_CODES = new Set(['dono_banca', 'gerente', 'consultor', 'auditoria']);
+const HIDDEN_USER_ROLE_CODES = new Set(['dono_banca', 'gerente', 'consultor', 'captador', 'auditoria', 'gestor', 'suporte']);
 
 function formatRoleLabel(code: string, fallback?: string): string {
   const labels: Record<string, string> = {
@@ -2036,6 +2084,7 @@ function formatRoleLabel(code: string, fallback?: string): string {
     dono_banca: 'Dono de Banca',
     gerente: 'Gerente',
     consultor: 'Consultor',
+    captador: 'Captador',
     auditoria: 'Auditoria',
     gestor: 'Gestor de Tráfego',
     admin: 'Admin',
@@ -2052,6 +2101,7 @@ function getSelectableUserRoles(
     dono_banca: 'Dono de Banca',
     gerente: 'Gerente',
     consultor: 'Consultor',
+    captador: 'Captador',
     auditoria: 'Auditoria',
     super_admin: 'Super Admin',
     suporte: 'Atendente',
@@ -2068,8 +2118,6 @@ function getSelectableUserRoles(
     roles = [
       ...(isSuperAdmin ? [{ id: 'super_admin', code: 'super_admin', label: 'Super Admin' }] : []),
       { id: 'admin', code: 'admin', label: 'Admin' },
-      { id: 'gestor', code: 'gestor', label: 'Gestor de Tráfego' },
-      { id: 'suporte', code: 'suporte', label: 'Atendente' },
     ];
   }
 
@@ -2122,7 +2170,7 @@ const UsersSection = ({
     email: '',
     fullName: '',
     password: '',
-    status: 'suporte',
+    status: 'admin',
     enroller: '',
     bancaName: '',
     bancaUrl: ''
@@ -2161,7 +2209,7 @@ const UsersSection = ({
           email: '',
           fullName: '',
           password: '',
-          status: 'suporte',
+          status: 'admin',
           enroller: '',
           bancaName: '',
           bancaUrl: ''
@@ -2558,21 +2606,21 @@ const UsersSection = ({
           </button>
           <button
             onClick={() => {
-              setStatusFilter('gestor');
+              setStatusFilter('gerente');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gestor' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'gerente' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
-            Gestores de Tráfego
+            Gerentes
           </button>
           <button
             onClick={() => {
-              setStatusFilter('suporte');
+              setStatusFilter('captador');
               setCurrentPage(1);
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'suporte' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === 'captador' ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/20' : 'bg-[#333] text-gray-300 hover:bg-[#404040]'}`}
           >
-            Atendente
+            Captadores
           </button>
         </div>
 
@@ -3057,7 +3105,7 @@ const UsersSection = ({
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
-                            {user.status === 'consultor' && (
+                            {user.status === 'captador' && (
                               <a
                                 href={`/crm/kanban?userId=${user.id}`}
                                 className="rounded-lg border border-[#E86A24]/40 bg-[#333] p-2 text-[#E86A24] transition-colors hover:bg-[#E86A24]/10"
@@ -3357,14 +3405,14 @@ const CampaignsSection = ({ userId }: { userId: string | null }) => {
                         <span
                           className={`px-2 py-1 rounded text-xs w-fit ${
                             campaign.status === 'running'
-                              ? 'bg-emerald-100 text-emerald-800'
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
                               : campaign.status === 'completed'
-                              ? 'bg-blue-100 text-blue-800'
+                              ? 'bg-blue-100 text-blue-800 dark:bg-blue-500/15 dark:text-blue-300'
                               : campaign.status === 'failed'
-                              ? 'bg-red-100 text-red-800'
+                              ? 'bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300'
                               : campaign.status === 'paused'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-gray-100 text-gray-800'
+                              ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-300'
+                              : 'bg-gray-100 text-gray-800 dark:bg-gray-500/15 dark:text-gray-300'
                           }`}
                         >
                           {campaign.status}

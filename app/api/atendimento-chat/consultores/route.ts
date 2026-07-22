@@ -10,7 +10,7 @@ import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 export async function GET(req: NextRequest) {
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'dono_banca']);
+    const { userId, profile } = await requireStatus(req, ['gerente']);
 
     const st = (profile.status || '').toLowerCase();
     let consultores: { id: string; full_name: string | null; email: string | null }[] = [];
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     } else if (st === 'dono_banca') {
       const subs = await getSubordinates(userId);
       consultores = subs
-        .filter((p) => (p.status || '').toLowerCase() === 'consultor')
+        .filter((p) => (p.status || '').toLowerCase() === 'captador')
         .map((c) => ({
           id: c.id,
           full_name: c.full_name,

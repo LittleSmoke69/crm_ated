@@ -16,7 +16,7 @@ function normalizeBancaUrl(url: string | null | undefined): string {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { profile } = await requireStatus(req, ['super_admin', 'admin', 'consultor']);
+    const { profile } = await requireStatus(req, ['super_admin', 'admin', 'captador']);
 
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
     if (!isAdminOrSuperAdmin) {
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       .from('profiles')
       .select('id, email, full_name, status')
       .in('id', userIdsInBanca)
-      .in('status', ['consultor', 'gerente', 'admin', 'gestor']);
+      .in('status', ['captador', 'gerente', 'admin']);
 
     const list = (profiles || []).map((p: {
       id: string;

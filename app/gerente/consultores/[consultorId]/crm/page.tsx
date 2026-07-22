@@ -85,7 +85,7 @@ export default function ConsultorCrmPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 text-center">
-          <p className="text-gray-700 font-medium">Carregando CRM do consultor...</p>
+          <p className="text-gray-700 font-medium">Carregando CRM do captador...</p>
         </div>
       </div>
     );
@@ -104,7 +104,7 @@ export default function ConsultorCrmPage() {
               <ArrowLeft className="w-5 h-5 text-gray-600" />
             </Link>
             <div className="flex-1">
-              <h1 className="text-2xl font-bold text-gray-800">CRM do Consultor</h1>
+              <h1 className="text-2xl font-bold text-gray-800">CRM do Captador</h1>
               {consultorInfo && (
                 <p className="text-sm text-gray-500">
                   {consultorInfo.full_name || consultorInfo.email}

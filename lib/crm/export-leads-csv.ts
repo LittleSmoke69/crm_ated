@@ -167,7 +167,7 @@ export function downloadLeadsCsv(leads: Lead[], options: ExportLeadsCsvOptions):
   const d = new Date();
   const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const segBanca = sanitizeCsvFilenameSegment(filenameBancaLabel?.trim() || 'todas-as-bancas');
-  const segConsult = sanitizeCsvFilenameSegment(filenameConsultantFirstName?.trim() || 'consultor');
+  const segConsult = sanitizeCsvFilenameSegment(filenameConsultantFirstName?.trim() || 'captador');
   const filename = `${safePrefix}_${segBanca}_${segConsult}_${stamp}.csv`;
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

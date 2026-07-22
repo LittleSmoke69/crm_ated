@@ -20,11 +20,14 @@ export async function GET(req: NextRequest) {
       return successResponse([]);
     }
 
-    // Constrói árvore hierárquica focada em Donos de Banca
-    // Raízes são apenas Donos de Banca
-    const roots = allUsers.filter(
-      (u: any) => u.status === 'dono_banca'
-    );
+    // Constrói árvore hierárquica focada em Gerentes de topo
+    // Raízes são Gerentes que não estão abaixo de outro Gerente
+    const byId = new Map(allUsers.map((u: any) => [u.id, u]));
+    const roots = allUsers.filter((u: any) => {
+      if (u.status !== 'gerente') return false;
+      const enrollerProfile = u.enroller ? byId.get(u.enroller) : null;
+      return !enrollerProfile || enrollerProfile.status !== 'gerente';
+    });
 
     const buildTree = (userId: string): any => {
       const user = allUsers.find((u: any) => u.id === userId);

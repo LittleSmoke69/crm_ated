@@ -133,8 +133,6 @@ export default function ConsultorDetalhadoPage() {
     'super_admin',
     'admin',
     'gerente',
-    'gestor',
-    'dono_banca',
   ].includes(userStatus || '');
 
   // Carrega escopo (perfil + bancas visíveis) em uma chamada
@@ -526,7 +524,7 @@ export default function ConsultorDetalhadoPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Buscar por consultor, usuário, email, categoria..."
+              placeholder="Buscar por captador, usuário, email, categoria..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040] rounded-xl text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-[#E86A24]/30 outline-none"
@@ -545,7 +543,7 @@ export default function ConsultorDetalhadoPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-[#333] text-gray-600 dark:text-gray-300">
                 <tr>
-                  <SortableTh label="Consultor" sortKey="consultant_name" current={sortKey} dir={sortDir} onSort={handleSort} />
+                  <SortableTh label="Captador" sortKey="consultant_name" current={sortKey} dir={sortDir} onSort={handleSort} />
                   <SortableTh label="Cargo" sortKey="consultant_status" current={sortKey} dir={sortDir} onSort={handleSort} />
                   <SortableTh label="Tipo" sortKey="kind" current={sortKey} dir={sortDir} onSort={handleSort} />
                   <SortableTh label="Categoria" sortKey="category" current={sortKey} dir={sortDir} onSort={handleSort} />
@@ -575,7 +573,7 @@ export default function ConsultorDetalhadoPage() {
                       <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{row.consultant_email}</div>
                     </td>
                     <td className="px-4 py-3 text-[11px] uppercase text-gray-500 dark:text-gray-400">
-                      {row.consultant_status || 'consultor'}
+                      {row.consultant_status || 'captador'}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold ${KIND_STYLE[row.kind]}`}>

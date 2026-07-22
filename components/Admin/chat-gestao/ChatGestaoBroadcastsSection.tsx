@@ -1,7 +1,15 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, Calendar, Loader2, RefreshCw, Send } from 'lucide-react';
+import { BarChart3, Calendar, Inbox, RefreshCw, Send } from 'lucide-react';
+import {
+  Banner,
+  Button,
+  EmptyState,
+  StatCard,
+  StatCardSkeleton,
+  TableSkeletonRows,
+} from '@/components/ui';
 
 type StatusBreakdown = Record<string, number>;
 
@@ -45,6 +53,17 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_ORDER = ['running', 'pending', 'paused', 'completed', 'failed', 'cancelled'];
+
+const STATUS_BADGE: Record<string, string> = {
+  running: 'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30',
+  pending: 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-500/15 dark:text-gray-300 dark:border-gray-500/30',
+  paused: 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30',
+  completed:
+    'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30',
+  failed: 'bg-red-100 text-red-700 border-red-200 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30',
+  cancelled:
+    'bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-500/10 dark:text-gray-400 dark:border-gray-500/20',
+};
 
 function formatStatusKey(s: string): string {
   return STATUS_LABEL[s] || s;
@@ -100,6 +119,9 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
     return entries.map(([key, count]) => ({ key, label: formatStatusKey(key), count }));
   }, [data]);
 
+  const dateInputClasses =
+    'px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 focus:border-[#E86A24] focus:ring-2 focus:ring-[#E86A24]/30 focus:outline-none disabled:opacity-50';
+
   return (
     <div className="max-w-6xl mx-auto space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -113,22 +135,23 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-300 select-none">
+          <label className="flex items-center gap-1.5 min-h-[36px] text-sm text-gray-600 dark:text-gray-300 select-none cursor-pointer">
             <input
               type="checkbox"
               checked={showAll}
               onChange={(e) => setShowAll(e.target.checked)}
-              className="rounded border-gray-300 dark:border-[#404040]"
+              className="rounded border-gray-300 dark:border-gray-600 accent-[#E86A24]"
             />
             Tudo (sem filtro)
           </label>
-          <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+          <Calendar className="w-4 h-4 text-gray-500 shrink-0" aria-hidden="true" />
           <input
             type="date"
             value={from}
             disabled={showAll}
             onChange={(e) => setFrom(e.target.value)}
-            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] disabled:opacity-50"
+            aria-label="Data inicial"
+            className={dateInputClasses}
           />
           <span className="text-gray-500 text-sm">até</span>
           <input
@@ -136,17 +159,17 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
             value={to}
             disabled={showAll}
             onChange={(e) => setTo(e.target.value)}
-            className="px-2 py-1.5 text-sm border border-gray-300 dark:border-[#404040] rounded-lg bg-white dark:bg-[#2a2a2a] disabled:opacity-50"
+            aria-label="Data final"
+            className={dateInputClasses}
           />
-          <button
-            type="button"
+          <Button
+            size="sm"
             onClick={() => fetchReport()}
-            disabled={loading}
-            className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-2 bg-[#E86A24] text-white disabled:opacity-60"
+            loading={loading}
+            icon={<RefreshCw className="w-4 h-4" />}
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Atualizar
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -156,21 +179,34 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
       </p>
 
       {loading && !data ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
-        </div>
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <StatCardSkeleton key={i} />
+            ))}
+          </div>
+          <div className="rounded-2xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] text-sm">
+                <tbody>
+                  <TableSkeletonRows rows={5} cols={4} />
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       ) : data ? (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <SummaryCard label="Disparos (jobs)" value={data.summary.totalJobs} />
-            <SummaryCard label="Mensagens enviadas" value={data.summary.totalMessagesSent} />
-            <SummaryCard label="Contatos" value={data.summary.totalContacts} />
-            <SummaryCard label="Usuários" value={data.summary.usersCount} />
-            <SummaryCard label="Instâncias" value={data.summary.instancesCount} />
+            <StatCard label="Disparos (jobs)" value={data.summary.totalJobs} />
+            <StatCard label="Mensagens enviadas" value={data.summary.totalMessagesSent} />
+            <StatCard label="Contatos" value={data.summary.totalContacts} />
+            <StatCard label="Usuários" value={data.summary.usersCount} />
+            <StatCard label="Instâncias" value={data.summary.instancesCount} />
           </div>
 
           {statusBreakdownEntries.length > 0 && (
-            <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] p-4">
+            <div className="rounded-2xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] p-4">
               <div className="flex items-center gap-2 mb-3">
                 <BarChart3 className="w-4 h-4 text-gray-500" />
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Por status</h3>
@@ -179,7 +215,10 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
                 {statusBreakdownEntries.map(({ key, label, count }) => (
                   <span
                     key={key}
-                    className="px-2.5 py-1 text-xs rounded-full bg-gray-100 dark:bg-[#333] text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-[#404040]"
+                    className={`px-2.5 py-1 text-xs rounded-full border ${
+                      STATUS_BADGE[key] ||
+                      'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-500/15 dark:text-gray-300 dark:border-gray-500/30'
+                    }`}
                   >
                     {label}: <strong>{count}</strong>
                   </span>
@@ -191,6 +230,7 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
           <SectionTable
             title="Por usuário"
             emptyMessage="Nenhum disparo no período."
+            emptyDescription="Ajuste o período do filtro ou marque “Tudo (sem filtro)” para ver o histórico completo."
             headers={['Usuário', 'Disparos', 'Contatos', 'Mensagens enviadas']}
             rows={data.byUser.map((u) => ({
               key: u.user_id,
@@ -209,6 +249,7 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
           <SectionTable
             title="Por instância Evolution"
             emptyMessage="Nenhuma instância usada no período."
+            emptyDescription="Ajuste o período do filtro ou marque “Tudo (sem filtro)” para ver o histórico completo."
             headers={['Instância', 'Disparos', 'Mensagens enviadas']}
             rows={data.byInstance.map((i) => ({
               key: i.instance_id,
@@ -224,17 +265,23 @@ export default function ChatGestaoBroadcastsSection({ userId }: Props) {
           />
         </>
       ) : (
-        <p className="text-center text-gray-500 py-8">Não foi possível carregar o relatório.</p>
+        <Banner
+          variant="error"
+          title="Não foi possível carregar o relatório."
+          action={
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => fetchReport()}
+              icon={<RefreshCw className="w-4 h-4" />}
+            >
+              Tentar novamente
+            </Button>
+          }
+        >
+          Verifique sua conexão e tente novamente.
+        </Banner>
       )}
-    </div>
-  );
-}
-
-function SummaryCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="p-3 rounded-lg bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-[#404040]">
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{value}</p>
     </div>
   );
 }
@@ -248,26 +295,33 @@ type Row = {
 function SectionTable({
   title,
   emptyMessage,
+  emptyDescription,
   headers,
   rows,
 }: {
   title: string;
   emptyMessage: string;
+  emptyDescription?: string;
   headers: string[];
   rows: Row[];
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 dark:border-[#404040] bg-white dark:bg-[#2a2a2a] overflow-hidden">
-      <div className="px-4 py-3 bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-[#404040]">
+    <div className="rounded-2xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] overflow-hidden">
+      <div className="px-4 py-3 bg-gray-50 dark:bg-[#333] border-b border-gray-200 dark:border-gray-600">
         <h3 className="font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
       </div>
       {rows.length === 0 ? (
-        <p className="text-center text-gray-500 py-6 text-sm">{emptyMessage}</p>
+        <EmptyState
+          compact
+          icon={<Inbox className="w-5 h-5" />}
+          title={emptyMessage}
+          description={emptyDescription}
+        />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[480px] text-sm">
             <thead>
-              <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-[#404040]">
+              <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-600">
                 {headers.map((h, i) => (
                   <th
                     key={h}
@@ -280,7 +334,7 @@ function SectionTable({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.key} className="border-b border-gray-50 dark:border-[#333]">
+                <tr key={r.key} className="border-b border-gray-100 dark:border-gray-700">
                   {r.cells.map((c, i) => (
                     <td
                       key={i}

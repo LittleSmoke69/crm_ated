@@ -789,7 +789,7 @@ function MessageContent({
   );
 }
 
-type UserStatus = 'super_admin' | 'admin' | 'suporte' | string | null;
+type UserStatus = 'super_admin' | 'admin' | string | null;
 
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
@@ -1252,7 +1252,7 @@ export default function ChatPage() {
     ): Promise<boolean> => {
       if (!userId || userStatus !== 'gerente') return false;
       if (!crmBancaId) {
-        setAtendimentoGateNotice('Selecione uma banca antes de escolher os consultores.');
+        setAtendimentoGateNotice('Selecione uma banca antes de escolher os captadores.');
         return false;
       }
       setGerenteGateSavingInstanceId(instanceId);
@@ -1268,7 +1268,7 @@ export default function ChatPage() {
           });
           const j = await res.json();
           if (!res.ok || !j.success) {
-            setAtendimentoGateNotice(j.error || 'Não foi possível atualizar os consultores.');
+            setAtendimentoGateNotice(j.error || 'Não foi possível atualizar os captadores.');
             return false;
           }
         } else {
@@ -1291,7 +1291,7 @@ export default function ChatPage() {
         await loadGerenteGateAtendimento();
         return true;
       } catch {
-        setAtendimentoGateNotice('Falha de rede ao salvar consultores.');
+        setAtendimentoGateNotice('Falha de rede ao salvar captadores.');
         return false;
       } finally {
         setGerenteGateSavingInstanceId(null);
@@ -1353,13 +1353,12 @@ export default function ChatPage() {
   const canSelectChannel =
     userStatus === 'super_admin' ||
     userStatus === 'admin' ||
-    userStatus === 'suporte' ||
     userStatus === 'gerente' ||
-    userStatus === 'consultor';
+    userStatus === 'captador';
 
   /** Lista Contatos + sync CRM (kanban / transferidos) — consultor e gerente */
   const crmChatContactsUser =
-    userStatus === 'consultor' || userStatus === 'gerente';
+    userStatus === 'captador' || userStatus === 'gerente';
 
   const refreshChatContacts = useCallback(async () => {
     if (!userId || !crmChatContactsUser) return;
@@ -1661,11 +1660,10 @@ export default function ChatPage() {
     if (
       !userId ||
       !(
-        userStatus === 'suporte' ||
         userStatus === 'admin' ||
         userStatus === 'super_admin' ||
         userStatus === 'gerente' ||
-        userStatus === 'consultor'
+        userStatus === 'captador'
       )
     )
       return;
@@ -1686,11 +1684,10 @@ export default function ChatPage() {
       if (document.visibilityState !== 'visible') return;
       loadConversationsFromApi(true);
       if (
-        userStatus === 'suporte' ||
         userStatus === 'admin' ||
         userStatus === 'super_admin' ||
         userStatus === 'gerente' ||
-        userStatus === 'consultor'
+        userStatus === 'captador'
       ) {
         fetch('/api/chat/tags', { headers: authHeaders() })
           .then((r) => r.json())
@@ -2738,9 +2735,8 @@ export default function ChatPage() {
     const canNotify =
       userStatus === 'super_admin' ||
       userStatus === 'admin' ||
-      userStatus === 'suporte' ||
       userStatus === 'gerente' ||
-      userStatus === 'consultor';
+      userStatus === 'captador';
 
     if (selectedChannel.type === 'whatsapp_official') {
       const filterCol = 'whatsapp_config_id';
@@ -2881,9 +2877,8 @@ export default function ChatPage() {
     const canNotify =
       userStatus === 'super_admin' ||
       userStatus === 'admin' ||
-      userStatus === 'suporte' ||
       userStatus === 'gerente' ||
-      userStatus === 'consultor';
+      userStatus === 'captador';
     if (!canNotify || typeof window === 'undefined' || !('Notification' in window)) return;
     if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }, [userStatus]);
@@ -4004,7 +3999,7 @@ export default function ChatPage() {
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 {userStatus === 'gerente'
-                  ? 'Suas instâncias aparecem abaixo. Vincule a banca e um ou mais consultores para eles acessarem esta instância no atendimento.'
+                  ? 'Suas instâncias aparecem abaixo. Vincule a banca e um ou mais captadores para eles acessarem esta instância no atendimento.'
                   : 'Selecione a instância WhatsApp para iniciar o atendimento'}
               </p>
             </div>
@@ -4051,7 +4046,7 @@ export default function ChatPage() {
                         <Link href="/instances" className="underline" style={{ color: '#E86A24' }}>
                           Instâncias WhatsApp
                         </Link>
-                        ; ao conectar, ela aparecerá aqui para você vincular um consultor.
+                        ; ao conectar, ela aparecerá aqui para você vincular um captador.
                       </>
                     ) : (
                       <>
@@ -4171,7 +4166,7 @@ export default function ChatPage() {
                               </div>
                               <div>
                                 <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 block mb-1.5">
-                                  Consultores no atendimento
+                                  Captadores no atendimento
                                 </label>
                                 {!gRow?.crm_banca_id ? (
                                   <p className="text-xs text-gray-500 dark:text-gray-400 py-1">
@@ -4180,7 +4175,7 @@ export default function ChatPage() {
                                 ) : (
                                   <>
                                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-1.5 leading-snug">
-                                      Marque um ou mais consultores; o vínculo é salvo de uma vez ao clicar em «Entrar».
+                                      Marque um ou mais captadores; o vínculo é salvo de uma vez ao clicar em «Entrar».
                                     </p>
                                     <div
                                       className="max-h-36 overflow-y-auto rounded-lg border border-gray-200 dark:border-[#505050] bg-white dark:bg-[#333] px-2 py-2 space-y-1.5"
@@ -4189,7 +4184,7 @@ export default function ChatPage() {
                                     >
                                       {(gerenteGateConsultoresByBanca[gRow.crm_banca_id] || []).length === 0 ? (
                                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                                          Nenhum consultor nesta banca
+                                          Nenhum captador nesta banca
                                         </p>
                                       ) : (
                                         (gerenteGateConsultoresByBanca[gRow.crm_banca_id] || []).map((c) => {
@@ -5953,9 +5948,8 @@ export default function ChatPage() {
                           : 'Nenhuma conversa no histórico (template ou resolvidas).'}
                         {(userStatus === 'super_admin' ||
                           userStatus === 'admin' ||
-                          userStatus === 'suporte' ||
                           userStatus === 'gerente' ||
-                          userStatus === 'consultor') && (
+                          userStatus === 'captador') && (
                           <p className="mt-1 text-xs">
                             Novas mensagens aparecerão aqui automaticamente.
                           </p>
@@ -6063,11 +6057,10 @@ export default function ChatPage() {
                               </p>
                               <div className="flex items-center justify-end">
                                 {conv.attendance_status !== 'resolvido' &&
-                                  (userStatus === 'suporte' ||
-                                    userStatus === 'admin' ||
+                                  (userStatus === 'admin' ||
                                     userStatus === 'super_admin' ||
                                     userStatus === 'gerente' ||
-                                    userStatus === 'consultor') && (
+                                    userStatus === 'captador') && (
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -6200,11 +6193,10 @@ export default function ChatPage() {
                         </span>
                       </div>
                     </div>
-                    {(userStatus === 'suporte' ||
-                      userStatus === 'admin' ||
+                    {(userStatus === 'admin' ||
                       userStatus === 'super_admin' ||
                       userStatus === 'gerente' ||
-                      userStatus === 'consultor') && (
+                      userStatus === 'captador') && (
                       <div ref={tagsPopoverRef} className="relative">
                         <button
                           type="button"
@@ -6273,11 +6265,10 @@ export default function ChatPage() {
                         Resolvida
                       </span>
                     ) : isWithin24hWindow(selectedConversation) &&
-                      (userStatus === 'suporte' ||
-                        userStatus === 'admin' ||
+                      (userStatus === 'admin' ||
                         userStatus === 'super_admin' ||
                         userStatus === 'gerente' ||
-                        userStatus === 'consultor') ? (
+                        userStatus === 'captador') ? (
                       <button
                         onClick={handleResolveConversation}
                         disabled={resolvingConversation}

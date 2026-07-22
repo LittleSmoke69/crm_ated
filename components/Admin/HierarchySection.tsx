@@ -70,7 +70,6 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   const [selectedBancaMode, setSelectedBancaMode] = useState<string>('all');
   const [bancaSearch, setBancaSearch] = useState('');
   const [issuesSearch, setIssuesSearch] = useState('');
-  const [bancaFilter, setBancaFilter] = useState<'all' | 'sem_dono' | 'com_dono'>('all');
   const [issuesCurrentPage, setIssuesCurrentPage] = useState(1);
   const issuesPerPage = 10;
   const [bancasCurrentPage, setBancasCurrentPage] = useState(1);
@@ -82,7 +81,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     email: '',
     fullName: '',
     password: '',
-    status: 'consultor' as 'consultor' | 'gerente' | 'dono_banca' | 'gestor',
+    status: 'captador' as 'captador' | 'gerente',
     enroller: '',
     bancaOwnerId: '',
     bancaName: '',
@@ -95,14 +94,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   });
   const [showFixModal, setShowFixModal] = useState(false);
   const [fixingIssue, setFixingIssue] = useState<any>(null);
-  const [selectedFixRole, setSelectedFixRole] = useState<'dono_banca' | 'gerente' | 'consultor'>('gerente');
+  const [selectedFixRole, setSelectedFixRole] = useState<'gerente' | 'captador'>('gerente');
   const [selectedFixBancaId, setSelectedFixBancaId] = useState<string>('');
   const [selectedEnroller, setSelectedEnroller] = useState<string>('');
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [gestorBancaLoading, setGestorBancaLoading] = useState<string | null>(null);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignFormData, setAssignFormData] = useState<{
-    status: 'dono_banca' | 'gerente' | 'consultor';
+    status: 'gerente' | 'captador';
     enroller: string;
     bancaId: string;
     bancaName: string;
@@ -119,6 +118,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   const [moveTargetGerenteId, setMoveTargetGerenteId] = useState('');
   const [moveConsultantSearch, setMoveConsultantSearch] = useState('');
   const [moveLoading, setMoveLoading] = useState(false);
+  /** Filtro de bancas por vínculo com gerente responsável (ex-dono). */
+  const [bancaFilter, setBancaFilter] = useState<'all' | 'sem_dono' | 'com_dono'>('all');
   const [bancaPickerOpen, setBancaPickerOpen] = useState(false);
   const [bancaPickerSearch, setBancaPickerSearch] = useState('');
   const [peopleSearch, setPeopleSearch] = useState('');
@@ -235,7 +236,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const handleImportConsultants = async () => {
     if (!userId || !importConsultantsContext || !importConsultantsGerenteId || importConsultantsRows.length === 0) {
-      showToast('Selecione o gerente ou admin e importe um CSV com pelo menos um consultor (máx. 10).', 'error');
+      showToast('Selecione o gerente ou admin e importe um CSV com pelo menos um captador (máx. 10).', 'error');
       return;
     }
     setImportConsultantsLoading(true);
@@ -250,7 +251,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             email: row.email,
             fullName: row.nome || undefined,
             password: row.senha,
-            status: 'consultor',
+            status: 'captador',
             enroller: importConsultantsGerenteId,
             banca_ids: [importConsultantsContext.bancaId],
           }),
@@ -265,7 +266,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     setImportConsultantsLoading(false);
     if (errors.length > 0) showToast(`${success} criado(s). Algumas falhas.`, 'info');
     if (success > 0) {
-      showToast(success === 1 ? '1 consultor criado com sucesso!' : `${success} consultores criados com sucesso!`, 'success');
+      showToast(success === 1 ? '1 captador criado com sucesso!' : `${success} captadores criados com sucesso!`, 'success');
       setShowImportConsultantsModal(false);
       setImportConsultantsContext(null);
       setImportConsultantsGerenteId('');
@@ -566,11 +567,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     return gerentesNaBanca;
   };
 
-  /** Retorna gerentes vinculados à banca para o modal: user_bancas + hierarquia (subordinados do dono). */
+  /** Retorna gerentes vinculados à banca para o modal: user_bancas + hierarquia (gerente de topo e seus sub-gerentes). */
   const getGerentesParaBancaModal = (crmBancaId: string) => {
     const fromCrm = getManagersByCrmBanca(crmBancaId);
     const owner = findOwnerByCrmBanca(crmBancaId);
-    const fromHierarchy = (owner?.subordinates || []).filter((s: any) => s && s.status === 'gerente');
+    const fromHierarchy = [owner, ...(owner?.subordinates || [])].filter((s: any) => s && s.status === 'gerente');
     const seen = new Set<string>(fromCrm.map((g: any) => g.id));
     const merged = [...fromCrm];
     fromHierarchy.forEach((g: any) => {
@@ -582,7 +583,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     return merged;
   };
 
-  /** Gerentes da banca (CRM + hierarquia) + Admin/Super Admin — superiores válidos para consultor. */
+  /** Gerentes da banca (CRM + hierarquia) + Admin/Super Admin — superiores válidos para captador. */
   const getSuperioresParaConsultor = (crmBancaId?: string | null) => {
     const gerentes = crmBancaId
       ? getGerentesParaBancaModal(crmBancaId)
@@ -607,7 +608,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     return merged;
   };
 
-  /** Superior válido para cargo Gestor: Dono da banca, Admin ou Super Admin (mesmo critério que validateHierarchy). */
+  /** Superior válido para cargo Gerente: gerente de topo, Admin ou Super Admin (mesmo critério que validateHierarchy). */
   const getSuperioresParaGestor = () => {
     const donos = (hierarchy || []).filter((h: any) => h?.id);
     const plataforma = (allUsers || []).filter(
@@ -642,18 +643,16 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           fullName: createFormData.fullName,
           password: createFormData.password,
           status: createFormData.status,
-          enroller: createFormData.status === 'dono_banca' ? null : (createFormData.enroller || null),
-          bancaName: createFormData.status === 'dono_banca' ? createFormData.bancaName : undefined,
-          bancaUrl: createFormData.status === 'dono_banca' ? createFormData.bancaUrl : undefined,
-          banca_ids: (createFormData.status === 'consultor' || createFormData.status === 'gerente') && createFormData.initialBancaIds?.length ? createFormData.initialBancaIds : undefined,
+          enroller: createFormData.enroller || null,
+          banca_ids: (createFormData.status === 'captador' || createFormData.status === 'gerente') && createFormData.initialBancaIds?.length ? createFormData.initialBancaIds : undefined,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        const roleLabel = createFormData.status === 'dono_banca' ? 'Dono de banca' : createFormData.status === 'gestor' ? 'Gestor de Tráfego' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor';
+        const roleLabel = createFormData.status === 'gerente' ? 'Gerente' : 'Captador';
         showToast(`${roleLabel} criado com sucesso!`, 'success');
         setShowCreateModal(false);
-        setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] });
+        setCreateFormData({ email: '', fullName: '', password: '', status: 'captador', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] });
         loadHierarchyData();
       } else {
         showToast(data.message || 'Erro ao criar usuário', 'error');
@@ -674,11 +673,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         const userWithIssue = usersData.data?.find((u: any) => u.email === issue.email);
         if (userWithIssue) {
           setFixingIssue({ ...issue, userId: userWithIssue.id, status: userWithIssue.status });
-          const defaultRole = userWithIssue.status === 'consultor' ? 'consultor' : userWithIssue.status === 'dono_banca' ? 'dono_banca' : 'gerente';
+          const defaultRole = userWithIssue.status === 'captador' ? 'captador' : 'gerente';
           setSelectedFixRole(defaultRole);
           const firstBancaId = (crmBancas && crmBancas.length > 0) ? String(crmBancas[0].id) : '';
           setSelectedFixBancaId(firstBancaId);
-          if (defaultRole === 'consultor' && firstBancaId) {
+          if (defaultRole === 'captador' && firstBancaId) {
             const managers = getManagersByCrmBanca(firstBancaId);
             setSelectedEnroller(managers?.length ? managers[0].id : '');
           } else {
@@ -706,11 +705,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       return;
     }
     const owner = findOwnerByCrmBanca(selectedFixBancaId);
-    if (selectedFixRole === 'gerente' && !owner) {
-      showToast('Essa banca ainda não tem Dono cadastrado. Crie o Dono primeiro.', 'error');
-      return;
-    }
-    if (selectedFixRole === 'consultor') {
+    if (selectedFixRole === 'captador') {
       const managers = getManagersByCrmBanca(selectedFixBancaId);
       if (!managers || managers.length === 0) {
         showToast('Essa banca ainda não tem Gerentes cadastrados. Crie um Gerente primeiro.', 'error');
@@ -723,13 +718,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     }
     try {
       const payload: any = { status: selectedFixRole };
-      if (selectedFixRole === 'dono_banca') {
-        payload.enroller = null;
-        payload.bancaName = selectedBanca.name || null;
-        payload.bancaUrl = normalizeBancaUrl(selectedBanca.url || '');
-      } else if (selectedFixRole === 'gerente') {
-        payload.enroller = owner.id;
-      } else if (selectedFixRole === 'consultor') {
+      if (selectedFixRole === 'gerente') {
+        payload.enroller = owner?.id ?? null;
+      } else if (selectedFixRole === 'captador') {
         payload.enroller = selectedEnroller;
       }
       const res = await fetch(`/api/admin/users/${fixingIssue.userId}/update`, {
@@ -756,7 +747,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
   };
 
   const handleOpenAssignModal = (params: {
-    status: 'dono_banca' | 'gerente' | 'consultor';
+    status: 'gerente' | 'captador';
     enroller: string;
     bancaId: string;
     bancaName: string;
@@ -791,7 +782,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const handleMoveConsultants = async () => {
     if (!moveContext || moveSelectedConsultantIds.length === 0 || !moveTargetGerenteId) {
-      showToast('Selecione um ou mais consultores e o superior de destino (gerente ou admin).', 'error');
+      showToast('Selecione um ou mais captadores e o superior de destino (gerente ou admin).', 'error');
       return;
     }
     setMoveLoading(true);
@@ -802,7 +793,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         const res = await fetch(`/api/admin/users/${consultantId}/update`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-User-Id': userId! },
-          body: JSON.stringify({ status: 'consultor', enroller: moveTargetGerenteId }),
+          body: JSON.stringify({ status: 'captador', enroller: moveTargetGerenteId }),
         });
         const data = await res.json();
         if (res.ok && data.success) successCount++;
@@ -815,7 +806,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         showToast(successCount > 0 ? `${successCount} movido(s). Algumas falhas.` : `Falhas: ${errors[0]}${errors.length > 1 ? ` e mais ${errors.length - 1}.` : ''}`, successCount > 0 ? 'info' : 'error');
       }
       if (successCount > 0) {
-        showToast(successCount === 1 ? 'Consultor movido com sucesso!' : `${successCount} consultores movidos com sucesso!`, 'success');
+        showToast(successCount === 1 ? 'Captador movido com sucesso!' : `${successCount} captadores movidos com sucesso!`, 'success');
         setShowMoveConsultantsModal(false);
         setMoveContext(null);
         setMoveSelectedConsultantIds([]);
@@ -824,7 +815,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       }
     } catch (e) {
       console.error(e);
-      showToast('Erro ao mover consultores', 'error');
+      showToast('Erro ao mover captadores', 'error');
     } finally {
       setMoveLoading(false);
     }
@@ -835,29 +826,23 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       showToast('Selecione um ou mais usuários', 'error');
       return;
     }
-    if (assignFormData.status === 'consultor' && !assignFormData.enroller) {
-      showToast('Consultor deve ser atribuído a um gerente ou admin.', 'error');
+    if (assignFormData.status === 'captador' && !assignFormData.enroller) {
+      showToast('Captador deve ser atribuído a um gerente ou admin.', 'error');
       return;
     }
     setAssignLoading(true);
     try {
       const payload: Record<string, unknown> = { status: assignFormData.status };
-      if (assignFormData.status === 'dono_banca') {
-        payload.enroller = null;
-        payload.bancaName = assignFormData.bancaName || null;
-        payload.bancaUrl = normalizeBancaUrl(assignFormData.bancaUrl || '');
-      } else {
-        // Gerente: superior opcional (null quando vazio); consultor: enroller obrigatório
-        const enrollerVal = (assignFormData.enroller || '').trim();
-        payload.enroller = enrollerVal === '' ? null : enrollerVal;
-      }
+      // Gerente: superior opcional (null quando vazio); captador: enroller obrigatório
+      const enrollerVal = (assignFormData.enroller || '').trim();
+      payload.enroller = enrollerVal === '' ? null : enrollerVal;
 
       let successCount = 0;
       const errors: string[] = [];
 
       for (const assignSelectedUserId of assignSelectedUserIds) {
         let patchPayload = { ...payload };
-        if (assignFormData.status === 'gerente' || assignFormData.status === 'consultor') {
+        if (assignFormData.status === 'gerente' || assignFormData.status === 'captador') {
           const getRes = await fetch(`/api/admin/users/${assignSelectedUserId}/bancas`, { headers: { 'X-User-Id': userId! } });
           const getData = await getRes.json();
           const currentIds = (getData.data?.banca_ids || []) as string[];
@@ -917,7 +902,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         showToast(msg, successCount > 0 ? 'info' : 'error');
       }
       if (successCount > 0) {
-        const label = assignFormData.status === 'dono_banca' ? 'Dono(s) de banca' : assignFormData.status === 'gerente' ? 'Gerente(s)' : 'Consultor(es)';
+        const label = assignFormData.status === 'gerente' ? 'Gerente(s)' : 'Captador(es)';
         showToast(successCount === 1 ? `${label} atribuído com sucesso!` : `${successCount} ${label} atribuídos com sucesso!`, 'success');
         setShowAssignModal(false);
         setAssignFormData(null);
@@ -986,10 +971,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
     const consultoresNaBanca = fromIds
       .map((uid: string) => allUsers.find((x: any) => x.id === uid))
-      .filter((u: any) => u && u.status === 'consultor');
+      .filter((u: any) => u && u.status === 'captador');
 
     const consultoresLigadosAosGerentes = (allUsers || []).filter(
-      (u: any) => u.status === 'consultor' && u.enroller && gerenteIdsInBanca.has(u.enroller)
+      (u: any) => u.status === 'captador' && u.enroller && gerenteIdsInBanca.has(u.enroller)
     );
 
     const consultoresEmGerente = new Map<string, any[]>();
@@ -1002,7 +987,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
         if (hg?.status !== 'gerente' || !hg.id) continue;
         const merged = new Map<string, any>((consultoresEmGerente.get(hg.id) || []).map((c: any) => [c.id, c]));
         for (const sub of hg.subordinates || []) {
-          if (sub?.status === 'consultor' && sub.id) {
+          if (sub?.status === 'captador' && sub.id) {
             const full = allUsers.find((x: any) => x.id === sub.id);
             merged.set(sub.id, full ? { ...sub, ...full } : sub);
           }
@@ -1037,7 +1022,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
 
   const inferCardRole = (user: any): UserCardRole => {
     const s = String(user?.status || '').trim();
-    if (s === 'consultor') return 'consultor';
+    if (s === 'captador') return 'consultor';
     if (s === 'gerente') return 'gerente';
     if (s === 'dono_banca') return 'dono';
     if (s === 'admin') return 'admin';
@@ -1052,7 +1037,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
     > = {
       dono: { color: 'emerald', bg: 'bg-emerald-500', label: 'Dono de Banca', icon: Building2 },
       gerente: { color: 'blue', bg: 'bg-blue-500', label: 'Gerente', icon: Users },
-      consultor: { color: 'green', bg: 'bg-green-500', label: 'Consultor', icon: User },
+      consultor: { color: 'green', bg: 'bg-green-500', label: 'Captador', icon: User },
       admin: { color: 'violet', bg: 'bg-violet-500', label: 'Admin', icon: Shield },
       super_admin: { color: 'fuchsia', bg: 'bg-fuchsia-600', label: 'Super Admin', icon: Shield },
       other: { color: 'slate', bg: 'bg-slate-500', label: '', icon: User },
@@ -1254,7 +1239,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   )}
                   {!owner && (
                     <span className="inline-block mt-2 text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-2 py-1 rounded-md font-bold">
-                      Sem dono cadastrado
+                      Sem gerente responsável
                     </span>
                   )}
                 </div>
@@ -1264,26 +1249,20 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
               {!owner ? (
                 <>
-                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'dono_banca', enroller: '', bancaOwnerId: '', bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), initialBancaIds: [] })); setShowCreateModal(true); }} className={`${btnClass} bg-[#E86A24] text-white hover:bg-[#D95E1B]`}>
-                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Criar Dono</span>
-                  </button>
-                  <button onClick={() => handleOpenAssignModal({ status: 'dono_banca', enroller: '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' })} className={`${btnClass} bg-emerald-700/90 text-white hover:bg-emerald-700 border border-emerald-600`}>
-                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Dono</span>
-                  </button>
                   <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'gerente', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-blue-600 text-white hover:bg-blue-700`}>
                     <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Gerente</span>
                   </button>
                   <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: '', bancaId: String(crmBanca.id), bancaName: '', bancaUrl: '', ownerId: '' })} className={`${btnClass} bg-blue-700/90 text-white hover:bg-blue-700 border border-blue-600`}>
                     <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Gerente</span>
                   </button>
-                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
-                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Consultor</span>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'captador', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Captador</span>
                   </button>
-                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
-                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Consultor</span>
+                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'captador', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: crmBanca.name || '', bancaUrl: normalizeBancaUrl(crmBanca.url || ''), ownerId: '' }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Captador</span>
                   </button>
                   {gerentesInBanca.length > 0 && (
-                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 consultores por CSV (nome, email, senha)">
+                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 captadores por CSV (nome, email, senha)">
                       <FileUp className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Importar CSV</span>
                     </button>
                   )}
@@ -1296,14 +1275,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   <button onClick={() => handleOpenAssignModal({ status: 'gerente', enroller: owner.id, bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id })} className={`${btnClass} bg-blue-700/90 text-white hover:bg-blue-700 border border-blue-600`}>
                     <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Gerente</span>
                   </button>
-                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
-                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Consultor</span>
+                  <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'captador', enroller: owner.id, bancaOwnerId: owner.id, bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className={`${btnClass} bg-emerald-600 text-white hover:bg-emerald-700`}>
+                    <UserPlus className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Adicionar Captador</span>
                   </button>
-                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'consultor', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
-                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Consultor</span>
+                  <button onClick={() => { const managers = getManagersByCrmBanca(String(crmBanca.id)); handleOpenAssignModal({ status: 'captador', enroller: managers?.length ? managers[0].id : '', bancaId: String(crmBanca.id), bancaName: owner.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner.banca_url || crmBanca.url || ''), ownerId: owner.id }); }} className={`${btnClass} bg-green-700/90 text-white hover:bg-green-700 border border-green-600`}>
+                    <UserCheck className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Atribuir Captador</span>
                   </button>
                   {gerentesInBanca.length > 0 && (
-                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 consultores por CSV (nome, email, senha)">
+                    <button onClick={() => openImportConsultantsModal(crmBanca)} className={`${btnClass} bg-slate-600 text-white hover:bg-slate-700 border border-slate-500 col-span-2 sm:col-span-1`} title="Importar até 10 captadores por CSV (nome, email, senha)">
                       <FileUp className="w-4 h-4 flex-shrink-0" /> <span className="truncate">Importar CSV</span>
                     </button>
                   )}
@@ -1315,14 +1294,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-2">
               <Building2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              Dono da Banca
+              Gerente responsável
             </h3>
             {owner ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">{renderUserCard(owner, 'dono')}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">{renderUserCard(owner, 'gerente')}</div>
             ) : (
               <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] p-6 text-gray-600 dark:text-[#aaa]">
-                <p className="font-medium">Nenhum dono cadastrado para esta banca.</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Crie um Dono de Banca ou atribua Gerentes/Consultores diretamente a esta banca.</p>
+                <p className="font-medium">Nenhum gerente responsável para esta banca.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Atribua Gerentes/Captadores diretamente a esta banca.</p>
               </div>
             )}
           </div>
@@ -1477,7 +1456,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="mb-6">
               <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1 flex flex-wrap items-center gap-2">
                 <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                Gerentes e Consultores nesta banca
+                Gerentes e Captadores nesta banca
                 {totalGerentesRede > 0 && (
                   <span className="text-sm font-normal text-gray-500 dark:text-gray-400">
                     {`(${totalGerentesRede} gerente${totalGerentesRede !== 1 ? 's' : ''}${totalPagesGerenteRede > 1 ? ` · pág. ${gerenteRedePage}/${totalPagesGerenteRede}` : ''})`}
@@ -1509,9 +1488,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                       return next;
                     });
                   }}
-                  placeholder="Filtrar gerentes e consultores nesta banca..."
+                  placeholder="Filtrar gerentes e captadores nesta banca..."
                   className="w-full min-w-0 pl-9 pr-10 py-2.5 text-sm bg-white dark:bg-[#2a2a2a] border border-blue-200/80 dark:border-blue-800/80 rounded-lg focus:ring-2 focus:ring-blue-500/40 dark:focus:ring-blue-400/30 focus:border-blue-400 dark:focus:border-blue-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-[#888]"
-                  aria-label="Filtrar gerentes e consultores nesta banca"
+                  aria-label="Filtrar gerentes e captadores nesta banca"
                 />
                 {(cardPeopleSearch[bancaIdKey] ?? '').trim() !== '' && (
                   <button
@@ -1542,10 +1521,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               {gerentesComConsultores.length === 0 && consultoresSemGerenteNaBanca.length === 0 ? (
                 hadAnyGerenteOuConsultor && (globalQ || cardQ) ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Nenhum gerente ou consultor corresponde à busca nesta banca. Ajuste o filtro acima ou a busca geral no topo.
+                    Nenhum gerente ou captador corresponde à busca nesta banca. Ajuste o filtro acima ou a busca geral no topo.
                   </p>
                 ) : (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum gerente ou consultor atribuído. Use os botões acima para criar ou adicionar.</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Nenhum gerente ou captador atribuído. Use os botões acima para criar ou adicionar.</p>
                 )
               ) : (
                 <div className="space-y-6">
@@ -1565,10 +1544,17 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     <div key={gerente.id} className="bg-blue-50/30 dark:bg-blue-950/30 rounded-lg p-4 border border-blue-100 dark:border-blue-800">
                       {renderUserCard(gerente, 'gerente', crmBanca.id)}
                       {consTotal > 0 && (
+                        <div className="mt-2 flex justify-end">
+                          <button onClick={() => openMoveConsultantsModal(owner, gerente, crmBanca)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors touch-manipulation">
+                            <ArrowRightLeft className="w-3.5 h-3.5" /> Mover captadores
+                          </button>
+                        </div>
+                      )}
+                      {consTotal > 0 && (
                         <div className="mt-4 pl-4 border-l-2 border-blue-300 dark:border-blue-600 space-y-3">
                           <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide flex flex-wrap items-center gap-2">
                             <User className="w-4 h-4 text-green-600 dark:text-green-400" />
-                            Consultores ({consTotal}
+                            Captadores ({consTotal}
                             {consTotalPages > 1 ? ` · pág. ${consPg}/${consTotalPages}` : ''})
                           </h4>
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
@@ -1594,11 +1580,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                       {consTotal === 0 && (
                         <div className="mt-4 pl-4 border-l-2 border-blue-300 dark:border-blue-600">
                           <div className="flex gap-2">
-                            <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'consultor', enroller: gerente.id, bancaOwnerId: owner?.id || '', bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex-1 p-3 border-2 border-dashed border-gray-300 dark:border-[#555] rounded-lg text-gray-500 dark:text-gray-400 hover:border-green-400 dark:hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                              <UserPlus className="w-4 h-4" /> Adicionar Consultor
+                            <button onClick={() => { setCreateFormData(prev => ({ ...prev, status: 'captador', enroller: gerente.id, bancaOwnerId: owner?.id || '', bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), initialBancaIds: [String(crmBanca.id)] })); setShowCreateModal(true); }} className="flex-1 p-3 border-2 border-dashed border-gray-300 dark:border-[#555] rounded-lg text-gray-500 dark:text-gray-400 hover:border-green-400 dark:hover:border-green-500 hover:text-green-600 dark:hover:text-green-400 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+                              <UserPlus className="w-4 h-4" /> Adicionar Captador
                             </button>
-                            <button onClick={() => handleOpenAssignModal({ status: 'consultor', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), ownerId: owner?.id || '' })} className="flex-1 p-3 border-2 border-dashed border-green-300 dark:border-green-600 rounded-lg text-green-600 dark:text-green-400 hover:border-green-500 dark:hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors text-sm font-medium flex items-center justify-center gap-2">
-                              <UserCheck className="w-4 h-4" /> Atribuir Consultor
+                            <button onClick={() => handleOpenAssignModal({ status: 'captador', enroller: gerente.id, bancaId: String(crmBanca.id), bancaName: owner?.banca_name || crmBanca.name || '', bancaUrl: normalizeBancaUrl(owner?.banca_url || crmBanca.url || ''), ownerId: owner?.id || '' })} className="flex-1 p-3 border-2 border-dashed border-green-300 dark:border-green-600 rounded-lg text-green-600 dark:text-green-400 hover:border-green-500 dark:hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+                              <UserCheck className="w-4 h-4" /> Atribuir Captador
                             </button>
                           </div>
                         </div>
@@ -1630,7 +1616,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     <div className="bg-gray-50/50 dark:bg-[#333] rounded-lg p-4 border border-gray-200 dark:border-[#404040]">
                       <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-1 flex flex-wrap items-center gap-2">
                         <User className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                        Consultores sem gerente nesta banca (ex.: vinculados a admin)
+                        Captadores sem gerente nesta banca (ex.: vinculados a admin)
                         {totalOrfaos > 0 && totalPagesOrfaos > 1 && (
                           <span className="text-xs font-normal normal-case text-gray-500 dark:text-gray-400">
                             · página {orfaoPage}/{totalPagesOrfaos}
@@ -1772,6 +1758,42 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
       </div>
     );
   };
+
+  /** Painel de problemas de hierarquia detectados (validate-hierarchy), com correção rápida. */
+  const filteredIssues = issues.filter((it: any) => {
+    const q = issuesSearch.trim().toLowerCase();
+    if (!q) return true;
+    return String(it.email || '').toLowerCase().includes(q) || String(it.issue || '').toLowerCase().includes(q);
+  });
+  const issuesTotalPages = Math.max(1, Math.ceil(filteredIssues.length / issuesPerPage));
+  const issuesPageSafe = Math.min(Math.max(1, issuesCurrentPage), issuesTotalPages);
+  const pagedIssues = filteredIssues.slice((issuesPageSafe - 1) * issuesPerPage, issuesPageSafe * issuesPerPage);
+  const issuesPanel = dataLoaded && issues.length > 0 ? (
+    <div className="bg-amber-50 dark:bg-amber-950/30 rounded-xl border border-amber-200 dark:border-amber-800 p-4 sm:p-5 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+        <h3 className="text-base font-bold text-amber-800 dark:text-amber-300 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5" /> Problemas de hierarquia ({filteredIssues.length})
+        </h3>
+        <input type="text" value={issuesSearch} onChange={(e) => { setIssuesSearch(e.target.value); setIssuesCurrentPage(1); }} placeholder="Filtrar por email ou problema..." className="px-3 py-2 text-sm rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-[#333] text-gray-800 dark:text-white placeholder:text-gray-500" />
+      </div>
+      <div className="space-y-2">
+        {pagedIssues.map((it: any, idx: number) => (
+          <div key={`${it.email || idx}`} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-white dark:bg-[#2a2a2a] rounded-lg border border-amber-200 dark:border-amber-800 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{it.email}</p>
+              <p className="text-xs text-gray-600 dark:text-gray-400">{it.issue}</p>
+            </div>
+            <button onClick={() => handleFixIssue(it)} className="self-start sm:self-auto px-3 py-1.5 text-xs font-bold rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition-colors touch-manipulation">Corrigir</button>
+          </div>
+        ))}
+      </div>
+      {issuesTotalPages > 1 && (
+        <div className="mt-3 rounded-lg border border-amber-200 dark:border-amber-800 overflow-hidden bg-white dark:bg-[#2a2a2a]">
+          <Pagination currentPage={issuesPageSafe} totalPages={issuesTotalPages} onPageChange={setIssuesCurrentPage} itemsPerPage={issuesPerPage} totalItems={filteredIssues.length} />
+        </div>
+      )}
+    </div>
+  ) : null;
 
   let bancasWhenLoaded: React.ReactNode = null;
   if (dataLoaded && crmBancas && crmBancas.length > 0) {
@@ -2015,8 +2037,8 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 <>
                   <select value={bancaFilter} onChange={(e) => { setBancaFilter(e.target.value as any); setBancasCurrentPage(1); }} className="px-3 py-2.5 sm:py-2 text-base sm:text-sm border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-white bg-white dark:bg-[#333] touch-manipulation" title="Filtro de bancas">
                     <option value="all">Todas</option>
-                    <option value="sem_dono">Sem dono</option>
-                    <option value="com_dono">Com dono</option>
+                    <option value="sem_dono">Sem gerente responsável</option>
+                    <option value="com_dono">Com gerente responsável</option>
                   </select>
                   <button onClick={() => loadHierarchyData(true)} disabled={dataLoading} className="px-3 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-[#ccc] hover:bg-gray-50 dark:hover:bg-[#333] transition-colors flex items-center gap-2 touch-manipulation" title="Recarregar">
                     <RefreshCw className="w-4 h-4" />
@@ -2057,7 +2079,10 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <p className="text-gray-600 dark:text-[#aaa]">Escolha <strong>Todas as bancas</strong> ou uma banca no seletor e clique em <strong>Carregar dados</strong> para visualizar a hierarquia.</p>
           </div>
         ) : (
-          bancasWhenLoaded
+          <>
+            {issuesPanel}
+            {bancasWhenLoaded}
+          </>
         )
       }
       </div>
@@ -2094,9 +2119,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-blue-600 to-blue-500 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserPlus className="w-6 h-6" />
-                Criar {createFormData.status === 'dono_banca' ? 'Dono de Banca' : createFormData.status === 'gestor' ? 'Gestor de Tráfego' : createFormData.status === 'gerente' ? 'Gerente' : 'Consultor'}
+                Criar {createFormData.status === 'gerente' ? 'Gerente' : 'Captador'}
               </h2>
-              <button onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
+              <button onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'captador', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={handleCreateUser} className="p-6 space-y-4">
               <div>
@@ -2111,14 +2136,12 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Senha *</label>
                 <input type="password" value={createFormData.password} onChange={(e) => setCreateFormData({ ...createFormData, password: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
               </div>
-              {(createFormData.status === 'gerente' || createFormData.status === 'consultor' || createFormData.status === 'gestor') && (
+              {(createFormData.status === 'gerente' || createFormData.status === 'captador') && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    {createFormData.status === 'consultor'
+                    {createFormData.status === 'captador'
                       ? 'Superior (Gerente ou Admin)'
-                      : createFormData.status === 'gestor'
-                        ? 'Superior (Dono da banca, Admin ou Super Admin) — opcional'
-                        : 'Selecionar Dono da Banca'}
+                      : 'Superior (Gerente, Admin ou Super Admin) — opcional'}
                   </label>
                   <select
                     value={createFormData.enroller}
@@ -2126,49 +2149,31 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333]"
                   >
                     <option value="">
-                      {createFormData.status === 'consultor' ? 'Selecione...' : 'Sem superior (opcional)'}
+                      {createFormData.status === 'captador' ? 'Selecione...' : 'Sem superior (opcional)'}
                     </option>
-                    {createFormData.status === 'consultor'
+                    {createFormData.status === 'captador'
                       ? getSuperioresParaConsultor(createFormData.initialBancaIds?.[0] ?? null).map((g: any) => (
                           <option key={g.id} value={g.id}>
                             {[g.full_name || g.email, g.status === 'admin' || g.status === 'super_admin' ? `(${g.status})` : ''].filter(Boolean).join(' ')}
                           </option>
                         ))
-                      : createFormData.status === 'gestor'
-                        ? getSuperioresParaGestor().map((s: any) => (
-                            <option key={s.id} value={s.id}>
-                              {[
-                                s.full_name || s.email,
-                                s.status === 'super_admin'
-                                  ? '(Super Admin)'
-                                  : s.status === 'admin'
-                                    ? '(Admin)'
-                                    : '(Dono da banca)',
-                              ].join(' ')}
-                            </option>
-                          ))
-                        : (hierarchy || []).map((h: any) => (
-                            <option key={h.id} value={h.id}>
-                              {h.banca_name || h.email}
-                            </option>
-                          ))}
+                      : getSuperioresParaGestor().map((s: any) => (
+                          <option key={s.id} value={s.id}>
+                            {[
+                              s.full_name || s.email,
+                              s.status === 'super_admin'
+                                ? '(Super Admin)'
+                                : s.status === 'admin'
+                                  ? '(Admin)'
+                                  : '(Gerente)',
+                            ].join(' ')}
+                          </option>
+                        ))}
                   </select>
                 </div>
               )}
-              {createFormData.status === 'dono_banca' && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nome da Banca *</label>
-                    <input type="text" value={createFormData.bancaName} onChange={(e) => setCreateFormData({ ...createFormData, bancaName: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" required />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">URL da Banca *</label>
-                    <input type="text" value={createFormData.bancaUrl} onChange={(e) => setCreateFormData({ ...createFormData, bancaUrl: e.target.value })} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[#E86A24] dark:focus:ring-[#00ff00] focus:border-[#E86A24] dark:focus:border-[#00ff00] text-gray-700 dark:text-white bg-white dark:bg-[#333] placeholder:text-gray-500 dark:placeholder:text-[#888]" placeholder="exemplo.com/api/crm" required />
-                  </div>
-                </>
-              )}
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'consultor', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} disabled={createLoading} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
+                <button type="button" onClick={() => { setShowCreateModal(false); setCreateFormData({ email: '', fullName: '', password: '', status: 'captador', enroller: '', bancaOwnerId: '', bancaName: '', bancaUrl: '', initialBancaIds: [] }); }} disabled={createLoading} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
                 <button type="submit" disabled={createLoading} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-w-[100px]">
                   {createLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Criando...</> : 'Criar'}
                 </button>
@@ -2184,13 +2189,13 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-slate-600 to-slate-500 text-white flex-shrink-0">
               <h2 className="text-lg sm:text-xl font-bold flex items-center gap-2">
                 <FileUp className="w-5 h-5 sm:w-6 sm:h-6" />
-                Importar consultores (CSV)
+                Importar captadores (CSV)
               </h2>
               <button type="button" onClick={() => { setShowImportConsultantsModal(false); setImportConsultantsContext(null); setImportConsultantsRows([]); setImportConsultantsError(null); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors" aria-label="Fechar"><X className="w-6 h-6" /></button>
             </div>
             <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1 min-h-0">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Banca: <strong className="text-gray-900 dark:text-white">{importConsultantsContext.bancaName || importConsultantsContext.bancaId}</strong>. Máximo {MAX_IMPORT_CONSULTANTS} consultores por importação.
+                Banca: <strong className="text-gray-900 dark:text-white">{importConsultantsContext.bancaName || importConsultantsContext.bancaId}</strong>. Máximo {MAX_IMPORT_CONSULTANTS} captadores por importação.
               </p>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Superior (Gerente ou Admin) *</label>
@@ -2213,7 +2218,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               )}
               {importConsultantsRows.length > 0 && (
                 <div>
-                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Preview ({importConsultantsRows.length} consultor{importConsultantsRows.length !== 1 ? 'es' : ''})</p>
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Preview ({importConsultantsRows.length} captador{importConsultantsRows.length !== 1 ? 'es' : ''})</p>
                   <div className="border border-gray-200 dark:border-[#404040] rounded-lg overflow-hidden max-h-48 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 dark:bg-[#333] sticky top-0">
@@ -2271,12 +2276,11 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Cargo</label>
                 <select value={selectedFixRole} onChange={(e) => { setSelectedFixRole(e.target.value as any); setSelectedEnroller(''); }} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
-                  <option value="dono_banca">Dono de banca</option>
                   <option value="gerente">Gerente</option>
-                  <option value="consultor">Consultor</option>
+                  <option value="captador">Captador</option>
                 </select>
               </div>
-              {selectedFixRole === 'consultor' && (
+              {selectedFixRole === 'captador' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Superior (Gerente ou Admin)</label>
                   <select value={selectedEnroller} onChange={(e) => setSelectedEnroller(e.target.value)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-gray-700">
@@ -2291,7 +2295,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               )}
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => { setShowFixModal(false); setFixingIssue(null); setSelectedEnroller(''); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
-                <button onClick={handleSaveFix} disabled={!selectedFixBancaId || (selectedFixRole === 'consultor' && !selectedEnroller)} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">Corrigir</button>
+                <button onClick={handleSaveFix} disabled={!selectedFixBancaId || (selectedFixRole === 'captador' && !selectedEnroller)} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">Corrigir</button>
               </div>
             </div>
           </div>
@@ -2304,7 +2308,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-teal-600 to-teal-500 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <UserCheck className="w-6 h-6" />
-                Atribuir {assignFormData.status === 'dono_banca' ? 'Dono de Banca' : assignFormData.status === 'gerente' ? 'Gerente' : 'Consultor'}
+                Atribuir {assignFormData.status === 'gerente' ? 'Gerente' : 'Captador'}
               </h2>
               <button onClick={() => { setShowAssignModal(false); setAssignFormData(null); setAssignSelectedUserIds([]); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
@@ -2315,14 +2319,14 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                   <select value={assignFormData.enroller || ''} onChange={(e) => setAssignFormData((prev: any) => prev ? { ...prev, enroller: e.target.value } : prev)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-700 dark:text-white">
                     <option value="">Sem superior</option>
                     {(allUsers || [])
-                      .filter((u: any) => u && (u.status === 'dono_banca' || u.status === 'gerente' || u.status === 'admin' || u.status === 'super_admin'))
+                      .filter((u: any) => u && (u.status === 'gerente' || u.status === 'admin' || u.status === 'super_admin'))
                       .map((u: any) => (
                         <option key={u.id} value={u.id}>{[u.full_name || u.email, `(${u.status})`].filter(Boolean).join(' ')}</option>
                       ))}
                   </select>
                 </div>
               )}
-              {assignFormData.status === 'consultor' && (
+              {assignFormData.status === 'captador' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Superior (Gerente ou Admin)</label>
                   <select value={assignFormData.enroller} onChange={(e) => setAssignFormData((prev: any) => prev ? { ...prev, enroller: e.target.value } : prev)} className="w-full px-4 py-2 border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-gray-700 dark:text-white">
@@ -2356,9 +2360,9 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     if (!u.email) return false;
                     return !search || (u.email || '').toLowerCase().includes(search) || (u.full_name || '').toLowerCase().includes(search);
                   });
-                  const selectedGerenteId = assignFormData.status === 'consultor' ? assignFormData.enroller : null;
+                  const selectedGerenteId = assignFormData.status === 'captador' ? assignFormData.enroller : null;
                   return filtered.length > 0 ? filtered.map((u: any) => {
-                    const alreadyAssignedToThisGerente = selectedGerenteId && u.status === 'consultor' && u.enroller === selectedGerenteId;
+                    const alreadyAssignedToThisGerente = selectedGerenteId && u.status === 'captador' && u.enroller === selectedGerenteId;
                     return (
                       <button key={u.id} type="button" onClick={() => toggleAssignUser(u.id)} className={`w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-[#333] transition-colors ${assignSelectedUserIds.includes(u.id) ? 'bg-teal-50 dark:bg-teal-900/30 border-l-4 border-teal-500' : ''} ${alreadyAssignedToThisGerente ? 'border-l-4 border-amber-400 bg-amber-50/50 dark:bg-amber-900/20' : ''}`}>
                         <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-[#404040] flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 flex-shrink-0">{(u.full_name || u.email)[0]?.toUpperCase() || '?'}</div>
@@ -2368,7 +2372,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                           <div className="flex flex-wrap items-center gap-1.5 mt-1">
                             <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-[#404040] text-gray-600 dark:text-gray-300">{u.status}</span>
                             {alreadyAssignedToThisGerente && (
-                              <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-700" title="Este consultor já está atribuído a este superior">
+                              <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-700" title="Este captador já está atribuído a este superior">
                                 Já atribuído
                               </span>
                             )}
@@ -2384,7 +2388,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => { setShowAssignModal(false); setAssignFormData(null); setAssignSelectedUserIds([]); }} className="px-4 py-2 border border-gray-300 dark:border-[#555] rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors">Cancelar</button>
-                <button onClick={handleAssignUser} disabled={assignSelectedUserIds.length === 0 || assignLoading || (assignFormData.status === 'consultor' && !assignFormData.enroller)} className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                <button onClick={handleAssignUser} disabled={assignSelectedUserIds.length === 0 || assignLoading || (assignFormData.status === 'captador' && !assignFormData.enroller)} className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                   {assignLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Atribuindo...</> : `Atribuir${assignSelectedUserIds.length > 0 ? ` (${assignSelectedUserIds.length})` : ''}`}
                 </button>
               </div>
@@ -2399,7 +2403,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
             <div className="p-6 border-b border-gray-200 dark:border-[#404040] flex items-center justify-between bg-gradient-to-r from-amber-500 to-amber-600 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <ArrowRightLeft className="w-6 h-6" />
-                Mover consultores
+                Mover captadores
               </h2>
               <button onClick={() => { setShowMoveConsultantsModal(false); setMoveContext(null); setMoveSelectedConsultantIds([]); setMoveTargetGerenteId(''); setMoveConsultantSearch(''); }} className="hover:bg-white/20 p-1.5 rounded-lg transition-colors"><X className="w-6 h-6" /></button>
             </div>
@@ -2409,7 +2413,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
               </p>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Selecione os consultores a mover:</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Selecione os captadores a mover:</label>
                   {(() => {
                     const subordinates = moveContext.sourceGerente.subordinates || [];
                     const search = moveConsultantSearch.trim().toLowerCase();
@@ -2445,7 +2449,7 @@ export default function HierarchySection({ userId }: { userId: string | null }) 
                     </button>
                   )) : (
                     <div className="px-4 py-6 text-center text-gray-500 dark:text-gray-400 text-sm">
-                      {moveConsultantSearch.trim() ? `Nenhum consultor encontrado com "${moveConsultantSearch.trim()}"` : 'Nenhum consultor na lista'}
+                      {moveConsultantSearch.trim() ? `Nenhum captador encontrado com "${moveConsultantSearch.trim()}"` : 'Nenhum captador na lista'}
                     </div>
                   );
                   })()}

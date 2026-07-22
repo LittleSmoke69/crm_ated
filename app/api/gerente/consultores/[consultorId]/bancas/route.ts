@@ -134,7 +134,7 @@ export async function GET(
         .eq('id', consultorId)
         .maybeSingle();
 
-      if (consultorErr || !consultorRow || consultorRow.status !== 'consultor') {
+      if (consultorErr || !consultorRow || consultorRow.status !== 'captador') {
         return errorResponse('Consultor não encontrado', 404);
       }
       // Não exigir gerente_id na query: o filtro da página pode divergir da lista do modal (ex.: allConsultores antigo).

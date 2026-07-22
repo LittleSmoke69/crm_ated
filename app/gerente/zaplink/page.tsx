@@ -249,7 +249,7 @@ export default function GerenteZaplinkPage() {
       });
       const json = await res.json();
       if (json.success) {
-        showToast('success', json.message || 'Consultor removido da sua rede.');
+        showToast('success', json.message || 'Captador removido da sua rede.');
         loadSubmissions();
         loadConsultantRequests();
       } else {
@@ -361,8 +361,8 @@ export default function GerenteZaplinkPage() {
 
         <div className="mb-4 flex items-center gap-2 text-gray-600 dark:text-[#aaa]">
           <Users className="w-5 h-5" />
-          <span className="font-medium">Consultores vinculados à sua rede</span>
-          <span className="text-sm">({totalApproved} {totalApproved === 1 ? 'consultor' : 'consultores'})</span>
+          <span className="font-medium">Captadores vinculados à sua rede</span>
+          <span className="text-sm">({totalApproved} {totalApproved === 1 ? 'captador' : 'captadores'})</span>
         </div>
 
         <div className="bg-white dark:bg-[#2a2a2a] rounded-xl border border-gray-200 dark:border-[#404040] overflow-hidden">
@@ -373,7 +373,7 @@ export default function GerenteZaplinkPage() {
             </div>
           ) : unifiedList.length === 0 ? (
             <div className="p-8 text-center text-gray-500 dark:text-[#888]">
-              Nenhum consultor vinculado à sua rede no momento.
+              Nenhum captador vinculado à sua rede no momento.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -480,7 +480,7 @@ export default function GerenteZaplinkPage() {
               </div>
             ) : consultantRequests.length === 0 ? (
               <div className="p-8 text-center text-gray-500 dark:text-[#888]">
-                Nenhuma solicitação de consultor. Use o painel do gerente (Solicitações → Consultor) para pedir.
+                Nenhuma solicitação de captador. Use o painel do gerente (Solicitações → Captador) para pedir.
               </div>
             ) : (
               <>
@@ -503,7 +503,7 @@ export default function GerenteZaplinkPage() {
                         </div>
                         {req.consultants_sent && req.consultants_sent.length > 0 && (
                           <div className="mt-2 pl-2 border-l-2 border-green-200 dark:border-green-800">
-                            <p className="text-xs font-medium text-gray-600 dark:text-[#aaa] mb-1">Consultores enviados:</p>
+                            <p className="text-xs font-medium text-gray-600 dark:text-[#aaa] mb-1">Captadores enviados:</p>
                             <ul className="space-y-1">
                               {req.consultants_sent.map((c) => (
                                 <li key={c.consultant_user_id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-[#ccc]">

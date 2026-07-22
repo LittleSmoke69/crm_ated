@@ -19,7 +19,7 @@ import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-g
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStatus(req, ['super_admin', 'admin', 'auditoria']);
+    await requireStatus(req, ['super_admin', 'admin']);
     const { searchParams } = req.nextUrl;
 
     const env = searchParams.get('env') || undefined;

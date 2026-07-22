@@ -329,10 +329,10 @@ export function aggregateBetsDepositsPayload(items: Array<{ profile: ConsultantP
  */
 const SCOPE_ALLOWED_SUBORDINATE_STATUS: Record<string, string[]> = {
   consultor: [],
-  gerente: ['consultor'],
+  gerente: ['captador'],
   /** Legado / genérico; gestor usa bloco dedicado (escopo tipo dono). */
-  gestor: ['consultor', 'gerente'],
-  dono_banca: ['gerente', 'consultor'],
+  gestor: ['captador', 'gerente'],
+  dono_banca: ['gerente', 'captador'],
 };
 
 const SCOPE_INCLUDES_SELF: Record<string, boolean> = {
@@ -584,7 +584,7 @@ export async function getDashboardScopeForUser(params: {
   }
 
   // Papéis hierárquicos: consultor, gerente, dono_banca
-  const role = String(profile.status || 'consultor');
+  const role = String(profile.status || 'captador');
   const allowedSubStatus = SCOPE_ALLOWED_SUBORDINATE_STATUS[role] ?? [];
   const includeSelf = SCOPE_INCLUDES_SELF[role] ?? true;
 
@@ -678,7 +678,7 @@ export async function getConsultorProfilesByBancaUrl(bancaUrl: string): Promise<
     .from('profiles')
     .select('id, email, full_name, status')
     .in('id', userIdsInBanca)
-    .in('status', ['consultor', 'gerente', 'admin', 'gestor', 'super_admin']);
+    .in('status', ['captador', 'gerente', 'admin', 'gestor', 'super_admin']);
 
   return (profiles || [])
     .filter((p: any) => Boolean(p.id) && Boolean(p.email))

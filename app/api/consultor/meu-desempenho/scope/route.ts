@@ -35,10 +35,8 @@ export async function GET(req: NextRequest) {
     const allowedStatuses = new Set([
       'super_admin',
       'admin',
-      'gestor',
-      'dono_banca',
       'gerente',
-      'consultor',
+      'captador',
     ]);
     if (!profile.status || !allowedStatuses.has(String(profile.status).trim().toLowerCase())) {
       return errorResponse('Acesso negado.', 403);

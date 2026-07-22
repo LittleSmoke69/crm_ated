@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     let query = supabaseServiceRole
       .from('profiles')
       .select('id, full_name, email')
-      .eq('status', 'consultor')
+      .eq('status', 'captador')
       .order('full_name', { ascending: true })
       .limit(fetchLimit);
 

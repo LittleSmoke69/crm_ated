@@ -48,11 +48,11 @@ export async function GET(req: NextRequest) {
     const fromSec = fromMs !== null ? Math.floor(fromMs / 1000) : null;
     const toSec = toMs !== null ? Math.floor(toMs / 1000) : null;
 
-    // 1) Usuários do cargo de suporte (escopo do tenant para admin; todos para super_admin)
+    // 1) Equipe de atendimento: admins (o cargo "suporte" foi aposentado e remapeado para admin)
     let supportQuery = supabaseServiceRole
       .from('profiles')
       .select('id, full_name, email, status, last_seen_at, last_login_at, total_online_time')
-      .eq('status', 'suporte');
+      .in('status', ['admin', 'suporte']);
 
     if (isAdmin && profile?.zaploto_id) {
       supportQuery = supportQuery.eq('zaploto_id', profile.zaploto_id);

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Mail, Lock, LogIn, AlertCircle, Sun, Moon } from 'lucide-react';
+import { Mail, Lock, LogIn, AlertCircle, Sun, Moon, Eye, EyeOff } from 'lucide-react';
 import Logo from '@/components/Logo';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
@@ -13,12 +13,28 @@ import {
 } from '@/lib/utils/tenant-href';
 import { getLandingRouteByStatus } from '@/lib/utils/landing-route';
 
+/** Cargos legados → cargos atuais (super_admin | admin | gerente | captador). */
+const LEGACY_STATUS_MAP: Record<string, string> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+function normalizeLegacyStatus(status: string | null | undefined): string | null {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return null;
+  return LEGACY_STATUS_MAP[raw] ?? raw;
+}
+
 const LoginPage = () => {
   const router = useTenantRouter();
   const toTenantHref = useTenantHref();
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -80,12 +96,14 @@ const LoginPage = () => {
         return;
       }
 
-      const { userId, email: userEmail, status } = data.data || {};
+      const { userId, email: userEmail, status: rawStatus } = data.data || {};
       if (!userId || !userEmail) {
         setErrorMsg('Resposta inválida do servidor.');
         setLoading(false);
         return;
       }
+
+      const status = normalizeLegacyStatus(rawStatus);
 
       setSessionArtifacts(userId, userEmail, status);
 
@@ -169,15 +187,24 @@ const LoginPage = () => {
                 <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888] pointer-events-none" />
                 <input
                   id="password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
+                  className="w-full min-h-[48px] pl-10 pr-12 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] bg-white dark:bg-[#333] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-800 dark:text-white placeholder:text-gray-600 dark:placeholder:text-[#aaa] transition"
                   disabled={loading}
                   autoComplete="current-password"
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 dark:text-[#888] hover:text-gray-600 dark:hover:text-[#ccc] transition-colors"
+                  aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
               </div>
             </div>
 

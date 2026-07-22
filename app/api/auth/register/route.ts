@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
         email,
         full_name: fullName,
         password_hash: passwordHash,
-        status: 'consultor',
+        status: 'captador',
         zaploto_id: DEFAULT_ZAPLOTO_ID,
         created_at: new Date().toISOString(),
       })

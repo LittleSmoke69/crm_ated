@@ -2,10 +2,40 @@ import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireAuth } from './auth';
 
-export type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte';
+/** Linha de cargos ativa: Super Admin > Admin > Gerente > Captador. */
+export type ActiveUserStatus = 'super_admin' | 'admin' | 'gerente' | 'captador';
+
+/**
+ * @deprecated Cargos aposentados pela migração new_role_line_super_admin_admin_gerente_captador.sql.
+ * Nenhum usuário possui mais estes status (getUserProfile normaliza via LEGACY_STATUS_MAP).
+ * Permanecem no tipo apenas para o código legado (rotas /dono-banca, /gestor-trafego) compilar.
+ */
+export type LegacyUserStatus = 'consultor' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte';
+
+export type UserStatus = ActiveUserStatus | LegacyUserStatus;
 
 /** Status do sistema com regras de hierarquia. Cargos personalizados (zaploto_roles) podem ser qualquer string fora desta lista. */
-const KNOWN_HIERARCHY_STATUSES: UserStatus[] = ['super_admin', 'admin', 'consultor', 'gerente', 'dono_banca', 'gestor', 'auditoria', 'suporte'];
+const KNOWN_HIERARCHY_STATUSES: UserStatus[] = ['super_admin', 'admin', 'gerente', 'captador'];
+
+/**
+ * Cargos aposentados -> cargo equivalente na nova linha (Super Admin > Admin > Gerente > Captador).
+ * A migração new_role_line_super_admin_admin_gerente_captador.sql remapeia o banco;
+ * este mapa é defesa em profundidade para dados ainda não migrados (backups, seeds antigos).
+ */
+const LEGACY_STATUS_MAP: Record<string, UserStatus> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+/** Normaliza status legado para a nova linha de cargos; cargos personalizados passam intactos. */
+export function normalizeStatus(status: string | null | undefined): string | null {
+  if (status == null) return null;
+  const s = String(status).trim();
+  return LEGACY_STATUS_MAP[s.toLowerCase()] ?? s;
+}
 
 export interface UserProfile {
   id: string;
@@ -67,7 +97,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
         return null;
       }
 
-      return data as UserProfile;
+      return { ...data, status: normalizeStatus((data as { status?: string | null }).status) } as UserProfile;
     } catch (error: unknown) {
       const e = error as { message?: string; code?: string };
       if (isNetworkOrUnavailableError(e) && attempt < GET_PROFILE_MAX_RETRIES) {
@@ -88,14 +118,14 @@ export function isSuperAdmin(profile: UserProfile | null): boolean {
   return profile?.status === 'super_admin';
 }
 
-/** Acesso ao painel administrativo: super_admin, admin e auditoria (auditoria com permissões restritas por step). */
+/** Acesso ao painel administrativo: super_admin e admin. */
 export function hasFullAdminAccess(profile: UserProfile | null): boolean {
-  return profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'auditoria';
+  return profile?.status === 'super_admin' || profile?.status === 'admin';
 }
 
-/** Acesso à hierarquia e alterações na rede: super_admin, admin e suporte. */
+/** Acesso à hierarquia e alterações na rede: super_admin e admin. */
 export function hasHierarchyAccess(profile: UserProfile | null): boolean {
-  return profile?.status === 'super_admin' || profile?.status === 'admin' || profile?.status === 'suporte';
+  return profile?.status === 'super_admin' || profile?.status === 'admin';
 }
 
 /**
@@ -161,7 +191,7 @@ export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: str
 }
 
 /**
- * APIs da página Transferência de leads (histórico/métricas): super_admin, admin, auditoria e gerente (escopo por bancas).
+ * APIs da página Transferência de leads (histórico/métricas): super_admin, admin e gerente (escopo por bancas).
  */
 export async function requireLeadTransferApiAccess(
   req: NextRequest
@@ -176,7 +206,7 @@ export async function requireLeadTransferApiAccess(
     throw new Error('Perfil não encontrado');
   }
   const s = profile.status;
-  if (s === 'super_admin' || s === 'admin' || s === 'auditoria' || s === 'gerente') {
+  if (s === 'super_admin' || s === 'admin' || s === 'gerente') {
     return { userId, profile };
   }
   throw new Error('Acesso negado.');
@@ -235,7 +265,7 @@ export async function requireAdminOrSuporteOrGerente(
 }
 
 /**
- * Requer que o usuário seja SuperAdmin, Admin ou Auditoria (acesso ao Anti-Spam)
+ * Requer que o usuário seja SuperAdmin ou Admin (acesso ao Anti-Spam)
  */
 export async function requireAntiSpamAccess(req: NextRequest): Promise<{ userId: string; profile: UserProfile }> {
   const { userId } = await requireAuth(req);
@@ -247,9 +277,9 @@ export async function requireAntiSpamAccess(req: NextRequest): Promise<{ userId:
   if (!profile) {
     throw new Error('Perfil não encontrado');
   }
-  const allowed = profile.status === 'super_admin' || profile.status === 'admin' || profile.status === 'auditoria';
+  const allowed = profile.status === 'super_admin' || profile.status === 'admin';
   if (!allowed) {
-    throw new Error('Acesso negado. Apenas SuperAdmin, Admin ou Auditoria podem acessar o Anti-Spam.');
+    throw new Error('Acesso negado. Apenas SuperAdmin ou Admin podem acessar o Anti-Spam.');
   }
   return { userId, profile };
 }
@@ -379,10 +409,9 @@ export function isLeadStockAdminViewer(profile: UserProfile): boolean {
 
 /**
  * Verifica se um usuário pode acessar dados de outro usuário baseado na hierarquia
- * Admin pode acessar tudo
- * Dono de banca pode acessar seus Gerentes e Consultores abaixo dele
- * Gerente pode acessar seus Consultores abaixo dele
- * Consultor só pode acessar seus próprios dados
+ * Super Admin e Admin podem acessar tudo
+ * Gerente pode acessar seus Captadores abaixo dele
+ * Captador só pode acessar seus próprios dados
  */
 export async function canAccessUser(
   requesterId: string,
@@ -405,8 +434,8 @@ export async function canAccessUser(
     return true;
   }
 
-  // Consultor só pode acessar seus próprios dados
-  if (requesterProfile.status === 'consultor') {
+  // Captador só pode acessar seus próprios dados
+  if (requesterProfile.status === 'captador') {
     return false;
   }
 
@@ -417,10 +446,9 @@ export async function canAccessUser(
 
 /**
  * Retorna todos os IDs de usuários subordinados (recursivo)
- * Admin retorna todos os usuários
- * Dono de banca retorna seus Gerentes e Consultores
- * Gerente retorna seus Consultores
- * Consultor retorna array vazio
+ * Super Admin/Admin retorna todos os usuários
+ * Gerente retorna seus Captadores
+ * Captador retorna array vazio
  */
 export async function getSubordinateIds(userId: string): Promise<string[]> {
   const profile = await getUserProfile(userId);
@@ -439,8 +467,8 @@ export async function getSubordinateIds(userId: string): Promise<string[]> {
     return data?.map(u => u.id) || [];
   }
 
-  // Consultor e Gestor não têm subordinados (gestor visualiza dados do dono da banca via enroller)
-  if (profile.status === 'consultor' || profile.status === 'gestor') {
+  // Captador não tem subordinados
+  if (profile.status === 'captador') {
     return [];
   }
 
@@ -471,8 +499,8 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
     return (data as UserProfile[]) || [];
   }
 
-  // Consultor e Gestor não têm subordinados
-  if (profile.status === 'consultor' || profile.status === 'gestor') {
+  // Captador não tem subordinados
+  if (profile.status === 'captador') {
     return [];
   }
 
@@ -510,19 +538,17 @@ export async function getSubordinates(userId: string): Promise<UserProfile[]> {
 }
 
 /**
- * Valida se a hierarquia está correta
- * Consultor: enroller obrigatório — Gerente, Admin ou Super Admin
- * Gerente: enroller opcional — Dono, outro Gerente, Admin ou Super Admin
- * Dono de banca pode ter enroller NULL ou outro Dono de banca (se houver estrutura superior)
- * Admin deve ter enroller NULL
- * Auditoria e Suporte podem ter Admin como enroller ou NULL
+ * Valida se a hierarquia está correta (linha: Super Admin > Admin > Gerente > Captador)
+ * Captador: enroller obrigatório — Gerente, Admin ou Super Admin
+ * Gerente: enroller opcional — outro Gerente, Admin, Super Admin ou NULL
+ * Admin e Super Admin devem ter enroller NULL
  */
 export async function validateHierarchy(userId: string, status: UserStatus | string | null | undefined, enroller: string | null): Promise<{ valid: boolean; error?: string }> {
-  // Trata string vazia como null (dono/superior opcional ao atribuir gerente)
+  // Trata string vazia como null (superior opcional ao atribuir gerente)
   const enrollerId = (enroller != null && String(enroller).trim() !== '') ? String(enroller).trim() : null;
 
   // Cargos personalizados (White Label & Cargos): aceita qualquer enroller ou null, sem validar hierarquia
-  const statusStr = status != null ? String(status).trim() : '';
+  const statusStr = normalizeStatus(status) ?? '';
   if (!statusStr || !KNOWN_HIERARCHY_STATUSES.includes(statusStr as UserStatus)) {
     return { valid: true };
   }
@@ -535,30 +561,12 @@ export async function validateHierarchy(userId: string, status: UserStatus | str
     return { valid: true };
   }
 
-  // Auditoria e Suporte podem ter enroller NULL ou Admin
-  if (statusStr === 'auditoria' || statusStr === 'suporte') {
-    if (enrollerId === null) {
-      return { valid: true };
-    }
-    const enrollerProfile = await getUserProfile(enrollerId);
-    if (!enrollerProfile) {
-      return { valid: false, error: 'Enroller não encontrado' };
-    }
-    if (enrollerProfile.status !== 'admin') {
-      return { valid: false, error: `${statusStr} deve ter Admin como enroller ou NULL` };
+  // Gerente pode ter enroller NULL (sem superior). Captador sempre deve ter um superior válido.
+  if (enrollerId === null) {
+    if (statusStr === 'captador') {
+      return { valid: false, error: 'Captador deve ser atribuído a um Gerente, Admin ou Super Admin' };
     }
     return { valid: true };
-  }
-
-  // Gerente, Dono de banca e Gestor podem ter enroller NULL (sem superior). Consultor sempre deve ter um superior válido.
-  if (enrollerId === null) {
-    if (statusStr === 'consultor') {
-      return { valid: false, error: 'Consultor deve ser atribuído a um Gerente ou Admin' };
-    }
-    if (statusStr === 'dono_banca' || statusStr === 'gerente' || statusStr === 'gestor') {
-      return { valid: true };
-    }
-    return { valid: false, error: `${statusStr} deve ter um enroller` };
   }
 
   // Verifica se o enroller existe
@@ -568,28 +576,16 @@ export async function validateHierarchy(userId: string, status: UserStatus | str
   }
 
   // Valida hierarquia
-  if (statusStr === 'consultor') {
-    const validConsultorEnroller = ['gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
-    if (!validConsultorEnroller) {
-      return { valid: false, error: 'Consultor deve ter um Gerente, Admin ou Super Admin como enroller' };
+  if (statusStr === 'captador') {
+    const validCaptadorEnroller = ['gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    if (!validCaptadorEnroller) {
+      return { valid: false, error: 'Captador deve ter um Gerente, Admin ou Super Admin como enroller' };
     }
   } else if (statusStr === 'gerente') {
-    // Gerente pode ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller (super_admin/admin/suporte podem atribuir sem dono de banca)
-    const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
+    // Gerente pode ter outro Gerente, Admin ou Super Admin como enroller
+    const validGerenteEnroller = ['gerente', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
     if (!validGerenteEnroller) {
-      return { valid: false, error: 'Gerente deve ter Dono de banca, outro Gerente, Admin ou Super Admin como enroller' };
-    }
-  } else if (statusStr === 'dono_banca') {
-    // Dono de banca pode ter outro Dono de banca, Admin ou Super Admin como enroller
-    const validDonoEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
-    if (!validDonoEnroller) {
-      return { valid: false, error: 'Dono de banca deve ter outro Dono de banca, Admin ou Super Admin como enroller' };
-    }
-  } else if (statusStr === 'gestor') {
-    // Gestor de tráfego pode ter Dono de banca, Admin ou Super Admin como enroller
-    const validGestorEnroller = ['dono_banca', 'admin', 'super_admin'].includes(enrollerProfile.status ?? '');
-    if (!validGestorEnroller) {
-      return { valid: false, error: 'Gestor de tráfego deve ter Dono de banca, Admin ou Super Admin como enroller' };
+      return { valid: false, error: 'Gerente deve ter outro Gerente, Admin ou Super Admin como enroller' };
     }
   }
 

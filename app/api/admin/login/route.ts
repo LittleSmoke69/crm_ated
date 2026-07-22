@@ -7,6 +7,7 @@ import {
   getUserProfile,
   hasFullAdminAccess,
   hasSidebarPermission,
+  normalizeStatus,
 } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 
@@ -57,6 +58,16 @@ export async function POST(req: NextRequest) {
       return errorResponse('Acesso negado. Esta conta não possui permissões de administrador.', 403);
     }
 
+    // Usuário desativado (user_settings.is_active = false) não pode entrar
+    const { data: settings } = await supabaseServiceRole
+      .from('user_settings')
+      .select('is_active')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (settings?.is_active === false) {
+      return errorResponse('Conta desativada. Fale com o administrador.', 403);
+    }
+
     await supabaseServiceRole
       .from('profiles')
       .update({ last_login_at: new Date().toISOString() })
@@ -65,7 +76,7 @@ export async function POST(req: NextRequest) {
     const res = successResponse({
       userId: user.id,
       email: user.email,
-      status: user.status ?? null,
+      status: normalizeStatus(user.status) ?? null,
     });
     await appendSessionCookie(res, user.id);
     return res;

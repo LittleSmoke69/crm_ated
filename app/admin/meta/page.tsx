@@ -33,6 +33,9 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
+import { ConfirmDialog, EmptyState, CardSkeleton, StatCardSkeleton } from '@/components/ui';
+import ToastContainer from '@/components/Toast/ToastContainer';
+import type { Toast as ToastMessage } from '@/components/Toast/Toast';
 import BancaXAdsRanking from '@/components/Meta/BancaXAdsRanking';
 import SpendVsDepositChart from '@/components/Meta/SpendVsDepositChart';
 import InvestmentRoundsPanel from '@/components/Meta/InvestmentRoundsPanel';
@@ -474,6 +477,28 @@ export default function AdminMetaPage() {
   const [metaInsightsPeriod, setMetaInsightsPeriod] = useState<'daily' | 'yesterday' | '7days' | '15days' | '30days' | 'custom' | 'all'>('daily');
   const [metaInsightsCustomFrom, setMetaInsightsCustomFrom] = useState('');
   const [metaInsightsCustomTo, setMetaInsightsCustomTo] = useState('');
+
+  /** ConfirmDialog do kit — substitui window.confirm() nos fluxos destrutivos (promise-based, drop-in). */
+  const [confirmDialogState, setConfirmDialogState] = useState<{
+    title: string;
+    description: React.ReactNode;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+  const confirmAction = useCallback(
+    (opts: { title: string; description?: React.ReactNode }) =>
+      new Promise<boolean>((resolve) => {
+        setConfirmDialogState({ title: opts.title, description: opts.description ?? null, resolve });
+      }),
+    []
+  );
+  /** Toasts locais (padrão ToastContainer de @/components/Toast). */
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const pushToast = useCallback((message: string, type: ToastMessage['type'] = 'success') => {
+    setToasts((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, message, type }]);
+  }, []);
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   /** Agregação live (mesma pilha de fallbacks do sync), todas as integrações, período = filtro da UI. */
   const [liveAggregate, setLiveAggregate] = useState<{
@@ -1531,9 +1556,10 @@ export default function AdminMetaPage() {
       const banca = bancas.find((b) => String(b.id) === String(bancaId));
       return banca?.name || banca?.url || bancaId;
     })();
-    const ok = window.confirm(
-      `Remover a banca "${bancaLabel}" desta integração?\n\nAs outras bancas vinculadas serão mantidas.`
-    );
+    const ok = await confirmAction({
+      title: 'Remover banca da integração?',
+      description: `A banca "${bancaLabel}" será removida desta integração. As outras bancas vinculadas serão mantidas.`,
+    });
     if (!ok) return;
 
     const remaining = linked.filter((id) => id !== bancaId);
@@ -1563,6 +1589,7 @@ export default function AdminMetaPage() {
         success: true,
         infoMessage: `Banca "${bancaLabel}" removida desta integração. As demais permanecem vinculadas.`,
       });
+      pushToast(`Banca "${bancaLabel}" removida da integração.`, 'success');
     } catch (err: any) {
       setTestResult({ success: false, error: err?.message || 'Erro ao remover vínculo da banca.' });
     } finally {
@@ -1576,11 +1603,12 @@ export default function AdminMetaPage() {
     const rowKey = `${row.banca_id}:${row.integration_id}`;
     const label = row.banca_name || row.banca_url || row.banca_id;
     const onlyBancaOnIntegration = row.integrations_count <= 1;
-    const ok = window.confirm(
-      onlyBancaOnIntegration
-        ? `Remover a banca «${label}» desta integração?\n\nÉ a única banca vinculada: a integração Meta será excluída por completo.`
-        : `Remover a banca «${label}» desta integração (conta ${row.integration_index}/${row.integrations_count})?\n\nAs outras bancas permanecem vinculadas à mesma integração.`
-    );
+    const ok = await confirmAction({
+      title: 'Remover banca da integração?',
+      description: onlyBancaOnIntegration
+        ? `«${label}» é a única banca vinculada: a integração Meta será excluída por completo.`
+        : `A banca «${label}» será removida desta integração (conta ${row.integration_index}/${row.integrations_count}). As outras bancas permanecem vinculadas à mesma integração.`,
+    });
     if (!ok) return;
 
     const remainingSelected = selectedBancaIds
@@ -1630,6 +1658,12 @@ export default function AdminMetaPage() {
             ? `Integração Meta da banca «${label}» foi removida. A visão geral foi atualizada.`
             : `Banca «${label}» desvinculada. A visão geral foi atualizada.`,
       });
+      pushToast(
+        data.data?.removed_integration === true
+          ? `Integração Meta da banca «${label}» removida.`
+          : `Banca «${label}» desvinculada.`,
+        'success'
+      );
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setTestResult({ success: false, error: msg || 'Erro ao desvincular.' });
@@ -1788,11 +1822,12 @@ export default function AdminMetaPage() {
       return banca?.name || banca?.url || bancaToRemove;
     })();
     const removingEntireIntegration = linkedBancaIds.length === 1;
-    const ok = window.confirm(
-      removingEntireIntegration
-        ? `Esta integração está vinculada apenas à banca "${bancaLabel}".\n\nConfirma remover a integração inteira?`
-        : `Confirma remover a banca "${bancaLabel}" desta integração?\n\nAs outras bancas vinculadas serão mantidas.`
-    );
+    const ok = await confirmAction({
+      title: removingEntireIntegration ? 'Remover a integração inteira?' : 'Remover banca da integração?',
+      description: removingEntireIntegration
+        ? `Esta integração está vinculada apenas à banca "${bancaLabel}". A integração será removida por completo.`
+        : `A banca "${bancaLabel}" será removida desta integração. As outras bancas vinculadas serão mantidas.`,
+    });
     if (!ok) return;
 
     setMetaIntegrationUiBusy(true);
@@ -1841,6 +1876,10 @@ export default function AdminMetaPage() {
           ? 'Integração removida.'
           : `Banca "${bancaLabel}" removida da integração. As demais bancas vinculadas foram mantidas.`,
       });
+      pushToast(
+        removingEntireIntegration ? 'Integração removida.' : `Banca "${bancaLabel}" removida da integração.`,
+        'success'
+      );
     } catch (err: any) {
       setTestResult({ success: false, error: err?.message || 'Erro ao remover integração.' });
     } finally {
@@ -5688,7 +5727,7 @@ export default function AdminMetaPage() {
                 <button
                   onClick={handleTestConnection}
                   disabled={testing}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 py-2 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
                 >
                   {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                   Testar conexão
@@ -6291,6 +6330,24 @@ export default function AdminMetaPage() {
           </div>
         );
       })()}
+
+      <ConfirmDialog
+        open={!!confirmDialogState}
+        onClose={() => {
+          confirmDialogState?.resolve(false);
+          setConfirmDialogState(null);
+        }}
+        onConfirm={() => {
+          confirmDialogState?.resolve(true);
+          setConfirmDialogState(null);
+        }}
+        title={confirmDialogState?.title || ''}
+        description={confirmDialogState?.description}
+        tone="danger"
+        confirmLabel="Remover"
+        cancelLabel="Cancelar"
+      />
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }

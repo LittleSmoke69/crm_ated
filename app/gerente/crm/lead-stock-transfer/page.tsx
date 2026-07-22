@@ -525,8 +525,8 @@ export default function GerenteLeadStockTransferPage() {
       const selCount = opts.lead_ids?.length ?? 0;
       const msg =
         opts.lead_ids && opts.lead_ids.length > 0
-          ? `Reverter ${selCount} lead(s) selecionado(s) ao consultor de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`
-          : `Reverter ${pendingCount} lead(s) ainda em estoque ao consultor de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`;
+          ? `Reverter ${selCount} lead(s) selecionado(s) ao captador de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`
+          : `Reverter ${pendingCount} lead(s) ainda em estoque ao captador de origem (registro no estoque)? O CRM não é alterado automaticamente neste passo.`;
       if (!window.confirm(msg)) return;
 
       setReverting(true);
@@ -581,7 +581,7 @@ export default function GerenteLeadStockTransferPage() {
       }
       if (
         !window.confirm(
-          `Reverter ${pkg.pending_leads} lead(s) em estoque deste pacote ao consultor de origem (registro interno)? O CRM não é alterado automaticamente.`
+          `Reverter ${pkg.pending_leads} lead(s) em estoque deste pacote ao captador de origem (registro interno)? O CRM não é alterado automaticamente.`
         )
       )
         return;
@@ -982,7 +982,7 @@ export default function GerenteLeadStockTransferPage() {
 
   const doTransfer = async () => {
     if (!userId || !bancaId || !targetEmail.trim() || selected.size === 0) {
-      showToast('Selecione leads e o consultor destino.', 'error');
+      showToast('Selecione leads e o captador destino.', 'error');
       return;
     }
     setTransferring(true);
@@ -1042,8 +1042,8 @@ export default function GerenteLeadStockTransferPage() {
             </h1>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 max-w-3xl">
               {isAdminStockViewer
-                ? 'Visão da banca: pacotes reservados ao estoque dos gerentes. O repasse para consultores continua sendo feito pelo gerente no CRM; aqui é possível auditar e abrir os leads.'
-                : 'Pacotes reservados pelo admin no seu estoque. Os leads só se movem no CRM quando você distribuir a um consultor da sua equipe.'}
+                ? 'Visão da banca: pacotes reservados ao estoque dos gerentes. O repasse para captadores continua sendo feito pelo gerente no CRM; aqui é possível auditar e abrir os leads.'
+                : 'Pacotes reservados pelo admin no seu estoque. Os leads só se movem no CRM quando você distribuir a um captador da sua equipe.'}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1051,7 +1051,7 @@ export default function GerenteLeadStockTransferPage() {
               href={isAdminStockViewer ? '/admin' : '/gerente'}
               className="text-sm text-[#E86A24] hover:underline whitespace-nowrap"
             >
-              ← {isAdminStockViewer ? 'Painel admin' : 'Gestão de consultores'}
+              ← {isAdminStockViewer ? 'Painel admin' : 'Gestão de captadores'}
             </Link>
             <button
               type="button"
@@ -1157,12 +1157,12 @@ export default function GerenteLeadStockTransferPage() {
               <div className="rounded-xl border border-blue-200 dark:border-blue-900/45 bg-blue-50/90 dark:bg-blue-950/30 px-4 py-3 text-xs text-blue-950 dark:text-blue-100">
                 <p className="font-semibold text-blue-900 dark:text-blue-50 mb-1">Transferências feitas pelos gerentes</p>
                 <p className="text-blue-900/90 dark:text-blue-100/95 leading-relaxed">
-                  Aqui aparecem também as linhas <strong>Estoque → Consultor</strong> (repasse pelo gerente). Use o filtro{' '}
+                  Aqui aparecem também as linhas <strong>Estoque → Captador</strong> (repasse pelo gerente). Use o filtro{' '}
                   <strong>Repasses feitos</strong> para ver só esse tipo. A coluna <strong>Gerente</strong> indica quem
                   executou o repasse.
                 </p>
                 <p className="text-blue-900/85 dark:text-blue-100/90 mt-2 leading-relaxed">
-                  Para <strong>reverter reservas ainda em estoque</strong> (devolver ao consultor doador no registro do
+                  Para <strong>reverter reservas ainda em estoque</strong> (devolver ao captador doador no registro do
                   estoque), vá à aba <strong>Pacotes do estoque</strong> e use <strong>Reverter</strong> no pacote — não
                   desfaz automaticamente o CRM nos repasses já feitos pelo gerente.
                 </p>
@@ -1591,7 +1591,7 @@ export default function GerenteLeadStockTransferPage() {
                 <div className="px-4 py-3 bg-[#E86A24]/10 dark:bg-[#E86A24]/15 border-b border-[#E86A24]/30">
                   <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                     <Users className="w-4 h-4 text-[#6B8E3F]" />
-                    {isAdminStockViewer ? 'Repasse no CRM (gerente)' : 'Distribuir para consultor'}
+                    {isAdminStockViewer ? 'Repasse no CRM (gerente)' : 'Distribuir para captador'}
                   </h2>
                   <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5">
                     {isAdminStockViewer
@@ -1629,14 +1629,14 @@ export default function GerenteLeadStockTransferPage() {
                   <div className="p-4 space-y-4">
                     <div>
                       <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block mb-1.5">
-                        Consultor destino
+                        Captador destino
                       </label>
                       <select
                         value={targetEmail}
                         onChange={(e) => setTargetEmail(e.target.value)}
                         className="w-full border border-gray-300 dark:border-[#555] dark:bg-[#333] dark:text-white rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-[#E86A24]/40 focus:border-[#E86A24] outline-none"
                       >
-                        <option value="">Selecione um consultor</option>
+                        <option value="">Selecione um captador</option>
                         {consultores.map((c) => (
                           <option key={c.id} value={c.email}>
                             {c.full_name || c.email}
@@ -1690,10 +1690,10 @@ export default function GerenteLeadStockTransferPage() {
                     <div className="px-4 py-3 bg-violet-50 dark:bg-violet-950/30 border-b border-violet-200 dark:border-violet-900/40">
                       <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                         <Undo2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                        Reverter ao consultor de origem
+                        Reverter ao captador de origem
                       </h2>
                       <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5">
-                        Registra no estoque como revertido (consultor doador nos dados da reserva). O CRM não é alterado neste passo.
+                        Registra no estoque como revertido (captador doador nos dados da reserva). O CRM não é alterado neste passo.
                       </p>
                     </div>
                     <div className="p-4 space-y-2">
@@ -2150,7 +2150,7 @@ function PackagesList({
                           title={
                             !revertAllowed(p)
                               ? 'Defina o gerente no filtro ou use a visão com coluna Gerente.'
-                              : 'Marca no estoque como revertido ao email do consultor de origem (sem chamar o CRM).'
+                              : 'Marca no estoque como revertido ao email do captador de origem (sem chamar o CRM).'
                           }
                           onClick={() => onRevertPackage(p)}
                           disabled={
@@ -2292,7 +2292,7 @@ function HistoryKindBadge({ kind }: { kind: 'reserved' | 'distributed' }) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30">
       <ArrowRightLeft className="w-3 h-3" />
-      Estoque → Consultor
+      Estoque → Captador
     </span>
   );
 }
@@ -2389,7 +2389,7 @@ function HistoryView({
             <input
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Buscar consultor, TF, responsável..."
+              placeholder="Buscar captador, TF, responsável..."
               className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-[#444] dark:bg-[#333] dark:text-white focus:ring-2 focus:ring-[#E86A24]/40 focus:border-[#E86A24] outline-none"
             />
           </div>

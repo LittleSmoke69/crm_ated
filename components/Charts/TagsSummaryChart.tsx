@@ -177,7 +177,7 @@ export default function TagsSummaryChart({
         {hasConsultoresData && (
           <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
             <h3 className="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">
-              Uso de etiquetas por consultor
+              Uso de etiquetas por captador
             </h3>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">

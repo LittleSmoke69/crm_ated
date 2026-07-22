@@ -21,7 +21,7 @@ import {
  * dono_banca incluso para que o dono possa receber atribuição quando não há gestores vinculados.
  */
 const ADS_ATTRIBUTION_PROFILE_STATUSES = [
-  'consultor',
+  'captador',
   'gerente',
   'admin',
   'gestor',

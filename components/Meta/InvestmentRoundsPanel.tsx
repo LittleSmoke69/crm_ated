@@ -319,7 +319,7 @@ export default function InvestmentRoundsPanel({
 
   const handleCreate = async () => {
     setFormError(null);
-    if (!formConsultorId) return setFormError('Selecione o consultor.');
+    if (!formConsultorId) return setFormError('Selecione o captador.');
     if (!formStart || !formEnd) return setFormError('Informe data inicial e final.');
     if (!formGoal || Number(formGoal) <= 0) return setFormError('Informe a meta de gasto.');
     setSaving(true);
@@ -364,13 +364,13 @@ export default function InvestmentRoundsPanel({
           <div>
             <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Rodadas de Investimento</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Meta de gasto de ADS por consultor + LTV do período
+              Meta de gasto de ADS por captador + LTV do período
             </p>
           </div>
         </div>
         <button
           onClick={() => setShowForm((s) => !s)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#E86A24] hover:bg-[#7bc548] text-gray-900 text-sm font-semibold transition-colors"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] text-white text-sm font-semibold transition-colors"
         >
           <Plus className="w-4 h-4" /> Nova rodada
         </button>
@@ -396,13 +396,13 @@ export default function InvestmentRoundsPanel({
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-gray-400">
-          <span>Filtrar por consultor {loadingConsultors ? '(carregando…)' : ''}</span>
+          <span>Filtrar por captador {loadingConsultors ? '(carregando…)' : ''}</span>
           <select
             value={filterConsultorId}
             onChange={(e) => setFilterConsultorId(e.target.value)}
             className="min-w-[220px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
           >
-            <option value="">Todos os consultores</option>
+            <option value="">Todos os captadores</option>
             {consultors.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.full_name || c.email}
@@ -417,7 +417,7 @@ export default function InvestmentRoundsPanel({
         <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/40 dark:bg-emerald-900/10 p-4 space-y-3">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="flex flex-col gap-1 text-xs text-gray-600 dark:text-gray-400">
-              <span>Consultor *</span>
+              <span>Captador *</span>
               <select
                 value={formConsultorId}
                 onChange={(e) => setFormConsultorId(e.target.value)}
@@ -493,7 +493,7 @@ export default function InvestmentRoundsPanel({
             <button
               onClick={handleCreate}
               disabled={saving}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#E86A24] hover:bg-[#D95E1B] text-white text-sm font-semibold disabled:opacity-50"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Salvar rodada
             </button>

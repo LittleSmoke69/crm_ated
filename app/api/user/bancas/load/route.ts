@@ -6,7 +6,7 @@ import { saveUserBancas } from '@/lib/utils/user-bancas';
 import { getBancasVisiveis } from '@/app/api/crm/bancas/route';
 
 /** Perfis que têm busca de bancas por email nas APIs externas (consultor/gerente). */
-const ROLES_COM_BUSCA_POR_EMAIL = ['consultor', 'gerente'] as const;
+const ROLES_COM_BUSCA_POR_EMAIL = ['captador', 'gerente'] as const;
 
 /**
  * POST /api/user/bancas/load

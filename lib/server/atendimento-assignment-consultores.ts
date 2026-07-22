@@ -28,7 +28,7 @@ export async function validateConsultorIdsForAtendimentoAssignment(
       .select('status')
       .eq('id', consultor_user_id)
       .single();
-    if ((consultorProfile?.status || '').toLowerCase() !== 'consultor') {
+    if ((consultorProfile?.status || '').toLowerCase() !== 'captador') {
       return { ok: false, message: 'Um dos usuários informados não é consultor.', status: 400 };
     }
     if (crmBancaId) {

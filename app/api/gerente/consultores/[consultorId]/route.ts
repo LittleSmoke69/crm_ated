@@ -22,7 +22,7 @@ export async function GET(
 ) {
   let consultorId: string | undefined;
   try {
-    const { userId, profile } = await requireStatus(req, ['gerente', 'gestor']);
+    const { userId, profile } = await requireStatus(req, ['gerente', 'admin']);
     const resolvedParams = await params;
     consultorId = resolvedParams.consultorId;
 

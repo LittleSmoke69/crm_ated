@@ -96,16 +96,14 @@ export async function isInHierarchy(ancestorId: string, descendantId: string): P
 export async function getHierarchyStats(userId: string): Promise<{
   totalSubordinates: number;
   gerentes: number;
-  consultores: number;
-  donosBanca: number;
+  captadores: number;
 }> {
   const subordinates = await getSubordinates(userId);
 
   return {
     totalSubordinates: subordinates.length,
     gerentes: subordinates.filter(s => s.status === 'gerente').length,
-    consultores: subordinates.filter(s => s.status === 'consultor').length,
-    donosBanca: subordinates.filter(s => s.status === 'dono_banca').length,
+    captadores: subordinates.filter(s => s.status === 'captador').length,
   };
 }
 
@@ -122,26 +120,26 @@ export async function getDirectSubordinates(userId: string): Promise<UserProfile
 }
 
 /**
- * Retorna apenas consultores diretos de um gerente
+ * Retorna apenas captadores diretos de um gerente
  */
 export async function getConsultorsByManager(gerenteId: string): Promise<UserProfile[]> {
   const { data } = await supabaseServiceRole
     .from('profiles')
     .select('*')
     .eq('enroller', gerenteId)
-    .eq('status', 'consultor');
+    .eq('status', 'captador');
 
   return (data as UserProfile[]) || [];
 }
 
 /**
- * Retorna apenas gerentes diretos de um dono de banca
+ * Retorna apenas gerentes diretos de um superior
  */
-export async function getManagersByOwner(donoBancaId: string): Promise<UserProfile[]> {
+export async function getManagersByOwner(superiorId: string): Promise<UserProfile[]> {
   const { data } = await supabaseServiceRole
     .from('profiles')
     .select('*')
-    .eq('enroller', donoBancaId)
+    .eq('enroller', superiorId)
     .eq('status', 'gerente');
 
   return (data as UserProfile[]) || [];

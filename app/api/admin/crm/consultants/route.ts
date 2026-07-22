@@ -81,12 +81,12 @@ async function mergeTitularesFromEmails(
   const roleLabel = (s: string | null | undefined) => {
     const v = String(s ?? '').toLowerCase();
     if (v === 'gerente') return 'Gerente';
-    if (v === 'consultor') return 'Consultor';
+    if (v === 'captador') return 'Captador';
     if (v === 'dono_banca') return 'Dono Banca';
     if (v === 'admin' || v === 'super_admin') return 'Admin';
     if (v === 'gestor') return 'Gestor';
     if (v === 'auditoria') return 'Auditoria';
-    return v || 'Consultor';
+    return v || 'Captador';
   };
 
   type ProfTitularRow = { id: string; email: string | null; full_name: string | null; status: string | null };
@@ -294,7 +294,7 @@ export async function GET(req: NextRequest) {
     const roleLabel = (s: string | null | undefined) => {
       const v = String(s ?? '').toLowerCase();
       if (v === 'gerente') return 'Gerente';
-      if (v === 'consultor') return 'Consultor';
+      if (v === 'captador') return 'Captador';
       if (v === 'dono_banca') return 'Dono Banca';
       if (v === 'admin' || v === 'super_admin') return 'Admin';
       if (v === 'gestor') return 'Gestor';
@@ -335,7 +335,7 @@ export async function GET(req: NextRequest) {
           id: sub.id,
           email: sub.email,
           full_name: sub.full_name,
-          role: 'Consultor',
+          role: 'Captador',
           gerente_nome: gerenteNome,
         });
       }

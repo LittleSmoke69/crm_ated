@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
           .select('id')
           .eq('email', emailNorm)
           .eq('enroller', userId)
-          .eq('status', 'consultor')
+          .eq('status', 'captador')
           .maybeSingle();
         cid = p?.id ?? null;
       }

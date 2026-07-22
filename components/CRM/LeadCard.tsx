@@ -1,3 +1,4 @@
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { zapCardClient } from '@/lib/zap-card-styles';
 import { 
   Star, 
@@ -707,7 +708,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         if (data?.success && data?.data?.consultant_id != null) consultantId = Number(data.data.consultant_id);
       }
       if (consultantId == null) {
-        setBonusGirosError('Não foi possível obter o id do consultor.');
+        setBonusGirosError('Não foi possível obter o id do captador.');
         setBonusGirosSending(false);
         return;
       }
@@ -767,7 +768,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
         if (data?.success && data?.data?.consultant_id != null) consultantId = Number(data.data.consultant_id);
       }
       if (consultantId == null) {
-        setBonusRifaError('Não foi possível obter o id do consultor.');
+        setBonusRifaError('Não foi possível obter o id do captador.');
         setBonusRifaSending(false);
         return;
       }
@@ -1238,6 +1239,20 @@ const LeadCard: React.FC<LeadCardProps> = ({
 
   const cardShell = `${zapCardClient} zap-card-client cursor-grab active:cursor-grabbing group`;
 
+  /** Cor da primeira etiqueta para destacar o card quando tiver tags; borda em todos os lados */
+  const tagAccentColor = lead.tags?.length ? lead.tags[0].color : null;
+  const hasBloqueadoTag = lead.tags?.some((t) => t.label.toUpperCase() === 'BLOQUEADO') ?? false;
+  const tagCardEffect =
+    tagAccentColor
+      ? {
+          boxShadow: `0 4px 24px -4px ${tagAccentColor}50, 0 0 0 2px ${tagAccentColor}40`,
+          border: `2px solid ${tagAccentColor}`,
+          ...(hasBloqueadoTag ? { opacity: 0.65 } : {}),
+        }
+      : hasBloqueadoTag
+        ? { opacity: 0.65 }
+        : undefined;
+
   // Card simplificado — coluna "Novo lead" (nome, telefone, email, etiqueta)
   const novoLeadCard = (
     <div
@@ -1283,20 +1298,6 @@ const LeadCard: React.FC<LeadCardProps> = ({
       </div>
     </div>
   );
-
-  /** Cor da primeira etiqueta para destacar o card quando tiver tags; borda em todos os lados */
-  const tagAccentColor = lead.tags?.length ? lead.tags[0].color : null;
-  const hasBloqueadoTag = lead.tags?.some((t) => t.label.toUpperCase() === 'BLOQUEADO') ?? false;
-  const tagCardEffect =
-    tagAccentColor
-      ? {
-          boxShadow: `0 4px 24px -4px ${tagAccentColor}50, 0 0 0 2px ${tagAccentColor}40`,
-          border: `2px solid ${tagAccentColor}`,
-          ...(hasBloqueadoTag ? { opacity: 0.65 } : {}),
-        }
-      : hasBloqueadoTag
-        ? { opacity: 0.65 }
-        : undefined;
 
   // Layout compacto: cabeçalho → métricas → nível estrela → tags → telefone → rodapé (data, último depósito/cronômetro, Chamar)
   const compactCard = (() => {
@@ -2076,7 +2077,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs font-black text-gray-500 uppercase">Por:</span>
                       <span className="text-sm font-bold text-gray-800">
-                        {viewingSingleFeedback?.consultant?.full_name || viewingSingleFeedback?.consultant_name || 'Consultor'}
+                        {viewingSingleFeedback?.consultant?.full_name || viewingSingleFeedback?.consultant_name || 'Captador'}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -2180,7 +2181,7 @@ const LeadCard: React.FC<LeadCardProps> = ({
                         })
                       : 'Data não disponível';
                     
-                    const consultantName = fb.consultant?.full_name || fb.consultant_name || 'Consultor';
+                    const consultantName = fb.consultant?.full_name || fb.consultant_name || 'Captador';
                     const consultantEmail = fb.consultant?.email || fb.consultant_email || '';
                     const isOwnFeedback = fb.consultant_user_id === consultorUserId;
 
@@ -2859,24 +2860,24 @@ const LeadCard: React.FC<LeadCardProps> = ({
                 <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg sm:rounded-xl p-4 sm:p-5 border border-indigo-200/60 dark:border-indigo-700/40">
                   <h3 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white mb-3 sm:mb-4 flex items-center gap-2">
                     <User className="w-4 h-4 sm:w-5 sm:h-5 text-[#E86A24] shrink-0" />
-                    <span>Consultor Responsável</span>
+                    <span>Captador Responsável</span>
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {(lead as any).consultant_name && (
                       <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
-                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nome do Consultor</p>
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Nome do Captador</p>
                         <p className="text-sm font-semibold text-gray-800 break-words">{(lead as any).consultant_name}</p>
                       </div>
                     )}
                     {(lead as any).consultant_email && (
                       <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040]">
-                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Email do Consultor</p>
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">Email do Captador</p>
                         <p className="text-sm font-semibold text-gray-800 break-all">{(lead as any).consultant_email}</p>
                       </div>
                     )}
                     {(lead as any).consultant_id && (
                       <div className="bg-white dark:bg-[#333] rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-[#404040] sm:col-span-2">
-                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">ID do Consultor</p>
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-1">ID do Captador</p>
                         <p className="text-sm font-semibold text-gray-800">#{(lead as any).consultant_id}</p>
                       </div>
                     )}

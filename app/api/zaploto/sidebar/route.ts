@@ -10,7 +10,7 @@ import { getSidebarItemsForRole, getTenantForUser, hasZaplotoTables } from '@/li
 export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireAuthWithProfile(req);
-    const status = profile.status || 'consultor';
+    const status = profile.status || 'captador';
 
     const hasTables = await hasZaplotoTables();
     if (!hasTables) {

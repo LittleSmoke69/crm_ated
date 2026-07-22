@@ -1124,7 +1124,7 @@ export default function DonoBancaHierarquia({
               <button
                 type="button"
                 onClick={handleOpenGestorTrafego}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-purple-600 hover:bg-purple-700 text-white"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
                 title="Abrir Gestão de Tráfego desta banca"
               >
                 <Megaphone className="w-4 h-4" />
@@ -1136,7 +1136,7 @@ export default function DonoBancaHierarquia({
             <button
               onClick={() => setExportCsvModalOpen(true)}
               disabled={!userId}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all shadow-sm shrink-0 text-sm bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Exportar leads da banca em CSV (com filtros do CRM)"
             >
               <Download className="w-4 h-4" />
@@ -1146,7 +1146,7 @@ export default function DonoBancaHierarquia({
             {!isAdminOrSuperAdmin && (
               <button
                 onClick={() => setIsModalOpen(true)}
-                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-emerald-100 dark:shadow-none shrink-0"
+                className="flex items-center justify-center gap-2 bg-[#E86A24] hover:bg-[#D95E1B] text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-orange-100 dark:shadow-none shrink-0"
               >
                 <UserPlus className="w-5 h-5" />
                 Cadastrar Usuário
@@ -1889,7 +1889,7 @@ export default function DonoBancaHierarquia({
                       </td>
                       <td className="px-4 sm:px-6 py-3 sm:py-4 text-right">
                         <a 
-                          href={`/dono-banca/gerentes/${gerente.id}`}
+                          href={withTenantSlug(`/dono-banca/gerentes/${gerente.id}`)}
                           className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 font-bold text-sm transition-colors"
                         >
                           <Eye className="w-4 h-4 shrink-0" />
@@ -2083,7 +2083,7 @@ export default function DonoBancaHierarquia({
                   <button 
                     type="submit"
                     disabled={isSubmitting}
-                    className="flex-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-[3] bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-100 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {isSubmitting ? (
                       <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

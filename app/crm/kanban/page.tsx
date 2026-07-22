@@ -4,8 +4,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Plus, Loader2, Phone, Mail, X, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3 } from 'lucide-react';
+import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3 } from 'lucide-react';
 import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
+import Modal, { ConfirmDialog } from '@/components/ui/Modal';
+import Button from '@/components/ui/Button';
+import { Field, Input, Select, Textarea } from '@/components/ui/Field';
+import { ToastProvider, useToast } from '@/components/ui/ToastProvider';
 
 type Tag = { id: string; label: string; color: string; move_to_column_key?: string | null };
 type Column = { id: string; key: string; title: string; color: string; sort_order: number };
@@ -30,7 +34,16 @@ const COLOR_OPTIONS = Object.keys(COLOR_HEX);
 const hexFor = (c: string) => COLOR_HEX[c] ?? '#6b7280';
 
 export default function KanbanPage() {
+  return (
+    <ToastProvider>
+      <KanbanBoard />
+    </ToastProvider>
+  );
+}
+
+function KanbanBoard() {
   const { userId } = useRequireAuth();
+  const toast = useToast();
   const [columns, setColumns] = useState<Column[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -48,6 +61,8 @@ export default function KanbanPage() {
 
   const [editColId, setEditColId] = useState<string | null>(null);
   const [editColTitle, setEditColTitle] = useState('');
+  const [colToDelete, setColToDelete] = useState<Column | null>(null);
+  const [deletingCol, setDeletingCol] = useState(false);
   const [menuColId, setMenuColId] = useState<string | null>(null);
   const [tagPickerId, setTagPickerId] = useState<string | null>(null);
 
@@ -145,9 +160,13 @@ export default function KanbanPage() {
       if (json?.success) {
         setClients((prev) => [{ ...json.data, tags: json.data.tags ?? [] }, ...prev]);
         setShowAdd(false);
+      } else {
+        toast.error(json?.error || 'Erro ao adicionar cliente. Tente novamente.');
       }
+    } catch {
+      toast.error('Erro ao adicionar cliente. Verifique sua conexão e tente novamente.');
     } finally { setSaving(false); }
-  }, [userId, form, addTargetColumn, headers]);
+  }, [userId, form, addTargetColumn, headers, toast]);
 
   const createColumn = useCallback(async () => {
     if (!userId || !newCol.title.trim()) return;
@@ -159,19 +178,25 @@ export default function KanbanPage() {
         setColumns((prev) => [...prev, json.data]);
         setNewCol({ title: '', color: 'gray' });
         setShowNewCol(false);
+      } else {
+        toast.error(json?.error || 'Erro ao criar coluna. Tente novamente.');
       }
+    } catch {
+      toast.error('Erro ao criar coluna. Verifique sua conexão e tente novamente.');
     } finally { setCreatingCol(false); }
-  }, [userId, newCol, headers]);
+  }, [userId, newCol, headers, toast]);
 
-  const deleteColumn = useCallback(async (col: Column) => {
-    setMenuColId(null);
-    if (!userId) return;
-    const count = (byColumn.get(col.key) ?? []).length;
-    const msg = count ? `Remover "${col.title}"? Os ${count} cliente(s) voltam para o 1º estágio.` : `Remover a coluna "${col.title}"?`;
-    if (!window.confirm(msg)) return;
-    await fetch(`/api/crm/columns/${col.id}`, { method: 'DELETE', headers: { 'X-User-Id': userId }, credentials: 'include' });
-    load();
-  }, [userId, byColumn, load]);
+  const deleteColumn = useCallback(async () => {
+    if (!userId || !colToDelete) return;
+    setDeletingCol(true);
+    try {
+      await fetch(`/api/crm/columns/${colToDelete.id}`, { method: 'DELETE', headers: { 'X-User-Id': userId }, credentials: 'include' });
+      setColToDelete(null);
+      load();
+    } catch {
+      toast.error('Erro ao remover a coluna. Tente novamente.');
+    } finally { setDeletingCol(false); }
+  }, [userId, colToDelete, load, toast]);
 
   const saveColumnTitle = useCallback(async (col: Column) => {
     const title = editColTitle.trim();
@@ -284,7 +309,7 @@ export default function KanbanPage() {
         {loading ? (
           <div className="flex flex-1 items-center justify-center text-gray-400"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : (
-          <div className="flex min-h-0 flex-1 items-stretch gap-4 overflow-x-auto pb-4">
+          <div className="flex min-h-0 flex-1 snap-x snap-mandatory items-stretch gap-4 overflow-x-auto pb-4">
             {columns.map((col) => {
               const list = byColumn.get(col.key) ?? [];
               const accent = hexFor(col.color);
@@ -292,7 +317,7 @@ export default function KanbanPage() {
                 <div key={col.id}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => { if (dragId) moveTo(dragId, col.key); setDragId(null); }}
-                  className="relative flex w-72 shrink-0 flex-col rounded-2xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm">
+                  className="relative flex w-72 shrink-0 snap-start flex-col rounded-2xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
@@ -309,7 +334,7 @@ export default function KanbanPage() {
                     <div className="flex shrink-0 items-center gap-1">
                       <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-gray-300">{list.length}</span>
                       <button onClick={() => setMenuColId(menuColId === col.id ? null : col.id)}
-                        className="rounded p-1 text-gray-400 transition hover:bg-white/10 hover:text-white" title="Opções">
+                        className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg p-2 text-gray-400 transition hover:bg-white/10 hover:text-white" title="Opções">
                         <MoreVertical className="h-4 w-4" />
                       </button>
                     </div>
@@ -321,7 +346,7 @@ export default function KanbanPage() {
                       <div className="absolute right-3 top-11 z-20 w-48 overflow-hidden rounded-xl border border-white/10 bg-[#1c130d] py-1 shadow-xl">
                         <MenuItem icon={<Pencilish />} label="Editar nome" onClick={() => { setEditColId(col.id); setEditColTitle(col.title); setMenuColId(null); }} />
                         <MenuItem icon={<UserPlus className="h-4 w-4" />} label="Adicionar cliente" onClick={() => openAddClient(col.key)} />
-                        <MenuItem icon={<Trash2 className="h-4 w-4" />} label="Deletar coluna" danger onClick={() => deleteColumn(col)} />
+                        <MenuItem icon={<Trash2 className="h-4 w-4" />} label="Deletar coluna" danger onClick={() => { setMenuColId(null); setColToDelete(col); }} />
                       </div>
                     </>
                   )}
@@ -397,30 +422,44 @@ export default function KanbanPage() {
         )}
       </div>
 
-      {showNewCol && (
-        <Modal title="Nova coluna" onClose={() => setShowNewCol(false)}>
+      {/* Modais (kit) — wrapper .dark preserva a identidade dark-only da página */}
+      <div className="dark">
+        <Modal
+          open={showNewCol}
+          onClose={() => setShowNewCol(false)}
+          title="Nova coluna"
+          size="sm"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setShowNewCol(false)}>Cancelar</Button>
+              <Button onClick={createColumn} loading={creatingCol} disabled={!newCol.title.trim()}>Criar coluna</Button>
+            </>
+          }
+        >
           <div className="space-y-4">
-            <input
-              autoFocus
-              value={newCol.title}
-              onChange={(e) => setNewCol((s) => ({ ...s, title: e.target.value }))}
-              onKeyDown={(e) => e.key === 'Enter' && createColumn()}
-              placeholder="Título da coluna (ex: Aguardando retorno)"
-              className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-[#E86A24]"
-            />
+            <Field label="Título da coluna" htmlFor="kanban-new-col-title" required>
+              <Input
+                id="kanban-new-col-title"
+                autoFocus
+                value={newCol.title}
+                onChange={(e) => setNewCol((s) => ({ ...s, title: e.target.value }))}
+                onKeyDown={(e) => e.key === 'Enter' && createColumn()}
+                placeholder="Ex: Aguardando retorno"
+              />
+            </Field>
             <div>
-              <p className="mb-2 text-xs font-medium text-gray-400">Cor da coluna</p>
+              <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Cor da coluna</p>
               <div className="flex flex-wrap gap-2">
                 {COLOR_OPTIONS.map((c) => (
                   <button
                     key={c}
                     type="button"
                     onClick={() => setNewCol((s) => ({ ...s, color: c }))}
-                    className="flex h-8 w-8 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-[#1c130d] transition"
+                    className="flex h-10 w-10 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-white transition dark:ring-offset-[#2a2a2a]"
                     style={{
                       backgroundColor: hexFor(c),
-                      ringColor: newCol.color === c ? hexFor(c) : 'transparent',
-                    }}
+                      '--tw-ring-color': newCol.color === c ? hexFor(c) : 'transparent',
+                    } as React.CSSProperties}
                     title={c}
                   >
                     {newCol.color === c && <Check className="h-4 w-4 text-white" />}
@@ -429,64 +468,84 @@ export default function KanbanPage() {
               </div>
             </div>
           </div>
-          <ModalActions
-            onCancel={() => setShowNewCol(false)}
-            onConfirm={createColumn}
-            confirmLabel="Criar coluna"
-            loading={creatingCol}
-            disabled={!newCol.title.trim()}
-          />
         </Modal>
-      )}
 
-      {showAdd && (
-        <Modal title={addTargetColumn ? `Novo cliente — ${columns.find((c) => c.key === addTargetColumn)?.title ?? ''}` : 'Novo cliente'} onClose={() => setShowAdd(false)}>
+        <Modal
+          open={showAdd}
+          onClose={() => setShowAdd(false)}
+          title={addTargetColumn ? `Novo cliente — ${columns.find((c) => c.key === addTargetColumn)?.title ?? ''}` : 'Novo cliente'}
+          size="sm"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setShowAdd(false)}>Cancelar</Button>
+              <Button onClick={addClient} loading={saving} disabled={!form.name.trim()}>Salvar</Button>
+            </>
+          }
+        >
           <div className="space-y-3">
             {(['name', 'phone', 'email'] as const).map((field) => (
-              <input key={field} value={form[field]}
-                onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
-                placeholder={field === 'name' ? 'Nome *' : field === 'phone' ? 'Telefone' : 'E-mail'}
-                className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-[#E86A24]" />
+              <Field
+                key={field}
+                label={field === 'name' ? 'Nome' : field === 'phone' ? 'Telefone' : 'E-mail'}
+                required={field === 'name'}
+                htmlFor={`kanban-add-client-${field}`}
+              >
+                <Input
+                  id={`kanban-add-client-${field}`}
+                  value={form[field]}
+                  onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                  placeholder={field === 'name' ? 'Nome do cliente' : field === 'phone' ? 'Telefone' : 'E-mail'}
+                />
+              </Field>
             ))}
           </div>
-          <ModalActions onCancel={() => setShowAdd(false)} onConfirm={addClient} confirmLabel="Salvar" loading={saving} disabled={!form.name.trim()} />
         </Modal>
-      )}
 
-      {showImport && (
-        <Modal title="Importar contatos" onClose={() => { setShowImport(false); setImportFileName(''); }} wide>
-          <p className="mb-2 text-xs text-gray-400">
-            Envie um <strong className="text-gray-300">.csv</strong> com colunas <code>nome</code> e <code>telefone</code> (também aceita <code>name</code>, <code>phone</code>, <code>email</code>),
+        <Modal
+          open={showImport}
+          onClose={() => { setShowImport(false); setImportFileName(''); }}
+          title="Importar contatos"
+          size="lg"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setShowImport(false)}>Cancelar</Button>
+              <Button onClick={doImport} loading={importing} disabled={parsedImport.length === 0}>
+                {`Importar ${parsedImport.length || ''}`.trim()}
+              </Button>
+            </>
+          }
+        >
+          <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            Envie um <strong className="text-gray-700 dark:text-gray-300">.csv</strong> com colunas <code>nome</code> e <code>telefone</code> (também aceita <code>name</code>, <code>phone</code>, <code>email</code>),
             ou cole linhas no formato <code>Nome, Telefone, E-mail</code>.
           </p>
-          <textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportFileName(''); }} rows={8}
+          <Textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportFileName(''); }} rows={8}
             placeholder={'nome,telefone\nJoão Silva,5511999999999\nMaria Santos,5511888888888'}
-            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white outline-none focus:border-[#E86A24]" />
+            className="font-mono text-xs" />
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <input ref={fileRef} type="file" accept=".csv,.txt,text/csv" onChange={onFile} className="hidden" />
-            <button onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-gray-300 hover:bg-white/5">
-              <Upload className="h-4 w-4" /> Enviar CSV
-            </button>
+            <Button variant="secondary" size="sm" icon={<Upload className="h-4 w-4" />} onClick={() => fileRef.current?.click()}>
+              Enviar CSV
+            </Button>
             {importFileName && (
-              <span className="text-xs text-gray-500">Arquivo: {importFileName}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">Arquivo: {importFileName}</span>
             )}
-            <label className="flex items-center gap-2 text-sm text-gray-300">Coluna:
-              <select value={importColumn} onChange={(e) => setImportColumn(e.target.value)}
-                className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white outline-none">
+            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">Coluna:
+              <Select value={importColumn} onChange={(e) => setImportColumn(e.target.value)} className="w-auto">
                 {columns.map((c) => <option key={c.id} value={c.key}>{c.title}</option>)}
-              </select>
+              </Select>
             </label>
             <span className="ml-auto text-sm font-semibold text-[#E86A24]">{parsedImport.length} contato(s)</span>
           </div>
           {parsedImport.length > 0 && (
-            <div className="mt-3 max-h-32 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-2">
+            <div className="mt-3 max-h-32 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-2 dark:border-white/10 dark:bg-black/30">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-gray-500">Prévia</p>
-              <ul className="space-y-1 text-xs text-gray-300">
+              <ul className="space-y-1 text-xs text-gray-700 dark:text-gray-300">
                 {parsedImport.slice(0, 5).map((c, i) => (
                   <li key={`${c.phone}-${c.name}-${i}`} className="truncate">
-                    <span className="font-semibold text-white">{c.name}</span>
-                    {c.phone ? <span className="text-gray-400"> · {c.phone}</span> : null}
-                    {c.email ? <span className="text-gray-500"> · {c.email}</span> : null}
+                    <span className="font-semibold text-gray-900 dark:text-white">{c.name}</span>
+                    {c.phone ? <span className="text-gray-500 dark:text-gray-400"> · {c.phone}</span> : null}
+                    {c.email ? <span className="text-gray-400 dark:text-gray-500"> · {c.email}</span> : null}
                   </li>
                 ))}
                 {parsedImport.length > 5 && (
@@ -495,9 +554,22 @@ export default function KanbanPage() {
               </ul>
             </div>
           )}
-          <ModalActions onCancel={() => setShowImport(false)} onConfirm={doImport} confirmLabel={`Importar ${parsedImport.length || ''}`.trim()} loading={importing} disabled={parsedImport.length === 0} />
         </Modal>
-      )}
+
+        <ConfirmDialog
+          open={!!colToDelete}
+          onClose={() => { if (!deletingCol) setColToDelete(null); }}
+          onConfirm={deleteColumn}
+          title="Deletar coluna"
+          description={colToDelete
+            ? ((byColumn.get(colToDelete.key) ?? []).length
+              ? `Remover "${colToDelete.title}"? Os ${(byColumn.get(colToDelete.key) ?? []).length} cliente(s) voltam para o 1º estágio.`
+              : `Remover a coluna "${colToDelete.title}"?`)
+            : undefined}
+          confirmLabel="Remover"
+          loading={deletingCol}
+        />
+      </div>
     </Layout>
   );
 }
@@ -520,30 +592,3 @@ function MenuItem({ icon, label, onClick, danger }: { icon: React.ReactNode; lab
   );
 }
 
-function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className={`w-full ${wide ? 'max-w-xl' : 'max-w-md'} rounded-2xl border border-white/10 bg-[#1c130d] p-5 shadow-xl`} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-200"><X className="h-5 w-5" /></button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function ModalActions({ onCancel, onConfirm, confirmLabel, loading, disabled }: {
-  onCancel: () => void; onConfirm: () => void; confirmLabel: string; loading?: boolean; disabled?: boolean;
-}) {
-  return (
-    <div className="mt-5 flex justify-end gap-2">
-      <button onClick={onCancel} className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-gray-300">Cancelar</button>
-      <button onClick={onConfirm} disabled={loading || disabled}
-        className="inline-flex items-center gap-2 rounded-xl bg-[#E86A24] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#D95E1B] disabled:opacity-50">
-        {loading && <Loader2 className="h-4 w-4 animate-spin" />} {confirmLabel}
-      </button>
-    </div>
-  );
-}

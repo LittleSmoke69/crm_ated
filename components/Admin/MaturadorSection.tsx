@@ -1058,7 +1058,7 @@ export default function MaturadorSection({ userId }: Props) {
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
         <h3 className="text-lg font-semibold text-gray-800 mb-1">Plano da rede mútua (Maturador usuário)</h3>
         <p className="text-sm text-gray-600 mb-3">
-          Quando definido, consultores e demais usuários com acesso ao Maturador <strong>não escolhem plano</strong>: aparece apenas <strong>Start</strong> e todas as instâncias conectadas deles (com telefone) entram na <strong>malha</strong> com este plano. Deixe vazio para o fluxo manual (escolha de plano na tela Maturador).
+          Quando definido, captadores e demais usuários com acesso ao Maturador <strong>não escolhem plano</strong>: aparece apenas <strong>Start</strong> e todas as instâncias conectadas deles (com telefone) entram na <strong>malha</strong> com este plano. Deixe vazio para o fluxo manual (escolha de plano na tela Maturador).
         </p>
         <div className="flex flex-col sm:flex-row gap-3 sm:items-end max-w-2xl">
           <div className="flex-1 min-w-0">

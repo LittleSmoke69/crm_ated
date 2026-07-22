@@ -22,7 +22,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   const [showBancasModal, setShowBancasModal] = useState(false);
   const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const [userStatus, setUserStatus] = useState<'consultor' | 'gerente' | 'gestor' | 'super_admin' | null>(null);
+  const [userStatus, setUserStatus] = useState<'captador' | 'gerente' | 'super_admin' | null>(null);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -63,7 +63,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
     };
   }, [isMobile]);
 
-  // Verifica se usuário precisa escolher bancas (consultor/gerente/gestor)
+  // Verifica se usuário precisa escolher bancas (captador/gerente)
   useEffect(() => {
     if (typeof window === 'undefined' || hasCheckedProfile) return;
 
@@ -99,9 +99,9 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
           if (result.success && result.data) {
             const d = result.data;
             setUserId(uid);
-            const canSeeBancasModal = !!(d.status && ['consultor', 'gerente', 'gestor'].includes(d.status));
+            const canSeeBancasModal = !!(d.status && ['captador', 'gerente'].includes(d.status));
             if (canSeeBancasModal) {
-              setUserStatus(d.status as 'consultor' | 'gerente' | 'gestor' | 'super_admin');
+              setUserStatus(d.status as 'captador' | 'gerente' | 'super_admin');
             }
 
             if (
@@ -273,13 +273,13 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         )}
       </main>
 
-      {/* Modal de bancas (consultor/gerente/gestor) */}
+      {/* Modal de bancas (captador/gerente) */}
       {showBancasModal && userId && (
         <BancasModal
           isOpen={showBancasModal}
           onClose={() => setShowBancasModal(false)}
           onSave={handleSaveBancas}
-          userStatus={userStatus || 'consultor'}
+          userStatus={userStatus || 'captador'}
           userId={userId}
         />
       )}

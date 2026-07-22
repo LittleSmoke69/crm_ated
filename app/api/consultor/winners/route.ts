@@ -122,12 +122,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const { userId, profile } = await requireStatus(req, [
-      'consultor',
+      'captador',
       'super_admin',
       'admin',
       'gerente',
-      'gestor',
-      'dono_banca',
     ]);
     const isAdminOrSuperAdmin = profile?.status === 'super_admin' || profile?.status === 'admin';
     const isGerente = profile?.status === 'gerente';
@@ -144,7 +142,7 @@ export async function GET(req: NextRequest) {
       const ok = await gerenteCanViewConsultorPerformance(userId, consultorIdFilter);
       if (!ok) {
         return errorResponse(
-          'Acesso negado: você só pode ver ganhadores seu e dos seus consultores.',
+          'Acesso negado: você só pode ver ganhadores seu e dos seus captadores.',
           403
         );
       }
@@ -152,7 +150,7 @@ export async function GET(req: NextRequest) {
       console.log(`${LOG_PREFIX} 1b. Gerente visualizando perfil do filtro: ${effectiveUserId}`);
     } else if (isAdminOrSuperAdmin && consultorIdFilter) {
       const targetProfile = await getUserProfile(consultorIdFilter);
-      if (['consultor', 'gerente', 'admin', 'gestor'].includes(String(targetProfile?.status || ''))) {
+      if (['captador', 'gerente', 'admin'].includes(String(targetProfile?.status || ''))) {
         effectiveUserId = consultorIdFilter;
         console.log(`${LOG_PREFIX} 1b. Visualizando como usuário do filtro: ${effectiveUserId}`);
       }
@@ -174,7 +172,7 @@ export async function GET(req: NextRequest) {
         console.log(`${LOG_PREFIX}    Banca default do escopo do usuário: ${bancaUrl}`);
       } else {
         const hierarchyPath = await getHierarchyPath(effectiveUserId);
-        const donoBanca = hierarchyPath.find((p) => p.status === 'dono_banca');
+        const donoBanca = hierarchyPath.find((p) => p.status === 'gerente');
         if (donoBanca) {
           const { data: donoProfile } = await supabaseServiceRole
             .from('profiles')
@@ -205,27 +203,6 @@ export async function GET(req: NextRequest) {
     const apiKey = process.env.CRM_API_KEY;
     console.log(`${LOG_PREFIX} 4. URL base da API externa: ${cleanBancaUrl}`);
     console.log(`${LOG_PREFIX} 5. CRM_API_KEY: ${apiKey ? 'definida' : 'não definida'}`);
-
-    if (
-      consultorIdFilter &&
-      (profile?.status === 'dono_banca' || profile?.status === 'gestor') &&
-      bancaUrl
-    ) {
-      const scopedCheck = await getDashboardScopeForUser({ userId, bancaUrl });
-      if (!scopedCheck.allowed) {
-        return errorResponse(
-          scopedCheck.reason === 'banca_out_of_scope'
-            ? 'Esta banca está fora do seu escopo.'
-            : 'Acesso negado.',
-          403
-        );
-      }
-      const inScope = scopedCheck.consultantProfiles.some((p) => p.id === consultorIdFilter);
-      if (!inScope) {
-        return errorResponse('Perfil fora do seu escopo para esta banca.', 403);
-      }
-      effectiveUserId = consultorIdFilter;
-    }
 
     // Escopo de perfis a consultar (alinhado com /api/consultor/dashboard e regras hierárquicas)
     let consultantProfilesScope: ConsultantProfileBasic[] = [];
@@ -272,7 +249,7 @@ export async function GET(req: NextRequest) {
 
     // Resumo do escopo por status (útil para logs em telas com muitos perfis)
     const countsByStatus = consultantProfilesScope.reduce((acc, p) => {
-      const key = String(p.status || 'consultor');
+      const key = String(p.status || 'captador');
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -286,7 +263,7 @@ export async function GET(req: NextRequest) {
 
     for (let i = 0; i < consultantProfilesScope.length; i++) {
       const current = consultantProfilesScope[i];
-      const statusKey = String(current.status || 'consultor');
+      const statusKey = String(current.status || 'captador');
       const logLabel = `[${i + 1}/${consultantProfilesScope.length} ${statusKey} ${current.email}]`;
 
       console.log(`${LOG_PREFIX} 8.${i + 1} Consultando`, {

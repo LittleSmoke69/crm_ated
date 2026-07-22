@@ -61,7 +61,22 @@ interface MenuItem {
   }[];
 }
 
-type UserStatus = 'super_admin' | 'admin' | 'consultor' | 'gerente' | 'dono_banca' | 'gestor' | 'auditoria' | 'suporte' | null;
+type UserStatus = 'super_admin' | 'admin' | 'gerente' | 'captador' | null;
+
+/** Cargos legados → cargos atuais (sessões/perfis antigos ainda podem retornar valores aposentados). */
+const LEGACY_STATUS_MAP: Record<string, UserStatus> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+function normalizeLegacyStatus(status: string | null | undefined): UserStatus {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return null;
+  return LEGACY_STATUS_MAP[raw] ?? (raw as UserStatus);
+}
 
 const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const pathname = usePathname();
@@ -250,7 +265,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
             try {
               const result = JSON.parse(text);
               if (result.success && result.data?.status) {
-                setUserStatus(result.data.status as UserStatus);
+                setUserStatus(normalizeLegacyStatus(String(result.data.status)));
               }
             } catch {
               // resposta inválida
@@ -387,6 +402,17 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
   };
+  // Admin/Super Admin: CRM com gestão de leads capturados (Admin > Leads)
+  const itemCRMAdmin: MenuItem = {
+    label: 'CRM',
+    icon: Layout,
+    submenu: [
+      { href: '/admin/leads', icon: UserPlus, label: 'Leads' },
+      { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
+      { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
+      { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
+    ],
+  };
   const itemCampanhas: MenuItem = {
     label: 'Campanhas',
     icon: Rocket,
@@ -396,7 +422,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/campanha/groups', icon: Users, label: 'Grupos' },
     ],
   };
-  // Consultor: Campanha > Mensagem (ativações) + Grupos (igual ao gerente para envio de mensagens)
+  // Captador: Campanha > Mensagem (ativações) + Grupos (igual ao gerente para envio de mensagens)
   const itemCampanhaConsultor: MenuItem = {
     label: 'Campanha',
     icon: Rocket,
@@ -413,7 +439,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemMeuAntiSpam: MenuItem = { href: '/anti-spam', icon: Shield, label: 'Meu Anti-Spam' };
   const itemGestaoBanca: MenuItem = { href: '/dono-banca', icon: BarChart3, label: 'Gestão de Banca' };
   const itemGestaoTrafego: MenuItem = { href: '/gestor-trafego', icon: BarChart3, label: 'Gestão de Tráfego' };
-  const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Consultores' };
+  const itemGestaoConsultores: MenuItem = { href: '/gerente', icon: Briefcase, label: 'Gestão de Captadores' };
   const itemMeuDesempenho: MenuItem = { href: '/consultor', icon: BarChart3, label: 'Desempenho' };
   const itemDesempenhoDetalhado: MenuItem = { href: '/consultor/detalhado', icon: ClipboardList, label: 'Desempenho Detalhado' };
   const itemMetaAds: MenuItem = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
@@ -422,7 +448,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
   const itemLeadStockGerente: MenuItem = { href: '/gerente/crm/lead-stock-transfer', icon: Package, label: 'Estoque de leads' };
   const itemLeadTransfer: MenuItem = { href: '/admin/crm/lead-transfer', icon: ArrowRightLeft, label: 'Transferência de Leads' };
-  const itemZaplinkGestorTrafego: MenuItem = { href: '/gestor-trafego/zaplink', icon: Link2, label: 'Zaplink' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
     icon: BookOpen,
@@ -456,7 +481,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemChatInterno,
         itemGestaoChat,
         itemLeadTransfer,
-        itemCRM,
+        itemCRMAdmin,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
@@ -488,7 +513,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAcademy,
         itemAgentesIAAdmin,
         itemGestaoChat,
-        itemCRM,
+        itemCRMAdmin,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
@@ -505,88 +530,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 🎧 Suporte - atendimento, operação e Hierarquia (alterações na rede)
-    if (userStatus === 'suporte') {
-      return [
-        itemDashboard,
-        itemHierarquia,
-        itemInstances,
-        itemMaturador,
-        itemAgentesIA,
-        itemAcademyPublic,
-        itemChatInterno,
-        itemCRM,
-        itemCampanhas,
-        itemContatosAtivos,
-        itemImportarContatos,
-        itemMeuAntiSpam,
-        itemProfile,
-      ];
-    }
-
-    // 🕵️ Auditoria - controle, fraude e qualidade (sem Flows, Webhooks, Chat Interno, Gestão)
-    if (userStatus === 'auditoria') {
-      return [
-        itemDashboard,
-        itemInstances,
-        itemMaturador,
-        itemAgentesIA,
-        itemAcademyPublic,
-        itemCRM,
-        itemCampanhas,
-        itemContatosAtivos,
-        itemImportarContatos,
-        itemAuditoria,
-        itemAntiSpam,
-        itemLeadTransfer,
-        itemProfile,
-      ];
-    }
-
-    // 💰 Dono de Banca - Gestão de Banca + operação (sem Flows, Webhooks, Auditoria, Chat, Gestão Consultores)
-    if (userStatus === 'dono_banca') {
-      return [
-        itemGestaoBanca,
-        itemMeuDesempenho,
-        itemDesempenhoDetalhado,
-        itemDashboard,
-        itemInstances,
-        itemMaturador,
-        itemAgentesIA,
-        itemAcademyPublic,
-        itemCRM,
-        itemCampanhas,
-        itemContatosAtivos,
-        itemImportarContatos,
-        itemMeuAntiSpam,
-        itemProfile,
-      ];
-    }
-
-    // 📈 Gestor de Tráfego - Painel igual ao dono da banca + funil Facebook (vinculado a um dono) + Zaplink (seus formulários e leads)
-    if (userStatus === 'gestor') {
-      return [
-        itemGestaoTrafego,
-        itemGestaoBanca,
-        itemMeuDesempenho,
-        itemDesempenhoDetalhado,
-        itemZaplinkGestorTrafego,
-        itemVslRedirect,
-        itemDashboard,
-        itemInstances,
-        itemMaturador,
-        itemAgentesIA,
-        itemAcademyPublic,
-        itemCRM,
-        itemCampanhas,
-        itemContatosAtivos,
-        itemImportarContatos,
-        itemMeuAntiSpam,
-        itemProfile,
-      ];
-    }
-
-    // 📊 Gerente - Gestão de Consultores + operação (sem Maturador, Flows, Webhooks, Auditoria, Chat, Gestão Banca)
+    // 📊 Gerente - Gestão de Captadores + operação (sem Maturador, Flows, Webhooks, Auditoria, Chat, Gestão Banca)
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
@@ -612,8 +556,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 👨‍💼 Consultor - operacional (Meu Desempenho, Instâncias, CRM, Campanha > Grupos, Agentes IA, Meu Anti-Spam, Meu Perfil)
-    if (userStatus === 'consultor') {
+    // 👨‍💼 Captador - operacional (Meu Desempenho, Instâncias, CRM, Campanha > Grupos, Agentes IA, Meu Anti-Spam, Meu Perfil)
+    if (userStatus === 'captador') {
       return [
         itemMeuDesempenho,
         itemDesempenhoDetalhado,

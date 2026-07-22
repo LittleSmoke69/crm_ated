@@ -117,7 +117,7 @@ async function buildEvolutionChannels(
   }
 
   // Consultor pode acessar instâncias que estão vinculadas a ele para atendimento.
-  if (normalizedStatus === 'consultor') {
+  if (normalizedStatus === 'captador') {
     const { data: assignments } = await supabaseServiceRole
       .from('atendimento_chat_assignments')
       .select('evolution_instance_id')

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useTenantRouter, useTenantHref } from '@/lib/utils/tenant-href';
-import { Mail, Lock, User, UserPlus, AlertCircle, CheckCircle2, Sun, Moon } from 'lucide-react';
+import { Mail, Lock, User, UserPlus, AlertCircle, CheckCircle2, Sun, Moon, Eye, EyeOff } from 'lucide-react';
 import Logo from '@/components/Logo';
 
 export default function RegisterPage() {
@@ -13,6 +13,7 @@ export default function RegisterPage() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function RegisterPage() {
       >
         {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
       </button>
-      <div className="w-full max-w-md mx-auto">
+      <div className="w-full max-w-lg mx-auto">
         {/* Logo e Título */}
         <div className="text-center mb-6 sm:mb-8">
           <div className="flex items-center justify-center mb-3 w-full">
@@ -113,7 +114,7 @@ export default function RegisterPage() {
                   value={fullName}
                   onChange={e => setFullName(e.target.value)}
                   placeholder="Seu nome completo"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   required
                   autoComplete="name"
@@ -134,7 +135,7 @@ export default function RegisterPage() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="seu@email.com"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   required
                   inputMode="email"
@@ -152,19 +153,28 @@ export default function RegisterPage() {
                 <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-[#888] pointer-events-none" />
                 <input
                   id="password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full min-h-[48px] pl-10 pr-4 py-2.5 sm:py-3 border-2 border-gray-100 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
+                  className="w-full min-h-[48px] pl-10 pr-12 py-2.5 sm:py-3 border-2 border-gray-200 dark:border-[#555] rounded-lg focus:ring-2 focus:ring-[var(--tenant-primary)] focus:border-[var(--tenant-primary)] text-base text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-[#888] transition bg-white dark:bg-[#333] font-medium"
                   disabled={loading}
                   autoComplete="new-password"
-                  minLength={6}
+                  minLength={8}
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-gray-400 dark:text-[#888] hover:text-gray-600 dark:hover:text-[#ccc] transition-colors"
+                  aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
               </div>
               <p className="text-xs text-gray-500 dark:text-[#888] mt-1.5 px-0.5">
-                Mínimo de 6 caracteres
+                Mínimo de 8 caracteres
               </p>
             </div>
 

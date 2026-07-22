@@ -502,7 +502,7 @@ export default function ExportCsvModal({
                 setExportAccumulated([]);
                 onClose();
               }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-white"
             >
               <Download className="w-4 h-4" />
               Baixar CSV
@@ -561,8 +561,8 @@ export default function ExportCsvModal({
             </div>
           )}
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Use os mesmos filtros do CRM para escolher quais leads exportar (nome, e-mail, telefone, consultor, depósitos, etc.). 
-            Os dados incluem todos os consultores e gerentes da banca.
+            Use os mesmos filtros do CRM para escolher quais leads exportar (nome, e-mail, telefone, captador, depósitos, etc.).
+            Os dados incluem todos os captadores e gerentes da banca.
           </p>
           <FilterBar
             onSearch={setSearchTerm}
@@ -676,7 +676,7 @@ export default function ExportCsvModal({
                   <button
                     type="button"
                     onClick={handleDownloadLoadedNow}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-white"
                   >
                     <Download className="w-4 h-4" />
                     Baixar CSV com {exportAccumulated.length.toLocaleString('pt-BR')} leads já carregados
@@ -704,7 +704,7 @@ export default function ExportCsvModal({
                   type="button"
                   onClick={runExport}
                   disabled={!canExport}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium bg-[#E86A24] hover:bg-[#D95E1B] text-white disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Download className="w-4 h-4" />
                   Exportar CSV

@@ -4,18 +4,20 @@ export function getLandingRouteByStatus(status: string | null | undefined): stri
     case 'super_admin':
     case 'admin':
       return '/admin';
-    case 'dono_banca':
-      return '/dono-banca';
-    case 'gestor':
-      return '/gestor-trafego';
     case 'gerente':
       return '/gerente';
+    case 'captador':
+    // Legado (dados ainda não migrados): consultor era o antigo nome de captador
     case 'consultor':
       return '/consultor';
+    // Cargos legados remapeados pela migração new_role_line_super_admin_admin_gerente_captador.sql
+    case 'dono_banca':
+      return '/gerente';
+    case 'gestor':
     case 'auditoria':
       return '/admin';
     case 'suporte':
-      return '/crm/kanban';
+      return '/admin';
     default:
       return '/';
   }

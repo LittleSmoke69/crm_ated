@@ -15,7 +15,7 @@ export async function buildGerentePerformanceScope(gerenteId: string): Promise<G
   if (!self?.email) return [];
 
   const subs = await getSubordinates(gerenteId);
-  const consultores = subs.filter((s) => s.status === 'consultor');
+  const consultores = subs.filter((s) => s.status === 'captador');
 
   const rows: GerentePerformanceProfile[] = [
     {
@@ -44,6 +44,6 @@ export async function buildGerentePerformanceScope(gerenteId: string): Promise<G
 export async function gerenteCanViewConsultorPerformance(gerenteId: string, targetId: string): Promise<boolean> {
   if (gerenteId === targetId) return true;
   const tp = await getUserProfile(targetId);
-  if (!tp || tp.status !== 'consultor') return false;
+  if (!tp || tp.status !== 'captador') return false;
   return canAccessUser(gerenteId, targetId);
 }

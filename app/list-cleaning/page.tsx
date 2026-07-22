@@ -83,7 +83,7 @@ interface CleanRow {
   validated_at: string | null;
 }
 
-const ALLOWED_LIST_CLEANING_STATUSES = ['super_admin', 'admin', 'dono_banca', 'gerente'] as const;
+const ALLOWED_LIST_CLEANING_STATUSES = ['super_admin', 'admin', 'gerente'] as const;
 
 const PROFILE_CHECK_TIMEOUT_MS = 12000;
 

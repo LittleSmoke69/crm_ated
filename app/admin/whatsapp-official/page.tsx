@@ -21,6 +21,9 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import Layout from '@/components/Layout';
+import { ConfirmDialog } from '@/components/ui';
+import ToastContainer from '@/components/Toast/ToastContainer';
+import type { Toast as ToastMessage } from '@/components/Toast/Toast';
 
 interface WhatsAppOfficialConfig {
   id: string;
@@ -274,8 +277,20 @@ export default function WhatsAppOfficialAdmin() {
     setTestResult(null);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Remover esta configuração? As conversas vinculadas podem ser afetadas.')) return;
+  // Confirmação de remoção via ConfirmDialog do kit + feedback por toast
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const pushToast = (message: string, type: ToastMessage['type'] = 'success') => {
+    setToasts((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, message, type }]);
+  };
+  const removeToast = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
+
+  const handleDelete = (id: string) => setDeleteTargetId(id);
+
+  const confirmDelete = async () => {
+    const id = deleteTargetId;
+    if (!id) return;
+    setDeleteTargetId(null);
     try {
       const res = await fetch(`/api/admin/whatsapp-official-configs/${id}`, {
         method: 'DELETE',
@@ -288,11 +303,12 @@ export default function WhatsAppOfficialAdmin() {
           setEditingId(null);
           setForm(emptyForm());
         }
+        pushToast('Configuração removida.', 'success');
       } else {
-        alert(data.error || 'Erro ao remover.');
+        pushToast(data.error || 'Erro ao remover.', 'error');
       }
     } catch {
-      alert('Erro de rede.');
+      pushToast('Erro de rede.', 'error');
     }
   };
 
@@ -882,6 +898,17 @@ export default function WhatsAppOfficialAdmin() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        onClose={() => setDeleteTargetId(null)}
+        onConfirm={confirmDelete}
+        title="Remover configuração"
+        description="Remover esta configuração? As conversas vinculadas podem ser afetadas."
+        confirmLabel="Remover"
+        tone="danger"
+      />
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </Layout>
   );
 }

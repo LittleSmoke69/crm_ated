@@ -192,8 +192,8 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
   const exportCommission = () => {
     const rows = commissionByType ?? [];
     const columns: CsvColumn<CommissionRow>[] = [
-      { header: 'Consultor', get: (r) => r.consultant_name || r.consultant_email || '' },
-      { header: 'Email do consultor', get: (r) => r.consultant_email ?? '' },
+      { header: 'Captador', get: (r) => r.consultant_name || r.consultant_email || '' },
+      { header: 'Email do captador', get: (r) => r.consultant_email ?? '' },
       { header: 'Tipo', get: (r) => r.type ?? '' },
       { header: 'Wallet', get: (r) => r.wallet ?? '' },
       { header: 'Usuário (ID)', get: (r) => r.user_id_sender ?? '' },
@@ -214,7 +214,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
   const exportBets = () => {
     const rows = betsByUser ?? [];
     const columns: CsvColumn<BetUserRow>[] = [
-      { header: 'Consultor', get: (r) => r.consultant_name || r.consultant_email || '' },
+      { header: 'Captador', get: (r) => r.consultant_name || r.consultant_email || '' },
       { header: 'Usuário (ID)', get: (r) => r.user_id_sender ?? '' },
       { header: 'Nome', get: (r) => r.user_name ?? '' },
       { header: 'Email', get: (r) => r.user_email ?? '' },
@@ -246,7 +246,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
   const exportDeposits = () => {
     const rows = depositsByUser ?? [];
     const columns: CsvColumn<DepositUserRow>[] = [
-      { header: 'Consultor', get: (r) => r.consultant_name || r.consultant_email || '' },
+      { header: 'Captador', get: (r) => r.consultant_name || r.consultant_email || '' },
       { header: 'Usuário (ID)', get: (r) => r.user_id_sender ?? '' },
       { header: 'Nome', get: (r) => r.user_name ?? '' },
       { header: 'Email', get: (r) => r.user_email ?? '' },
@@ -324,7 +324,7 @@ const ExportCsvMenu: React.FC<ExportCsvMenuProps> = (props) => {
               <span className="flex-1">
                 <span className="block font-bold">Comissão por tipo</span>
                 <span className="block text-[11px] text-gray-500 dark:text-gray-400">
-                  Uma linha por comissão, com tipo, usuário e consultor
+                  Uma linha por comissão, com tipo, usuário e captador
                 </span>
               </span>
             </button>

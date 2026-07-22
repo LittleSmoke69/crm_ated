@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      if (user.status === 'consultor' && user.enroller) {
+      if (user.status === 'captador' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
         const validConsultorEnroller = ['gerente', 'admin', 'super_admin'].includes(enroller?.status ?? '');
         if (enroller && !validConsultorEnroller) {
@@ -135,7 +135,7 @@ export async function GET(req: NextRequest) {
 
       if (user.status === 'gerente' && user.enroller) {
         const enroller = allUsers.find((u) => u.id === user.enroller);
-        const validGerenteEnroller = ['dono_banca', 'gerente', 'admin', 'super_admin'].includes(
+        const validGerenteEnroller = ['gerente', 'admin', 'super_admin'].includes(
           enroller?.status ?? ''
         );
         if (enroller && !validGerenteEnroller) {
