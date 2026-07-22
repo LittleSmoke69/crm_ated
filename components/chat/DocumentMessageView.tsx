@@ -90,6 +90,7 @@ export function DocumentMessageView({ url, caption, fromMe, chatMessageId, userI
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const pdfObjectUrlRef = useRef<string | null>(null);
 
@@ -199,11 +200,12 @@ export function DocumentMessageView({ url, caption, fromMe, chatMessageId, userI
 
   const handleDownload = async () => {
     setDownloading(true);
+    setActionError(null);
     try {
       const target = chatMessageId ? proxyMediaUrl(chatMessageId, { download: true }) : url;
       const res = await fetch(
         target,
-        chatMessageId ? mergeAuthInit(userId, { method: 'GET' }) : { method: 'GET' }
+        chatMessageId ? mergeAuthInit(userId, { method: 'GET' }) : { method: 'GET', credentials: 'omit' }
       );
       if (!res.ok) throw new Error('download failed');
       const blob = await res.blob();
@@ -214,40 +216,40 @@ export function DocumentMessageView({ url, caption, fromMe, chatMessageId, userI
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      console.warn('[DocumentMessageView] download failed', e);
+      setActionError('Não foi possível abrir esta mídia.');
     } finally {
       setDownloading(false);
     }
   };
 
   const handleOpenExternal = async () => {
-    try {
-      if (pdfObjectUrl) {
-        window.open(pdfObjectUrl, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      const targets: { url: string; auth: boolean }[] = [];
-      if (chatMessageId) targets.push({ url: proxyMediaUrl(chatMessageId, { inline: true }), auth: true });
-      targets.push({ url, auth: false });
-      for (const t of targets) {
-        try {
-          const buf = await fetchBytes(t.url, userId, t.auth);
-          const blob = new Blob([buf], {
-            type: kind === 'pdf' && isPdfBytes(buf) ? 'application/pdf' : undefined,
-          });
-          const openUrl = URL.createObjectURL(blob);
-          window.open(openUrl, '_blank', 'noopener,noreferrer');
-          setTimeout(() => URL.revokeObjectURL(openUrl), 60_000);
-          return;
-        } catch {
-          // próxima fonte
-        }
-      }
-    } catch {
-      // fallback
+    setActionError(null);
+    if (pdfObjectUrl) {
+      window.open(pdfObjectUrl, '_blank', 'noopener,noreferrer');
+      return;
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const targets: { url: string; auth: boolean }[] = [];
+    if (chatMessageId) targets.push({ url: proxyMediaUrl(chatMessageId, { inline: true }), auth: true });
+    targets.push({ url, auth: false });
+    let lastErr: unknown;
+    for (const t of targets) {
+      try {
+        const buf = await fetchBytes(t.url, userId, t.auth);
+        const blob = new Blob([buf], {
+          type: kind === 'pdf' && isPdfBytes(buf) ? 'application/pdf' : undefined,
+        });
+        const openUrl = URL.createObjectURL(blob);
+        window.open(openUrl, '_blank', 'noopener,noreferrer');
+        setTimeout(() => URL.revokeObjectURL(openUrl), 60_000);
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    console.warn('[DocumentMessageView] open failed', lastErr);
+    setActionError('Não foi possível abrir esta mídia.');
   };
 
   const inlineTxt =
@@ -382,6 +384,9 @@ export function DocumentMessageView({ url, caption, fromMe, chatMessageId, userI
             Abrir
           </button>
         </div>
+        {actionError && (
+          <p className={`px-3 pb-2 -mt-1 text-xs ${textMuted}`}>{actionError}</p>
+        )}
       </div>
 
       {expanded && (

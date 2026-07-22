@@ -41,12 +41,12 @@ export async function uploadAudioBufferToMeta(
   metaFormData.append('type', uploadType);
   metaFormData.append(
     'file',
-    new Blob([buffer], { type: WHATSAPP_AUDIO_META_UPLOAD_TYPE }),
+    new Blob([Uint8Array.from(buffer).buffer], { type: WHATSAPP_AUDIO_META_UPLOAD_TYPE }),
     safeName
   );
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), 2 * 60_000);
 
   let metaRes: Response;
   try {

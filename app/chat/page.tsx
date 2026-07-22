@@ -266,6 +266,7 @@ function MediaModal({
   caption?: string | null;
   onClose: () => void;
 }) {
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -287,11 +288,16 @@ function MediaModal({
         className="max-w-[90vw] max-h-[85vh] flex flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
-        {type === 'image' ? (
+        {failed ? (
+          <div className="rounded-lg bg-white/10 px-6 py-5 text-center text-sm text-white">
+            Não foi possível abrir esta mídia.
+          </div>
+        ) : type === 'image' ? (
           <img
             src={url}
             alt={caption ?? 'imagem'}
             className="max-w-[90vw] max-h-[80vh] rounded-lg object-contain"
+            onError={() => setFailed(true)}
           />
         ) : (
           <video
@@ -299,6 +305,7 @@ function MediaModal({
             controls
             autoPlay
             className="max-w-[90vw] max-h-[80vh] rounded-lg"
+            onError={() => setFailed(true)}
           />
         )}
         {caption && (
@@ -346,7 +353,8 @@ function MediaRetryButton({
       if (json.success && json.data?.media_url) {
         onResolved(json.data.media_url);
       } else {
-        setError(json.error || json.message || 'Não foi possível recuperar');
+        if (json.error || json.message) console.error('[Chat] Retry de mídia falhou:', json.error || json.message);
+        setError('Não foi possível recuperar a mídia.');
       }
     } catch {
       setError('Erro de conexão');
@@ -573,10 +581,15 @@ function MessageContent({
   onMediaResolved?: (messageId: string, url: string) => void;
 }) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [failedMedia, setFailedMedia] = useState<'image' | 'video' | null>(null);
   const mediaUrl = resolvedUrl || msg.media_url;
+  const displayMediaUrl = mediaUrl
+    ? `/api/chat/messages/download-media?chat_message_id=${encodeURIComponent(msg.id)}`
+    : null;
   const textClass = fromMe ? 'text-white/90' : 'text-gray-600 dark:text-gray-300';
 
   const handleMediaResolved = (url: string) => {
+    setFailedMedia(null);
     setResolvedUrl(url);
     onMediaResolved?.(msg.id, url);
   };
@@ -642,28 +655,33 @@ function MessageContent({
   return (
     <div className="space-y-1">
       {msg.media_type === 'image' && (
-        mediaUrl ? (
+        displayMediaUrl && failedMedia !== 'image' ? (
           <img
-            src={mediaUrl}
+            src={displayMediaUrl}
             alt={msg.caption ?? 'imagem'}
             className="rounded-lg max-w-xs max-h-64 object-cover cursor-pointer"
-            onClick={() => onMediaClick(mediaUrl, 'image', msg.caption)}
+            onClick={() => onMediaClick(displayMediaUrl, 'image', msg.caption)}
+            onError={() => setFailedMedia('image')}
           />
         ) : (
           retryFallback('image') || <span className={`text-sm italic ${textClass}`}>📷 Imagem não disponível</span>
         )
       )}
       {msg.media_type === 'audio' && (
-        mediaUrl ? (
-          <AudioMessagePlayer src={mediaUrl} fromMe={fromMe} />
+        displayMediaUrl && failedMedia !== 'video' ? (
+          <AudioMessagePlayer src={displayMediaUrl} fromMe={fromMe} />
         ) : (
           retryFallback('audio') || <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
       )}
       {msg.media_type === 'video' && (
-        mediaUrl ? (
-          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(mediaUrl, 'video', msg.caption)}>
-            <video src={mediaUrl} className="rounded-lg max-w-xs max-h-64 pointer-events-none" />
+        displayMediaUrl && failedMedia !== 'video' ? (
+          <div className="relative cursor-pointer group max-w-xs" onClick={() => onMediaClick(displayMediaUrl, 'video', msg.caption)}>
+            <video
+              src={displayMediaUrl}
+              className="rounded-lg max-w-xs max-h-64 pointer-events-none"
+              onError={() => setFailedMedia('video')}
+            />
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg group-hover:bg-black/50 transition-colors">
               <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-gray-800 ml-1" fill="currentColor" viewBox="0 0 24 24">
@@ -749,10 +767,12 @@ export default function ChatPage() {
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const initialScrollPendingRef = useRef(false);
 
   // Envio
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
+  const [retryingAudioMessageId, setRetryingAudioMessageId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [attachedMedia, setAttachedMedia] = useState<{
@@ -764,6 +784,8 @@ export default function ChatPage() {
     meta_id?: string;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [videoUploadProgress, setVideoUploadProgress] = useState<number | null>(null);
+  const [videoUploadStage, setVideoUploadStage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
@@ -1362,6 +1384,7 @@ export default function ChatPage() {
       setConvContact(undefined);
       return;
     }
+    initialScrollPendingRef.current = true;
 
     const loadMessages = async () => {
       setMessagesLoading(true);
@@ -1422,16 +1445,26 @@ export default function ChatPage() {
   // Scroll automático ao abrir conversa (vai para o final)
   useEffect(() => {
     if (!selectedConversationId || messagesLoading) return;
-    const timeout = setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 80);
-    return () => clearTimeout(timeout);
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+      secondFrame = requestAnimationFrame(() => {
+        const current = messagesContainerRef.current;
+        if (current) current.scrollTop = current.scrollHeight;
+        initialScrollPendingRef.current = false;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
   }, [selectedConversationId, messagesLoading]);
 
   // Handler de scroll das mensagens: topo → carrega mais antigas
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || !hasOlderMessages || loadingOlderMessages) return;
+    if (!container || initialScrollPendingRef.current || !hasOlderMessages || loadingOlderMessages) return;
     if (container.scrollTop < 80) loadOlderMessages();
   }, [hasOlderMessages, loadingOlderMessages, loadOlderMessages]);
 
@@ -1709,6 +1742,28 @@ export default function ChatPage() {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    if (attachedMedia?.preview) URL.revokeObjectURL(attachedMedia.preview);
+    setAttachedMedia(null);
+    const isVideo = (file.type || '').split(';')[0].toLowerCase() === 'video/mp4';
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
+    if (isVideo) {
+      setVideoUploadProgress(3);
+      setVideoUploadStage('Enviando vídeo ao servidor…');
+      progressTimer = setInterval(() => {
+        setVideoUploadProgress((current) => {
+          if (current == null) return null;
+          if (current >= 96) {
+            setVideoUploadStage('Finalizando o vídeo e enviando ao WhatsApp…');
+            return 96;
+          }
+          if (current >= 28) {
+            setVideoUploadStage('Comprimindo e preparando para o WhatsApp…');
+            return Math.min(96, current + (current >= 88 ? 0.25 : 1));
+          }
+          return current + 3;
+        });
+      }, 700);
+    }
     setUploading(true);
     e.target.value = '';
     try {
@@ -1721,14 +1776,37 @@ export default function ChatPage() {
         headers: authHeaders(),
       });
       const data = await res.json();
-      if (!data.success) { alert(data.error || data.message || 'Falha no upload'); return; }
+      if (!res.ok || !data.success) {
+        alert(data.error || data.message || 'Falha no upload');
+        return;
+      }
+      if (isVideo) {
+        setVideoUploadProgress(100);
+        setVideoUploadStage(
+          data.data.compressed ? 'Vídeo comprimido e pronto para envio.' : 'Vídeo pronto para envio.'
+        );
+      }
       const preview = data.data.media_type === 'image' ? URL.createObjectURL(file) : undefined;
-      setAttachedMedia({ url: data.data.url, type: data.data.media_type, name: file.name, preview });
+      setAttachedMedia({
+        url: data.data.url,
+        type: data.data.media_type,
+        name: file.name,
+        preview,
+        meta_id: data.data.meta_id,
+        mimetype: data.data.mime_type,
+      });
     } catch (err) {
       console.error('[Chat] upload:', err);
       alert('Falha ao enviar arquivo');
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       setUploading(false);
+      if (isVideo) {
+        setTimeout(() => {
+          setVideoUploadProgress(null);
+          setVideoUploadStage('');
+        }, 1200);
+      }
     }
   };
 
@@ -2124,7 +2202,7 @@ export default function ChatPage() {
   };
 
   const getSendErrorMessage = (status: number, bodyError?: string): string => {
-    if (bodyError && bodyError.trim()) return bodyError;
+    if (bodyError && bodyError.trim()) console.error('[Chat] Envio falhou:', bodyError);
     switch (status) {
       case 502: return 'Serviço temporariamente indisponível. Tente novamente.';
       case 503: return 'Serviço temporariamente indisponível. Selecione outra instância ou aguarde.';
@@ -2292,6 +2370,7 @@ export default function ChatPage() {
               config_id: selectedChannel.id,
               to,
               type: attachedMedia!.type,
+              media_mime_type: attachedMedia!.mimetype,
               ...(attachedMedia!.meta_id
                 ? { meta_id: attachedMedia!.meta_id, media_url: attachedMedia!.url || undefined }
                 : { media_url: attachedMedia!.url }),
@@ -2428,6 +2507,90 @@ export default function ChatPage() {
     });
   };
 
+  const isFailedMessage = (msg: Message) =>
+    ['failed', 'error', 'undelivered', 'rejected'].includes(
+      String(msg.status ?? '').trim().toLowerCase()
+    );
+
+  const retryFailedAudioMessage = async (msg: Message) => {
+    if (
+      retryingAudioMessageId ||
+      !selectedChannel ||
+      !selectedConversation ||
+      !msg.from_me ||
+      msg.media_type !== 'audio' ||
+      !isFailedMessage(msg)
+    ) return;
+
+    if (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage) {
+      setSendError('Fora da janela de 24h. Use mensagem template para reabrir a conversa.');
+      return;
+    }
+
+    setSendError(null);
+    setRetryingAudioMessageId(msg.id);
+    try {
+      const mediaResponse = await fetch(
+        `/api/chat/messages/download-media?chat_message_id=${encodeURIComponent(msg.id)}&download=1`,
+        { headers: authHeaders() }
+      );
+      if (!mediaResponse.ok) throw new Error('Não foi possível recuperar o áudio original.');
+
+      const audioBlob = await mediaResponse.blob();
+      const uploaded = await uploadRecordedAudio(audioBlob, audioBlob.type || 'audio/ogg');
+      if (!uploaded || (!uploaded.meta_id && !uploaded.url)) {
+        throw new Error(uploaded?.metaError || 'Não foi possível preparar o áudio para reenvio.');
+      }
+
+      if (selectedChannel.type === 'evolution') {
+        const response = await fetch('/api/chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            instance_id: selectedChannel.id,
+            remoteJid: selectedConversation.remote_jid,
+            type: 'media',
+            media: uploaded.url,
+            mimetype: 'audio/ogg',
+            mediatype: 'audio',
+            fileName: 'audio.ogg',
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          console.error('[Chat] reenvio de áudio (evolution) falhou:', result.error || result.message);
+          throw new Error('Não foi possível reenviar o áudio.');
+        }
+      } else {
+        const to = selectedConversation.remote_jid
+          .replace(/@s\.whatsapp\.net$/, '')
+          .replace(/\D/g, '');
+        const response = await fetch('/api/chat/whatsapp-official/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            config_id: selectedChannel.id,
+            to,
+            type: 'audio',
+            ...(uploaded.meta_id ? { meta_id: uploaded.meta_id } : {}),
+            media_url: uploaded.url || undefined,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          throw new Error(getSendErrorMessage(response.status, result.error || result.message));
+        }
+      }
+      // O reenvio cria uma nova mensagem. Retira da tela somente o balão antigo
+      // que falhou; a nova mensagem entra pelo Realtime já com seu status real.
+      setMessages((current) => current.filter((item) => item.id !== msg.id));
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'Não foi possível reenviar o áudio.');
+    } finally {
+      setRetryingAudioMessageId(null);
+    }
+  };
+
   /**
    * Ícone de entrega (bolhas enviadas).
    * - `from_me` pode vir boolean ou string do JSON/Realtime.
@@ -2464,6 +2627,10 @@ export default function ChatPage() {
       case 'sent': return <Check className="w-4 h-4" />;
       case 'delivered': return <CheckCheck className="w-4 h-4" />;
       case 'read': return <CheckCheck className="w-4 h-4" style={{ color: '#E86A24' }} />;
+      case 'failed':
+      case 'error':
+      case 'undelivered':
+      case 'rejected': return <AlertCircle className="w-4 h-4 text-red-200" />;
       default: return <Clock className="w-4 h-4" />;
     }
   };
@@ -3732,6 +3899,23 @@ export default function ChatPage() {
                                   {msg.from_me && getStatusIcon(msg)}
                                 </div>
                               </div>
+                              {msg.from_me && msg.media_type === 'audio' && isFailedMessage(msg) && (
+                                <button
+                                  type="button"
+                                  onClick={() => void retryFailedAudioMessage(msg)}
+                                  disabled={retryingAudioMessageId !== null || uploading}
+                                  className="mb-1 inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-red-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-600 shadow-sm transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/50 dark:bg-[#333] dark:text-red-300 dark:hover:bg-red-950/30"
+                                  title="Tentar reenviar este áudio"
+                                  aria-label="Tentar reenviar este áudio"
+                                >
+                                  {retryingAudioMessageId === msg.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  )}
+                                  <span className="hidden sm:inline">Reenviar</span>
+                                </button>
+                              )}
                               {/* Botão apagar — aparece no hover */}
                               {canDelete && (isHovered || isDeleting) && (
                                 <button
@@ -3757,7 +3941,28 @@ export default function ChatPage() {
                 {sendError && (
                   <div className="flex-shrink-0 flex items-start gap-3 px-4 py-3 bg-red-500/15 dark:bg-red-500/20 border-t border-red-500/40 text-red-800 dark:text-red-200">
                     <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
-                    <p className="text-sm flex-1 min-w-0">{sendError}</p>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <p className="text-sm">{sendError}</p>
+                      {recordedBlob && !isRecording && (
+                        <button
+                          type="button"
+                          onClick={() => void handleSendMessage()}
+                          disabled={
+                            sending ||
+                            uploading ||
+                            (selectedChannel?.type === 'whatsapp_official' && !canSendFreeMessage)
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {sending || uploading ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          )}
+                          Tentar reenviar áudio
+                        </button>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={() => setSendError(null)}
@@ -3774,6 +3979,29 @@ export default function ChatPage() {
                   <input ref={fileInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,audio/ogg,audio/mpeg,video/mp4,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
                   <input ref={imageInputRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} />
                   <input ref={docInputRef} type="file" className="hidden" accept="application/pdf,text/plain,.doc,.docx,.xls,.xlsx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileSelect} />
+                  {videoUploadProgress != null && (
+                    <div className="mb-2 rounded-lg border border-[#E86A24]/30 bg-[#E86A24]/10 p-3">
+                      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+                        <span className="font-medium text-[#E86A24]">{videoUploadStage}</span>
+                        <span className="tabular-nums text-[#E86A24]/80">{videoUploadProgress}%</span>
+                      </div>
+                      <div
+                        className="h-2 overflow-hidden rounded-full bg-[#E86A24]/20"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={videoUploadProgress}
+                      >
+                        <div
+                          className="h-full rounded-full bg-[#E86A24] transition-[width] duration-500 ease-out"
+                          style={{ width: `${videoUploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-[#E86A24]/70">
+                        Vídeos grandes podem levar alguns minutos. Não feche esta conversa.
+                      </p>
+                    </div>
+                  )}
                   {/* ── Prévia de áudio gravado ──────────────────────────── */}
                   {recordedBlob && !isRecording && (
                     <div className="mb-2 flex flex-col gap-2 rounded-xl border border-[#E86A24]/35 bg-[#160f0a]/50 p-3">
@@ -3795,11 +4023,11 @@ export default function ChatPage() {
                         </button>
                       </div>
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                      <audio src={recordedBlobUrl!} controls className="w-full" style={{ height: '36px' }} />
+                      <audio src={recordedBlobUrl!} controls className="w-full max-w-full" style={{ height: '36px' }} />
                     </div>
                   )}
                   {attachedMedia && (
-                    <div className="mb-2 p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-[#E86A24]/12">
+                    <div className="mb-2 max-w-full p-2 bg-gray-100 dark:bg-[#333] rounded-lg flex items-center gap-2 border border-[#E86A24]/12">
                       {attachedMedia.type === 'image' && attachedMedia.preview && (
                         <img src={attachedMedia.preview} alt="" className="w-10 h-10 rounded object-cover" />
                       )}
@@ -3826,7 +4054,7 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => setShowEmojiPicker((v) => !v)}
-                        className={`p-1.5 rounded-lg hover:bg-[#E86A24]/10 transition-colors ${showEmojiPicker ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}
+                        className={`p-2 sm:p-1.5 rounded-lg hover:bg-[#E86A24]/10 transition-colors ${showEmojiPicker ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'}`}
                         title="Emoji"
                       >
                         <Smile className="w-4 h-4" />
@@ -3846,7 +4074,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
+                      className="p-2 sm:p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Anexar"
                     >
                       {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
@@ -3889,7 +4117,7 @@ export default function ChatPage() {
                           !selectedChannel ||
                           (selectedChannel.type === 'whatsapp_official' && !canSendFreeMessage)
                         }
-                        className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
+                        className="p-2 sm:p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                         title="Gravar áudio"
                       >
                         <Mic className="w-4 h-4" />
@@ -3900,7 +4128,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => docInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
+                      className="p-2 sm:p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Documento (PDF)"
                     >
                       <FileText className="w-4 h-4" />
@@ -3909,7 +4137,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => imageInputRef.current?.click()}
                       disabled={uploading || selectedChannel?.type !== 'whatsapp_official' || !canSendFreeMessage}
-                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
+                      className="p-2 sm:p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-[#E86A24]/10 disabled:opacity-50"
                       title="Imagem"
                     >
                       <ImageIcon className="w-4 h-4" />

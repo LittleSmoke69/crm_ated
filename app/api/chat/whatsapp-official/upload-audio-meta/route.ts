@@ -15,6 +15,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
   convertAudioFileToOggOpus,
   isValidWhatsAppOggOpusBuffer,
+  WHATSAPP_AUDIO_INPUT_MAX_BYTES,
   WHATSAPP_AUDIO_MAX_BYTES,
   WHATSAPP_AUDIO_META_UPLOAD_TYPE,
   WHATSAPP_VOICE_PLAY_ICON_MAX_BYTES,
@@ -49,8 +50,8 @@ export async function POST(req: NextRequest) {
     const config_id = formData.get('config_id') as string | null;
 
     if (!file || !file.size) return errorResponse('Arquivo obrigatório', 400);
-    if (file.size > WHATSAPP_AUDIO_MAX_BYTES) {
-      return errorResponse('Áudio muito grande. Máximo permitido pela Meta: 16 MB.', 400);
+    if (file.size > WHATSAPP_AUDIO_INPUT_MAX_BYTES) {
+      return errorResponse('Áudio muito grande. Máximo de entrada: 100 MB.', 400);
     }
     if (!config_id) return errorResponse('config_id obrigatório', 400);
 
@@ -115,6 +116,12 @@ export async function POST(req: NextRequest) {
 
     if (!isValidWhatsAppOggOpusBuffer(uploadBuffer)) {
       return errorResponse('Conversão gerou arquivo inválido. Tente gravar a nota de voz novamente.', 422);
+    }
+    if (uploadBuffer.length > WHATSAPP_AUDIO_MAX_BYTES) {
+      return errorResponse(
+        'Mesmo após a compressão, o áudio ultrapassou o limite de 16 MB da Meta.',
+        422
+      );
     }
 
     const metaMime = mimeForMetaUpload(rawMime, converted);

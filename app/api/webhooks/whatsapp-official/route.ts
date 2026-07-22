@@ -106,6 +106,7 @@ export async function GET(req: NextRequest) {
     .from('whatsapp_official_configs')
     .select('id')
     .eq('verify_token', token || '')
+    .eq('is_active', true)
     .limit(1)
     .maybeSingle();
 
@@ -146,6 +147,14 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid signature', { status: 401 });
     }
     if (sigResult === 'skipped') {
+      // Em produção, nunca aceitar webhook sem segredo configurado — falha fechada.
+      // Em dev/test, mantém o comportamento retrocompatível (apenas avisa).
+      if (process.env.NODE_ENV === 'production') {
+        console.error(
+          '[Zaploto Webhook] Sem App Secret configurado (WHATSAPP_OFFICIAL_APP_SECRET ou webhook_secret) em produção — requisição rejeitada.',
+        );
+        return new Response('Webhook not configured', { status: 401 });
+      }
       console.warn(
         '[Zaploto Webhook] Sem App Secret configurado (WHATSAPP_OFFICIAL_APP_SECRET ou webhook_secret) — assinatura NÃO verificada.',
       );
@@ -159,6 +168,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (!isWhatsAppOfficialPayload(payload)) {
+      return new Response('OK', { status: 200 });
+    }
+
+    // Guard final antes do insert em jsonb: só objeto/array não-nulo passa daqui,
+    // mas revalida explicitamente para eliminar qualquer risco de PGRST102.
+    if (typeof payload !== 'object' || payload === null) {
       return new Response('OK', { status: 200 });
     }
 

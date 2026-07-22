@@ -20,6 +20,11 @@ export interface ChatMessage {
   text?: string;
   media_type?: string;
   media_url?: string;
+  provider_media_id?: string;
+  media_mime_type?: string;
+  media_filename?: string;
+  media_recovery_status?: 'pending' | 'ready' | 'failed';
+  media_recovery_attempts?: number;
   caption?: string;
   status?: string;
   timestamp: number;
@@ -337,6 +342,9 @@ export class ChatService {
 
       if (normalized.direction === 'in') {
         updateFields.last_customer_message_at = lastMessageAt;
+        // Cliente respondeu: reabre a conversa mesmo se estava marcada como resolvida.
+        updateFields.attendance_status = 'pendente';
+        updateFields.resolved_at = null;
       }
 
       for (let attempt = 1; attempt <= CONVERSATION_UPDATE_MAX_RETRIES; attempt += 1) {
@@ -357,6 +365,25 @@ export class ChatService {
           continue;
         }
         throw updErr;
+      }
+
+      // Fecha (best-effort) o ciclo de resolução aberto, se o cliente respondeu uma conversa resolvida.
+      // Não afeta nada se não houver ciclo aberto (conversa já estava pendente).
+      if (normalized.direction === 'in') {
+        const { error: reopenHistoryError } = await supabaseServiceRole
+          .from('chat_conversation_resolutions')
+          .update({
+            reopened_at: new Date().toISOString(),
+            reopened_reason: 'customer_reply',
+          })
+          .eq('conversation_id', normalized.conversation_id)
+          .is('reopened_at', null);
+        if (reopenHistoryError) {
+          console.error(
+            '[Zaploto Chat] resolution history close (customer reply) — erro:',
+            reopenHistoryError.message
+          );
+        }
       }
     }
 

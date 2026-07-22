@@ -120,7 +120,7 @@ export async function sendText(
 export async function sendImage(
   config: WhatsAppOfficialConfig,
   to: string,
-  mediaUrl: string,
+  media: { id: string } | { link: string },
   caption?: string,
   replyToMessageId?: string
 ): Promise<{ messages: Array<{ id: string }> }> {
@@ -130,7 +130,7 @@ export async function sendImage(
     to: to.replace(/\D/g, ''),
     type: 'image',
     image: {
-      link: mediaUrl,
+      ...media,
       ...(caption ? { caption } : {}),
     },
   };
@@ -144,7 +144,7 @@ export async function sendImage(
 export async function sendVideo(
   config: WhatsAppOfficialConfig,
   to: string,
-  mediaUrl: string,
+  media: { id: string } | { link: string },
   caption?: string,
   replyToMessageId?: string
 ): Promise<{ messages: Array<{ id: string }> }> {
@@ -154,7 +154,7 @@ export async function sendVideo(
     to: to.replace(/\D/g, ''),
     type: 'video',
     video: {
-      link: mediaUrl,
+      ...media,
       ...(caption ? { caption } : {}),
     },
   };
@@ -168,7 +168,7 @@ export async function sendVideo(
 export async function sendDocument(
   config: WhatsAppOfficialConfig,
   to: string,
-  mediaUrl: string,
+  media: { id: string } | { link: string },
   caption?: string,
   filename?: string,
   replyToMessageId?: string
@@ -179,7 +179,7 @@ export async function sendDocument(
     to: to.replace(/\D/g, ''),
     type: 'document',
     document: {
-      link: mediaUrl,
+      ...media,
       ...(caption ? { caption } : {}),
       ...(filename ? { filename } : {}),
     },

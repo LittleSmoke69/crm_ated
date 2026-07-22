@@ -4,7 +4,7 @@ import { unlink } from 'node:fs/promises';
 import { resolveFfmpegPath } from '@/lib/server/resolve-ffmpeg-path';
 
 const execFileAsync = promisify(execFile);
-const FFMPEG_OPTS = { timeout: 120_000, maxBuffer: 10 * 1024 * 1024 } as const;
+const FFMPEG_OPTS = { timeout: 10 * 60_000, maxBuffer: 10 * 1024 * 1024 } as const;
 
 /**
  * @see https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/audio-messages/
@@ -18,6 +18,9 @@ export const WHATSAPP_AUDIO_META_UPLOAD_TYPE = 'audio/ogg; codecs=opus';
 
 /** Limite da tabela de formatos suportados (OGG/AAC/MP3/…). */
 export const WHATSAPP_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Limite do arquivo original antes da conversão para OGG/OPUS. */
+export const WHATSAPP_AUDIO_INPUT_MAX_BYTES = 100 * 1024 * 1024;
 
 /** Acima disso a Meta ainda entrega, mas mostra ícone de download em vez de play na nota de voz. */
 export const WHATSAPP_VOICE_PLAY_ICON_MAX_BYTES = 512 * 1024;

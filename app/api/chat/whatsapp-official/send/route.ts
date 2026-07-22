@@ -6,7 +6,7 @@
 import { NextRequest } from 'next/server';
 import { after } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
-import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { successResponse, errorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
@@ -15,6 +15,7 @@ import {
   extensionForWhatsAppMedia,
   storageContentTypeForWhatsAppMedia,
 } from '@/lib/services/whatsapp-official-media-mime';
+import { sanitizeMediaError } from '@/lib/chat/sanitize-media-error';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
 
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
       text: bodyText,
       media_url,
       meta_id,
+      media_mime_type,
       caption,
       filename,
       reply_to_message_id: replyToMessageId,
@@ -77,6 +79,7 @@ export async function POST(req: NextRequest) {
       text?: string;
       media_url?: string;
       meta_id?: string;
+      media_mime_type?: string;
       caption?: string;
       filename?: string;
       reply_to_message_id?: string;
@@ -100,8 +103,22 @@ export async function POST(req: NextRequest) {
         400
       );
     }
-    if ((sendType === 'image' || sendType === 'video' || sendType === 'document') && (!media_url || typeof media_url !== 'string')) {
-      return errorResponse('media_url é obrigatório para tipo de mídia', 400);
+    if (
+      (sendType === 'image' || sendType === 'video' || sendType === 'document') &&
+      !meta_id &&
+      (!media_url || typeof media_url !== 'string')
+    ) {
+      return errorResponse('meta_id ou media_url é obrigatório para tipo de mídia', 400);
+    }
+    const normalizedMime = String(media_mime_type || '').split(';')[0].trim().toLowerCase();
+    if (normalizedMime) {
+      const incompatible =
+        (sendType === 'image' && !normalizedMime.startsWith('image/')) ||
+        (sendType === 'video' && normalizedMime !== 'video/mp4') ||
+        (sendType === 'audio' && !normalizedMime.startsWith('audio/'));
+      if (incompatible) {
+        return errorResponse('O tipo selecionado não corresponde ao conteúdo do arquivo.', 400);
+      }
     }
 
     const { data: config, error: configError } = await supabaseServiceRole
@@ -171,7 +188,7 @@ export async function POST(req: NextRequest) {
         metaResponse = await whatsappOfficial.sendImage(
           configForApi,
           normalizedTo,
-          media_url!,
+          meta_id ? { id: String(meta_id) } : { link: media_url! },
           caption,
           replyToMessageId
         );
@@ -179,7 +196,7 @@ export async function POST(req: NextRequest) {
         metaResponse = await whatsappOfficial.sendVideo(
           configForApi,
           normalizedTo,
-          media_url!,
+          meta_id ? { id: String(meta_id) } : { link: media_url! },
           caption,
           replyToMessageId
         );
@@ -189,6 +206,7 @@ export async function POST(req: NextRequest) {
           (typeof caption === 'string' && caption.includes('.') ? caption.trim() : undefined) ||
           (() => {
             try {
+              if (!media_url) return undefined;
               const part = new URL(media_url!).pathname.split('/').pop() || '';
               const decoded = decodeURIComponent(part.replace(/^\d+-/, ''));
               return decoded.includes('.') ? decoded : undefined;
@@ -199,7 +217,7 @@ export async function POST(req: NextRequest) {
         metaResponse = await whatsappOfficial.sendDocument(
           configForApi,
           normalizedTo,
-          media_url!,
+          meta_id ? { id: String(meta_id) } : { link: media_url! },
           caption,
           docFilename,
           replyToMessageId
@@ -211,7 +229,7 @@ export async function POST(req: NextRequest) {
             : { link: media_url! };
         console.info('[WA Official][send route] audio send mode', {
           config_id,
-          to: normalizedTo,
+          recipient_suffix: normalizedTo.slice(-4),
           mode: 'id' in audioMedia ? 'media_id_voice' : 'link',
           has_reply_to: Boolean(replyToMessageId),
         });
@@ -226,7 +244,7 @@ export async function POST(req: NextRequest) {
       const e = err as Error & { name?: string };
       console.error('[WA Official][send route] send error', {
         config_id,
-        to: normalizedTo,
+        recipient_suffix: normalizedTo.slice(-4),
         type: sendType,
         error_name: e?.name,
         error_message: e?.message,
@@ -234,7 +252,7 @@ export async function POST(req: NextRequest) {
       if (e?.name === 'AbortError') {
         return errorResponse('Timeout ao enviar mensagem para a API do WhatsApp', 502);
       }
-      return errorResponse(e?.message || 'Falha ao enviar mensagem', 502);
+      return errorResponse(sanitizeMediaError(e, 'Falha ao enviar mensagem'), 502);
     }
 
     const externalMessageId = metaResponse.messages[0].id;
@@ -273,6 +291,10 @@ export async function POST(req: NextRequest) {
             : '',
       media_type: sendType === 'text' ? 'text' : sendType,
       media_url: resolvedMediaUrl,
+      provider_media_id: meta_id || undefined,
+      media_mime_type: media_mime_type || undefined,
+      media_filename: typeof filename === 'string' ? filename.trim() || undefined : undefined,
+      media_recovery_status: sendType === 'text' ? undefined : resolvedMediaUrl ? 'ready' as const : 'pending' as const,
       caption:
         sendType === 'document'
           ? (typeof filename === 'string' && filename.trim()) ||
@@ -326,6 +348,6 @@ export async function POST(req: NextRequest) {
       'Mensagem enviada com sucesso'
     );
   } catch (err: unknown) {
-    return serverErrorResponse(err as Error);
+    return errorResponse(sanitizeMediaError(err, 'Falha inesperada ao enviar mensagem.'), 500);
   }
 }

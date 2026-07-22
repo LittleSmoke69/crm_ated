@@ -220,9 +220,9 @@ function resolveMediaInfo(msg: WaMessage): { text: string; mediaType: string; ca
   return { text: `[${msg.type}]`, mediaType: 'text', caption: '' };
 }
 
-const MEDIA_FETCH_TIMEOUT_MS = 15_000;
-const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
-const MEDIA_MAX_RETRIES = 1;
+const MEDIA_FETCH_TIMEOUT_MS = 30_000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 2 * 60_000;
+const MEDIA_MAX_RETRIES = 2;
 const MEDIA_RETRY_DELAY_MS = 2_000;
 
 function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Promise<Response> {
@@ -428,43 +428,31 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
       continue;
     }
 
+    const messageIds = contactMessages.map((msg) => msg.id).filter(Boolean);
+    const { data: existingRows } = messageIds.length
+      ? await supabaseServiceRole
+          .from('chat_messages')
+          .select('message_id')
+          .eq('conversation_id', conversation.id)
+          .in('message_id', messageIds)
+      : { data: [] as Array<{ message_id: string }> };
+    const existingIds = new Set((existingRows ?? []).map((row) => row.message_id));
+    let newlySavedCount = 0;
+
     for (const msg of contactMessages) {
       const from = String(msg.from || '').replace(/\D/g, '');
       const { text, mediaType, caption } = resolveMediaInfo(msg);
-      let mediaUrl: string | null = null;
-
-      if (['image', 'audio', 'video', 'document', 'sticker'].includes(msg.type)) {
-        const mediaObj = msg[msg.type as keyof WaMessage] as
-          | { id?: string; mime_type?: string; filename?: string }
-          | undefined;
-        const mediaId = mediaObj?.id;
-        const mimeType = mediaObj?.mime_type;
-        const fileNameHint =
-          msg.type === 'document'
-            ? mediaObj?.filename || msg.document?.filename || caption
-            : undefined;
-        if (mediaId && accessToken) {
-          try {
-            mediaUrl = await resolveAndStoreMedia(
-              mediaId,
-              accessToken,
-              graphVersion,
-              mimeType,
-              config.id,
-              msg.type as 'image' | 'audio' | 'video' | 'document' | 'sticker',
-              fileNameHint
-            );
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            if (errMsg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) {
-              tokenAlert = true;
-              console.warn('[Zaploto Chat] Token inválido/expirado ao baixar mídia; mensagem será salva sem mídia.');
-            } else {
-              console.error('[Zaploto Chat] Falha ao resolver mídia:', mediaId, err);
-            }
-          }
-        }
-      }
+      const mediaObj = ['image', 'audio', 'video', 'document', 'sticker'].includes(msg.type)
+        ? (msg[msg.type as keyof WaMessage] as
+            | { id?: string; mime_type?: string; filename?: string }
+            | undefined)
+        : undefined;
+      const mediaId = mediaObj?.id;
+      const mimeType = mediaObj?.mime_type;
+      const fileNameHint =
+        msg.type === 'document'
+          ? mediaObj?.filename || msg.document?.filename || caption
+          : undefined;
 
       try {
         await chatService.saveMessage({
@@ -478,24 +466,67 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
           sender_jid: `${from}@s.whatsapp.net`,
           text,
           media_type: mediaType,
-          media_url: mediaUrl ?? undefined,
+          media_url: undefined,
+          provider_media_id: mediaId,
+          media_mime_type: mimeType,
+          media_filename: fileNameHint || undefined,
+          media_recovery_status: mediaId ? 'pending' : undefined,
+          media_recovery_attempts: 0,
           caption,
           status: 'received',
           timestamp: parseInt(msg.timestamp, 10),
           provider: 'whatsapp_official',
         });
+        if (!existingIds.has(msg.id)) newlySavedCount += 1;
       } catch (err) {
         errors.push(`Falha ao salvar mensagem ${msg.id}: ${sanitizeErrorMessage(err)}`);
+        continue;
+      }
+
+      // A mensagem já está visível no chat; resolução de mídia apenas a enriquece.
+      if (mediaId && accessToken) {
+        try {
+          const mediaUrl = await resolveAndStoreMedia(
+            mediaId,
+            accessToken,
+            graphVersion,
+            mimeType,
+            config.id,
+            msg.type as 'image' | 'audio' | 'video' | 'document' | 'sticker',
+            fileNameHint
+          );
+          await supabaseServiceRole
+            .from('chat_messages')
+            .update({
+              media_url: mediaUrl,
+              media_recovery_status: mediaUrl ? 'ready' : 'failed',
+              media_recovery_attempts: 1,
+            })
+            .eq('conversation_id', conversation.id)
+            .eq('message_id', msg.id);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes(WHATSAPP_OFFICIAL_TOKEN_ERROR_MSG)) tokenAlert = true;
+          await supabaseServiceRole
+            .from('chat_messages')
+            .update({ media_recovery_status: 'failed', media_recovery_attempts: 1 })
+            .eq('conversation_id', conversation.id)
+            .eq('message_id', msg.id);
+        }
       }
     }
 
-    try {
-      await supabaseServiceRole.rpc('increment_unread_count', { conv_id: conversation.id });
-    } catch {
-      await supabaseServiceRole
-        .from('chat_conversations')
-        .update({ unread_count: (conversation.unread_count || 0) + contactMessages.length })
-        .eq('id', conversation.id);
+    if (newlySavedCount > 0) {
+      const { error: unreadError } = await supabaseServiceRole.rpc('increment_unread_count_by', {
+        conv_id: conversation.id,
+        increment_by: newlySavedCount,
+      });
+      if (unreadError) {
+        await supabaseServiceRole
+          .from('chat_conversations')
+          .update({ unread_count: (conversation.unread_count || 0) + newlySavedCount })
+          .eq('id', conversation.id);
+      }
     }
   }
 
@@ -513,6 +544,12 @@ const STATUS_MAP: Record<string, string> = {
   played: 'read',
   listened: 'read',
   pending: 'sent',
+};
+const STATUS_RANK: Record<string, number> = {
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 99,
 };
 
 function formatMetaStatusErrors(
@@ -541,8 +578,7 @@ async function handleStatusUpdates(value: WaValue): Promise<void> {
     const raw = String(st.status ?? '')
       .trim()
       .toLowerCase();
-    const newStatus =
-      raw && STATUS_MAP[raw] !== undefined ? STATUS_MAP[raw] : raw ? raw : 'sent';
+    const newStatus = raw && STATUS_MAP[raw] !== undefined ? STATUS_MAP[raw] : 'sent';
 
     const updateFields: { status: string; text?: string } = { status: newStatus };
     if (newStatus === 'failed') {
@@ -558,12 +594,19 @@ async function handleStatusUpdates(value: WaValue): Promise<void> {
     }
 
     for (let attempt = 1; attempt <= STATUS_UPDATE_MAX_ATTEMPTS; attempt += 1) {
-      const { data, error } = await supabaseServiceRole
+      let updateQuery = supabaseServiceRole
         .from('chat_messages')
         .update(updateFields)
         .eq('message_id', st.id)
-        .eq('provider', 'whatsapp_official')
-        .select('id');
+        .eq('provider', 'whatsapp_official');
+      if (newStatus !== 'failed') {
+        const targetRank = STATUS_RANK[newStatus] ?? 0;
+        const allowedPrevious = Object.entries(STATUS_RANK)
+          .filter(([status, rank]) => status !== 'failed' && rank <= targetRank)
+          .map(([status]) => status);
+        updateQuery = updateQuery.in('status', allowedPrevious);
+      }
+      const { data, error } = await updateQuery.select('id');
 
       if (error) {
         console.error('[Zaploto Chat] Falha ao atualizar status da mensagem', {

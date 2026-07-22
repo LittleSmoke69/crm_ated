@@ -202,3 +202,5 @@ fix_resolved_transfer_stats_lucro_sem_estoque_intermediario.sql
 fix_claim_maturation_steps_instance_name_conflict.sql
 
 create_meta_investment_rounds.sql
+add_chat_conversation_resolutions.sql
+add_chat_media_recovery_columns.sql

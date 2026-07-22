@@ -404,7 +404,7 @@ export async function PATCH(req: NextRequest) {
 
     const { data: conv, error: fetchError } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('id, instance_id, whatsapp_config_id, user_id, assigned_at')
+      .select('id, instance_id, whatsapp_config_id, workspace_id, remote_jid, user_id, assigned_at, attendance_status')
       .eq('id', conversationId)
       .single();
 
@@ -475,6 +475,38 @@ export async function PATCH(req: NextRequest) {
       console.error('[Zaploto Chat] conversations PATCH — erro:', updateError.message);
       return errorResponse(`Erro ao atualizar conversa: ${updateError.message}`, 500);
     }
+
+    // Histórico de resoluções (metrificação): registra cada ciclo resolvido -> reaberto.
+    const previousStatus = (conv as { attendance_status?: string | null }).attendance_status;
+    if (body.attendance_status === 'resolvido' && previousStatus !== 'resolvido') {
+      const { error: historyInsertError } = await supabaseServiceRole
+        .from('chat_conversation_resolutions')
+        .insert({
+          conversation_id: conversationId,
+          instance_id: conv.instance_id ?? null,
+          whatsapp_config_id: conv.whatsapp_config_id ?? null,
+          workspace_id: (conv as { workspace_id?: string | null }).workspace_id ?? null,
+          remote_jid: (conv as { remote_jid?: string }).remote_jid ?? '',
+          resolved_by: userId,
+        });
+      if (historyInsertError) {
+        console.error('[Zaploto Chat] resolution history insert — erro:', historyInsertError.message);
+      }
+    } else if (body.attendance_status === 'pendente' && previousStatus === 'resolvido') {
+      const { error: historyCloseError } = await supabaseServiceRole
+        .from('chat_conversation_resolutions')
+        .update({
+          reopened_at: new Date().toISOString(),
+          reopened_by: userId,
+          reopened_reason: 'manual',
+        })
+        .eq('conversation_id', conversationId)
+        .is('reopened_at', null);
+      if (historyCloseError) {
+        console.error('[Zaploto Chat] resolution history close — erro:', historyCloseError.message);
+      }
+    }
+
     return successResponse(updated);
   } catch (err: any) {
     return serverErrorResponse(err);
