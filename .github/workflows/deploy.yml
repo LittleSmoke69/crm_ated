@@ -35,9 +35,19 @@ jobs:
             echo "Atualizando código..."
             test -d .git
             test -f .env
+            previous_commit="$(git rev-parse HEAD)"
             git fetch origin main
             git checkout main
             git merge --ff-only origin/main
+
+            application_changed=1
+            if git diff --quiet "$previous_commit" HEAD -- . \
+              ':(exclude)migrations/**' \
+              ':(exclude)docs/**' \
+              ':(exclude)*.md' \
+              ':(exclude).github/**'; then
+              application_changed=0
+            fi
 
             echo "Validando ambiente e Compose..."
             test -n "$(sed -n 's/^NEXT_PUBLIC_SUPABASE_URL=//p' .env)"
@@ -64,6 +74,12 @@ jobs:
               printf "INSERT INTO public.app_migration_history (filename) VALUES ('%s');\n" "$migration_name" | \
                 docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
             done
+
+            if [ "$application_changed" = "0" ]; then
+              echo "Somente migrations/documentação: build e restart dispensados."
+              docker compose ps
+              exit 0
+            fi
 
             echo "Construindo imagem única..."
             docker compose build app1

@@ -18,8 +18,9 @@ a sua função, **sem recriar o banco**. Rode individualmente no **SQL Editor do
 | 11 | `11_chat_gestao_metricas.sql` | **Gestão do chat** | Atividade/login em `profiles` e RPC de métricas de suporte |
 | 12 | `12_profiles_username.sql` | **Login por username** | `profiles.username`, normalização, backfill e índice único case-insensitive |
 | 13 | `13_seed_usuarios_captadores.sql` | **Importação de usuários** | Perfis da planilha, senha inicial, status e vínculos gerente/captador |
+| 14 | `14_profiles_theme_preference.sql` | **Preferência de tema** | Coluna usada por `/api/user/profile`, com valores `light` ou `dark` |
 
-**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11` → `12` → `13`.
+**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11` → `12` → `13` → `14`.
 - O **00 roda primeiro**: provisiona os pré-requisitos (inclusive `profiles`, espelhando
   `0000_foundation_supabase_core.sql`). Em banco já existente é **no-op total** (tudo `IF NOT EXISTS`).
 - Sem o 00, 02/03/04 podem falhar com "relation/column does not exist" num ambiente que não
