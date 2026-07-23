@@ -63,6 +63,8 @@ function isNetworkOrUnavailableError(err: { message?: string } | null): boolean 
     msg.includes('econnreset') ||
     msg.includes('etimedout') ||
     msg.includes('enotfound') ||
+    msg.includes('eai_again') ||
+    msg.includes('name resolution') ||
     msg.includes('network') ||
     msg.includes('unavailable')
   );
