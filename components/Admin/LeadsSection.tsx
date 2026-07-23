@@ -58,36 +58,78 @@ function formatDateTime(iso: string): string {
   }
 }
 
-/** Parser simples de CSV (detecta ; ou , e colunas nome/telefone/email por cabeçalho). */
-function parseLeadsCsv(text: string): { name: string; phone: string; email: string }[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length === 0) return [];
-  const delim = (lines[0].match(/;/g)?.length || 0) >= (lines[0].match(/,/g)?.length || 0) ? ';' : ',';
-  const split = (l: string) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, ''));
+type ImportLead = {
+  name: string;
+  phone: string;
+  email: string;
+  status: string;
+  gerente: string;
+  captador: string;
+  created_at: string;
+};
 
-  const header = split(lines[0]).map((h) => h.toLowerCase());
+function parseCsvRows(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else quoted = !quoted;
+    } else if (char === delimiter && !quoted) {
+      row.push(cell.trim());
+      cell = '';
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = '';
+    } else cell += char;
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+/** Parser CSV com aspas e campos de atribuição/estágio por linha. */
+function parseLeadsCsv(text: string): ImportLead[] {
+  const firstLine = text.split(/\r?\n/, 1)[0] || '';
+  const delim = (firstLine.match(/;/g)?.length || 0) >= (firstLine.match(/,/g)?.length || 0) ? ';' : ',';
+  const parsed = parseCsvRows(text, delim);
+  if (parsed.length === 0) return [];
+  const header = parsed[0].map((h) => h.replace(/^\uFEFF/, '').toLowerCase());
   const findIdx = (...keys: string[]) => header.findIndex((h) => keys.some((k) => h.includes(k)));
   let nameIdx = findIdx('nome', 'name');
   let phoneIdx = findIdx('telefone', 'phone', 'whatsapp', 'celular', 'fone');
   let emailIdx = findIdx('email', 'e-mail');
-  let rows = lines.slice(1);
+  const statusIdx = findIdx('status', 'situação', 'situacao');
+  const gerenteIdx = findIdx('gerente', 'manager');
+  const captadorIdx = findIdx('captador', 'consultor');
+  const createdAtIdx = findIdx('data/hora', 'data hora', 'created_at', 'criado em');
+  let rows = parsed.slice(1);
 
   // Sem cabeçalho reconhecível: assume nome;telefone;email
   if (nameIdx < 0 && phoneIdx < 0 && emailIdx < 0) {
     nameIdx = 0;
     phoneIdx = 1;
     emailIdx = 2;
-    rows = lines;
+    rows = parsed;
   }
 
-  return rows.map((l) => {
-    const cols = split(l);
-    return {
+  return rows.map((cols) => ({
       name: nameIdx >= 0 ? cols[nameIdx] || '' : '',
       phone: phoneIdx >= 0 ? cols[phoneIdx] || '' : '',
       email: emailIdx >= 0 ? cols[emailIdx] || '' : '',
-    };
-  });
+      status: statusIdx >= 0 ? cols[statusIdx] || '' : '',
+      gerente: gerenteIdx >= 0 ? cols[gerenteIdx] || '' : '',
+      captador: captadorIdx >= 0 ? cols[captadorIdx] || '' : '',
+      created_at: createdAtIdx >= 0 ? cols[createdAtIdx] || '' : '',
+    }));
 }
 
 export default function LeadsSection({ userId }: { userId: string }) {
@@ -116,7 +158,7 @@ export default function LeadsSection({ userId }: { userId: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', phone: '', email: '', gerente_id: '', captador_id: '' });
   const [showImport, setShowImport] = useState(false);
-  const [importRows, setImportRows] = useState<{ name: string; phone: string; email: string }[]>([]);
+  const [importRows, setImportRows] = useState<ImportLead[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
   const [importDest, setImportDest] = useState({ gerente_id: '', captador_id: '' });
   const [assignLeads, setAssignLeads] = useState<CapturedLead[] | null>(null);
@@ -723,9 +765,12 @@ export default function LeadsSection({ userId }: { userId: string }) {
       {showImport && modalShell('Importar base de leads (CSV)', () => setShowImport(false), (
         <div className="p-5 space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            CSV com colunas <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">nome</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">telefone</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">email</code> (separador ; ou ,). Máximo 5000 linhas por arquivo.
+            CSV com colunas <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Nome</code>,{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">WhatsApp</code>,{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Email</code>,{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Status</code>,{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Gerente</code> e{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Captador</code>. Máximo 5000 linhas por arquivo.
           </p>
           <input
             ref={fileInputRef}
@@ -743,10 +788,10 @@ export default function LeadsSection({ userId }: { userId: string }) {
                 {importRows.length} lead(s) prontos para importar. Prévia: {importRows.slice(0, 3).map((r) => r.name || r.phone).filter(Boolean).join(', ')}...
               </div>
               <div className="space-y-4 border-t border-gray-200 dark:border-gray-600 pt-4">
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Destino (opcional)</p>
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Destino padrão (opcional)</p>
                 {gerenteCaptadorFields(importDest, setImportDest)}
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Sem destino, os leads entram como <strong>Pendentes</strong> para atribuição posterior. Com captador, já entram no kanban dele.
+                  Gerente, captador e status presentes no CSV são usados em cada linha. O destino abaixo serve apenas para linhas sem esses nomes.
                 </p>
               </div>
             </>
