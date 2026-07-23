@@ -20,22 +20,26 @@ export async function POST(req: NextRequest) {
     if (rateLimited) return errorResponse(rateLimited, 429);
 
     const body = await req.json();
-    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const identifier = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     const tenantSlug =
       typeof body.tenantSlug === 'string'
         ? body.tenantSlug.trim().toLowerCase()
         : '';
 
-    if (!email || !password) {
-      return errorResponse('Email e senha são obrigatórios.', 400);
+    if (!identifier || !password) {
+      return errorResponse('E-mail/usuário e senha são obrigatórios.', 400);
     }
 
-    const { data: user, error } = await supabaseServiceRole
+    const loginByUsername = identifier.startsWith('@') || !identifier.includes('@');
+    const normalizedUsername = identifier.replace(/^@+/, '');
+    let userQuery = supabaseServiceRole
       .from('profiles')
-      .select('id, email, password_hash, status, zaploto_id')
-      .eq('email', email)
-      .single();
+      .select('id, email, username, password_hash, status, zaploto_id');
+    userQuery = loginByUsername
+      ? userQuery.eq('username', normalizedUsername)
+      : userQuery.eq('email', identifier);
+    const { data: user, error } = await userQuery.maybeSingle();
 
     if (error || !user) {
       return errorResponse('Credenciais inválidas.', 401);
@@ -79,6 +83,7 @@ export async function POST(req: NextRequest) {
     const res = successResponse({
       userId: user.id,
       email: user.email,
+      username: user.username,
       status: normalizeStatus(user.status) ?? null,
       zaploto_id:
         (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID,

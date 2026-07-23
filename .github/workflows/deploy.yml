@@ -1,8 +1,16 @@
-name: Deploy crmTR na VPS
+name: Deploy stack leve na VPS
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vps-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -12,125 +20,80 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           command_timeout: 60m
-          envs: GH_TOKEN,GITHUB_REPOSITORY
           script: |
-            set -e
+            set -Eeuo pipefail
 
-            DEPLOY_DIR="/home/claudeuser/crm-at"
-
-            # Se o diretório não existir, faz clone
-            if [ ! -d "$DEPLOY_DIR/.git" ]; then
-              echo "📥 Clonando repositório..."
-              git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$DEPLOY_DIR"
-            fi
-
-            echo "📦 Acessando diretório..."
+            DEPLOY_DIR="/opt/crm-ated"
             cd "$DEPLOY_DIR"
 
-            echo "🔄 Fazendo git pull..."
-            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            echo "Atualizando código..."
+            test -d .git
+            test -f .env
             git fetch origin main
-            git reset --hard origin/main
-            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            git checkout main
+            git merge --ff-only origin/main
 
-            echo "🔐 Validando chaves Supabase no .env (build exige anon, não service_role)..."
-            if [ ! -f .env ]; then
-              echo "❌ Arquivo .env não encontrado em $DEPLOY_DIR"
-              exit 1
-            fi
-            python3 <<'PY'
-            import json, base64, sys
-            from pathlib import Path
+            echo "Validando ambiente e Compose..."
+            test -n "$(sed -n 's/^NEXT_PUBLIC_SUPABASE_URL=//p' .env)"
+            test -n "$(sed -n 's/^NEXT_PUBLIC_SUPABASE_ANON_KEY=//p' .env)"
+            test -n "$(sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' .env)"
+            test "$(sed -n 's/^ZAPLOTO_APP_SCOPE=//p' .env)" = "modelagem"
+            docker compose config --quiet
 
-            env = {}
-            for line in Path(".env").read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, val = line.split("=", 1)
-                env[key.strip()] = val.strip().strip('"').strip("'")
-
-            url = env.get("NEXT_PUBLIC_SUPABASE_URL", "")
-            anon = env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
-            if not url:
-                print("❌ NEXT_PUBLIC_SUPABASE_URL ausente no .env")
-                sys.exit(1)
-            if not anon:
-                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY ausente no .env")
-                sys.exit(1)
-
-            parts = anon.split(".")
-            if len(parts) < 2:
-                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY não parece um JWT válido")
-                sys.exit(1)
-
-            payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
-            payload_b64 = payload_b64.replace("-", "+").replace("_", "/")
-            role = json.loads(base64.b64decode(payload_b64).decode()).get("role")
-            if role == "service_role":
-                print("❌ NEXT_PUBLIC_SUPABASE_ANON_KEY contém service_role.")
-                print("   Use a chave anon/public do Supabase (Settings → API).")
-                sys.exit(1)
-            print(f"✅ Supabase OK (role={role})")
-            PY
-
-            echo "🐳 Build usando cache da imagem anterior..."
-            docker compose build
-
-            echo "🐰 Subindo RabbitMQ primeiro (workers dependem do broker healthy)..."
-            docker compose up -d rabbitmq
-
-            echo "⏳ Aguardando RabbitMQ healthy (até 15 min, sem loop de restart)..."
-            RABBIT_OK=0
-            RABBIT_RESTARTED=0
-            WAIT_SECS=10
-            MAX_LOOPS=90
-            for i in $(seq 1 "$MAX_LOOPS"); do
-              STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' rabbitmq 2>/dev/null || echo missing)"
-              RUNNING="$(docker inspect --format='{{.State.Status}}' rabbitmq 2>/dev/null || echo missing)"
-
-              if [ "$STATUS" = "healthy" ]; then
-                echo "✅ RabbitMQ healthy (~$((i * WAIT_SECS))s de espera)"
-                RABBIT_OK=1
-                break
-              fi
-
-              echo "… RabbitMQ status=$STATUS running=$RUNNING (tentativa $i/$MAX_LOOPS)"
-
-              if [ "$STATUS" = "unhealthy" ] && [ "$RABBIT_RESTARTED" = "0" ] && [ "$i" -ge 18 ]; then
-                echo "⚠️ RabbitMQ unhealthy — reinício único (aguarde ~2 min após isso)..."
-                docker compose restart rabbitmq || true
-                RABBIT_RESTARTED=1
-                sleep 30
+            echo "Aplicando migrations modelagem..."
+            docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
+              "CREATE TABLE IF NOT EXISTS public.app_migration_history (filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());"
+            for migration_file in migrations/modelagem/[0-9][0-9]_*.sql; do
+              migration_name="$(basename "$migration_file")"
+              already_applied="$(docker exec supabase-db psql -U postgres -d postgres -tAc \
+                "SELECT 1 FROM public.app_migration_history WHERE filename = '${migration_name}'")"
+              if [ "$already_applied" = "1" ]; then
+                echo "Ignorando já aplicada: $migration_name"
                 continue
               fi
-
-              sleep "$WAIT_SECS"
+              echo "Aplicando: $migration_file"
+              docker exec -i supabase-db \
+                psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+                < "$migration_file"
+              printf "INSERT INTO public.app_migration_history (filename) VALUES ('%s');\n" "$migration_name" | \
+                docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
             done
-            if [ "$RABBIT_OK" != "1" ]; then
-              echo "❌ RabbitMQ não ficou healthy após $((MAX_LOOPS * WAIT_SECS))s."
-              echo "--- docker inspect health ---"
-              docker inspect rabbitmq --format='{{json .State.Health}}' 2>&1 || true
-              echo "--- últimos logs rabbitmq ---"
-              docker logs rabbitmq --tail 150 2>&1 || true
-              docker compose ps rabbitmq 2>&1 || true
-              exit 1
-            fi
 
-            echo "🚀 Subindo apps, cron e workers..."
+            echo "Construindo imagem única..."
+            docker compose build app1
+
+            wait_for_health() {
+              service="$1"
+              port="$2"
+              for attempt in $(seq 1 36); do
+                if curl --connect-timeout 3 --max-time 5 -fsS \
+                  "http://127.0.0.1:${port}/api/health" >/dev/null; then
+                  echo "$service saudável na porta $port"
+                  return 0
+                fi
+                sleep 5
+              done
+              echo "Health check falhou: $service na porta $port"
+              docker compose logs --tail=120 "$service"
+              return 1
+            }
+
+            echo "Atualização gradual: app2..."
+            docker compose up -d --no-deps --force-recreate app2
+            wait_for_health app2 3001
+
+            echo "Atualização gradual: app1..."
+            docker compose up -d --no-deps --force-recreate app1
+            wait_for_health app1 3000
+
             docker compose up -d --remove-orphans
 
-            echo "🧹 Limpando apenas imagens sem uso (dangling)..."
             docker image prune -f
-
-            echo "✅ Deploy concluído!"
             docker compose ps
+            echo "Deploy concluído."

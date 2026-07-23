@@ -29,6 +29,22 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_email_lower
   ON public.profiles (lower(trim(email)));
 
+-- Configurações de acesso usadas pelo login e pelo seed de usuários.
+CREATE TABLE IF NOT EXISTS public.user_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.profiles (id) ON DELETE CASCADE,
+  max_leads_per_day INTEGER NOT NULL DEFAULT 100,
+  max_instances INTEGER NOT NULL DEFAULT 20,
+  is_admin BOOLEAN NOT NULL DEFAULT false,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT user_settings_user_id_key UNIQUE (user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_settings_user_id
+  ON public.user_settings (user_id);
+
 -- 1) Núcleo white-label / roles (usado por 01, 02, 03) ------------------------
 CREATE TABLE IF NOT EXISTS zaploto_tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

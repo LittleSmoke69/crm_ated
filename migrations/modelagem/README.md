@@ -16,8 +16,10 @@ a sua função, **sem recriar o banco**. Rode individualmente no **SQL Editor do
 | 07 | `07_crm_tags.sql` | **Etiquetas do CRM** | `crm_tags`, `crm_lead_tags` e políticas de acesso |
 | 09 | `09_meta_e_whatsapp_oficial.sql` | **Meta + WhatsApp Oficial** | Completa integrações, campanhas, insights, conversas, mensagens e storage |
 | 11 | `11_chat_gestao_metricas.sql` | **Gestão do chat** | Atividade/login em `profiles` e RPC de métricas de suporte |
+| 12 | `12_profiles_username.sql` | **Login por username** | `profiles.username`, normalização, backfill e índice único case-insensitive |
+| 13 | `13_seed_usuarios_captadores.sql` | **Importação de usuários** | Perfis da planilha, senha inicial, status e vínculos gerente/captador |
 
-**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11`.
+**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11` → `12` → `13`.
 - O **00 roda primeiro**: provisiona os pré-requisitos (inclusive `profiles`, espelhando
   `0000_foundation_supabase_core.sql`). Em banco já existente é **no-op total** (tudo `IF NOT EXISTS`).
 - Sem o 00, 02/03/04 podem falhar com "relation/column does not exist" num ambiente que não
