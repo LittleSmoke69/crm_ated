@@ -71,20 +71,27 @@ body {
   min-height: 100vh;
 }
 
-/* Fundo escuro com brilho laranja (light e dark), FIXO e com animação leve.
-   Aplicado ao body (telas fora do shell, ex.: login) e ao shell do app
-   (.app-bg-gradient no Layout) — assim o fundo fica igual em TODAS as telas,
-   atrás da sidebar, sem piscar (background-attachment: fixed = estável no scroll). */
+/* Fundo do shell respeita o tema do perfil. */
 body,
 .app-bg-gradient {
-  background-color: #0b0806;
+  background-color: #f8fafc;
   background-image:
-    radial-gradient(85% 75% at 88% 12%, rgba(232, 106, 36, 0.22), rgba(232, 106, 36, 0.05) 38%, transparent 66%),
-    linear-gradient(118deg, #070504 0%, #140b07 55%, #271209 100%);
+    radial-gradient(85% 75% at 88% 12%, rgba(232, 106, 36, 0.10), rgba(232, 106, 36, 0.025) 38%, transparent 66%),
+    linear-gradient(118deg, #ffffff 0%, #fffaf7 55%, #fff4ed 100%);
   background-size: 180% 180%;
   background-repeat: no-repeat;
   background-attachment: fixed;
   animation: bgDrift 24s ease-in-out infinite alternate;
+}
+
+.dark body,
+[data-theme="dark"] body,
+.dark .app-bg-gradient,
+[data-theme="dark"] .app-bg-gradient {
+  background-color: #0b0806;
+  background-image:
+    radial-gradient(85% 75% at 88% 12%, rgba(232, 106, 36, 0.22), rgba(232, 106, 36, 0.05) 38%, transparent 66%),
+    linear-gradient(118deg, #070504 0%, #140b07 55%, #271209 100%);
 }
 
 @keyframes bgDrift {
