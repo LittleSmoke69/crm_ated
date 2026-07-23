@@ -68,7 +68,7 @@ curl -i http://127.0.0.1:8000/rest/v1/
 sudo mkdir -p /opt/crm-ated
 sudo chown -R "$USER":"$USER" /opt/crm-ated
 git clone https://github.com/LittleSmoke69/crm_ated.git /opt/crm-ated
-cd /opt/crm-ated/ZaplotoV3
+cd /opt/crm-ated
 docker network inspect ZAPLOTOV3 >/dev/null 2>&1 || docker network create ZAPLOTOV3
 cp .env.example .env
 chmod 600 .env
@@ -83,7 +83,7 @@ test -n "$SUPABASE_ANON_KEY" && echo "ANON_KEY encontrada"
 test -n "$SUPABASE_SERVICE_KEY" && echo "SERVICE_ROLE_KEY encontrada"
 ```
 
-Edite `/opt/crm-ated/ZaplotoV3/.env` e preencha as chaves, os domínios e dois
+Edite `/opt/crm-ated/.env` e preencha as chaves, os domínios e dois
 segredos diferentes gerados com `openssl rand -hex 48`.
 
 Variáveis obrigatórias:
@@ -117,7 +117,7 @@ docker exec supabase-db psql -U postgres -d postgres -c 'select version();'
 Aplique todos os SQL de modelagem em ordem. O comando para no primeiro erro:
 
 ```bash
-cd /opt/crm-ated/ZaplotoV3
+cd /opt/crm-ated
 for migration_file in migrations/modelagem/[0-9][0-9]_*.sql; do
   echo "Aplicando: $migration_file"
   docker exec -i supabase-db \
@@ -141,7 +141,7 @@ O build recebe explicitamente o escopo `modelagem`, evitando que módulos da
 stack completa sejam incorporados ao bundle do navegador.
 
 ```bash
-cd /opt/crm-ated/ZaplotoV3
+cd /opt/crm-ated
 docker compose config
 docker compose build --pull app1
 ```
@@ -187,7 +187,7 @@ O comando abaixo recria os dois apps e remove os containers órfãos antigos,
 sem usar `-v` e sem apagar volumes do Supabase:
 
 ```bash
-cd /opt/crm-ated/ZaplotoV3
+cd /opt/crm-ated
 docker compose up -d --build --remove-orphans
 docker compose ps
 ```
@@ -227,7 +227,7 @@ Supabase sem autenticação adicional, VPN ou proxy de acesso.
 Antes de atualizar, faça backup do PostgreSQL. Depois:
 
 ```bash
-cd /opt/crm-ated/ZaplotoV3
+cd /opt/crm-ated
 git pull --ff-only origin main
 docker compose config
 docker compose up -d --build --remove-orphans
