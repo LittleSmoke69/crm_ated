@@ -41,7 +41,7 @@ services:
     cpus: "1.5"
     mem_limit: 1536m
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       <<: *app-env
       PORT: 3000
@@ -59,7 +59,7 @@ services:
     cpus: "1.5"
     mem_limit: 1536m
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       <<: *app-env
       PORT: 3001
