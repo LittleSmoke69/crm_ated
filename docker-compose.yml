@@ -3,8 +3,8 @@ networks:
     name: ZAPLOTOV3
     external: true
 
-# Bloco YAML reaproveitado por todos os serviços baseados em zaplotov3-app:
-# evita repetir env_file, dns, depends_on em cada serviço.
+# Stack leve para o escopo "modelagem": somente as duas instancias HTTP.
+# Filas, disparos, anti-spam, maturacao e cron/Netlify nao sobem containers.
 x-zaplotov3-base: &zaplotov3-base
   image: zaplotov3-app
   restart: unless-stopped
@@ -15,39 +15,18 @@ x-zaplotov3-base: &zaplotov3-base
   networks:
     - ZAPLOTOV3
 
-# Env vars comuns a todos os apps Next.js (apps que servem HTTP):
 x-app-env: &app-env
   NODE_ENV: production
-  NODE_OPTIONS: "--max-old-space-size=2048"
+  NODE_OPTIONS: "--max-old-space-size=1024"
   TZ: "UTC"
+  NEXT_PUBLIC_ZAPLOTO_APP_SCOPE: "modelagem"
+  ZAPLOTO_APP_SCOPE: "modelagem"
+  NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK: "true"
+  ZAPLOTO_DISABLE_EVOLUTION_STACK: "true"
+  # Nenhuma replica executa tickers internos. A stack leve nao processa envios.
+  IS_TICKER_LEADER: "false"
 
 services:
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: rabbitmq
-    restart: unless-stopped
-    cpus: "2"
-    mem_limit: 1g
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-      - ./deploy/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
-    networks:
-      - ZAPLOTOV3
-    healthcheck:
-      # Porta TCP sobe antes do ping/autenticação CLI — evita falso unhealthy no boot
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
-      interval: 20s
-      timeout: 20s
-      retries: 15
-      start_period: 120s
-
-  # ── App primário — também executa tickers internos (instrumentation.ts) ────
   app1:
     <<: *zaplotov3-base
     build:
@@ -56,20 +35,17 @@ services:
       args:
         - NEXT_PUBLIC_SUPABASE_URL
         - NEXT_PUBLIC_SUPABASE_ANON_KEY
+        - NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=modelagem
+        - NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK=true
     container_name: zaplotov3-1
-    cpus: "3"
-    mem_limit: 3g
+    cpus: "1.5"
+    mem_limit: 1536m
     ports:
       - "3000:3000"
     environment:
       <<: *app-env
       PORT: 3000
       INTERNAL_API_BASE_URL: "http://localhost:3000"
-      # Leader único — só este app dispara tickers in-process do instrumentation.ts.
-      # Evita 4x contenção no Supabase quando todos os apps tentam claim do mesmo lock.
-      IS_TICKER_LEADER: "true"
-    volumes:
-      - cron_logs:/var/log
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
       interval: 30s
@@ -80,176 +56,17 @@ services:
   app2:
     <<: *zaplotov3-base
     container_name: zaplotov3-2
-    cpus: "3"
-    mem_limit: 3g
+    cpus: "1.5"
+    mem_limit: 1536m
     ports:
       - "3001:3001"
     environment:
       <<: *app-env
       PORT: 3001
       INTERNAL_API_BASE_URL: "http://localhost:3001"
-      IS_TICKER_LEADER: "false"
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  app3:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-3
-    cpus: "3"
-    mem_limit: 3g
-    ports:
-      - "3002:3002"
-    environment:
-      <<: *app-env
-      PORT: 3002
-      INTERNAL_API_BASE_URL: "http://localhost:3002"
-      IS_TICKER_LEADER: "false"
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3002/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  app4:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-4
-    cpus: "3"
-    mem_limit: 3g
-    ports:
-      - "3003:3003"
-    environment:
-      <<: *app-env
-      PORT: 3003
-      INTERNAL_API_BASE_URL: "http://localhost:3003"
-      IS_TICKER_LEADER: "false"
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3003/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ── Cron dedicado: roda crond em foreground, sem Next.js ─────────────────
-  # SITE_URL/CRON_SECRET vêm via env_file (.env). Crontab usa CRON_TZ=UTC,
-  # que combina com TZ=UTC abaixo para evitar pegadinhas de fuso.
-  # mem_limit elevado: vários jobs podem fazer cold start de tsx ao mesmo
-  # tempo no minuto cheio (process-*, audit-*, maturation-tick, etc.).
-  cron:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-cron
-    cpus: "1.5"
-    mem_limit: 1g
-    environment:
-      NODE_ENV: production
-      CRON_ONLY: "true"
-      TZ: "UTC"
-    volumes:
-      - cron_logs:/var/log
-    # tmpfs para locks: garante limpeza no restart e zero IO em disco.
-    # Os locks (/tmp/zaploto-cron-*.lock) são efêmeros por design (flock).
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    healthcheck:
-      # Vivo se: (1) crond está rodando e (2) o log foi tocado nos últimos 10min
-      # — sinal de que algum job rodou recentemente. start_period dá tempo para
-      # o primeiro job (a cada 1min) tocar o log antes de marcar unhealthy.
-      test: ["CMD-SHELL", "pgrep crond > /dev/null && find /var/log/zaploto-cron.log -mmin -10 | grep -q ."]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
-  # ── Workers RabbitMQ: consomem fila webhook.evolution.jobs ─────────────────
-  # 3 workers × prefetch 20 = 60 jobs simultâneos (era 2×10 = 20).
-  worker1:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-worker1
-    cpus: "1"
-    mem_limit: 768m
-    environment:
-      NODE_ENV: production
-      RABBITMQ_WORKER_ONLY: "true"
-      RABBITMQ_WORKER_PREFETCH: "20"
-      RABBITMQ_MAX_RETRIES: "3"
-    volumes:
-      - cron_logs:/var/log
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-
-  worker2:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-worker2
-    cpus: "1"
-    mem_limit: 768m
-    environment:
-      NODE_ENV: production
-      RABBITMQ_WORKER_ONLY: "true"
-      RABBITMQ_WORKER_PREFETCH: "20"
-      RABBITMQ_MAX_RETRIES: "3"
-    volumes:
-      - cron_logs:/var/log
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-
-  worker3:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-worker3
-    cpus: "1"
-    mem_limit: 768m
-    environment:
-      NODE_ENV: production
-      RABBITMQ_WORKER_ONLY: "true"
-      RABBITMQ_WORKER_PREFETCH: "20"
-      RABBITMQ_MAX_RETRIES: "3"
-    volumes:
-      - cron_logs:/var/log
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-
-  # ── Anti-spam worker em tempo real: poll de evolution_webhook_events ──────
-  antispam_worker:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-antispam-worker
-    cpus: "1"
-    mem_limit: 512m
-    environment:
-      NODE_ENV: production
-      ANTISPAM_WORKER_ONLY: "true"
-    volumes:
-      - cron_logs:/var/log
-
-  # ── Maturation worker: consome fila maturation.steps ──────────────────────
-  # 1 réplica intencional: o rate-limit por instance é in-process. Múltiplas
-  # réplicas exigiriam Redis cross-worker e podem violar rate limit da Evolution.
-  # Para escalar, primeiro aumente MATURATION_WORKER_PREFETCH ou ajuste
-  # MATURATION_MIN_INTERVAL_MS_PER_INSTANCE.
-  maturation_worker:
-    <<: *zaplotov3-base
-    container_name: zaplotov3-maturation-worker
-    cpus: "2"
-    mem_limit: 1g
-    environment:
-      NODE_ENV: production
-      MATURATION_WORKER_ONLY: "true"
-      MATURATION_WORKER_PREFETCH: "50"
-      MATURATION_MAX_RETRIES: "2"
-      # Intervalo mínimo entre envios da MESMA instância Evolution (ms).
-      # Aumente se ainda houver 429 / Connection Closed frequentes.
-      MATURATION_MIN_INTERVAL_MS_PER_INSTANCE: "2000"
-    volumes:
-      - cron_logs:/var/log
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-
-volumes:
-  cron_logs:
-  rabbitmq_data:

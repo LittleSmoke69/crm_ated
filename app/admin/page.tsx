@@ -52,6 +52,7 @@ import {
   Menu,
   Globe,
   Layout as LayoutIcon,
+  ListTree,
   Users as UsersIcon,
   Wallet,
   Target,
@@ -89,6 +90,7 @@ import { Tag as TagIcon2 } from 'lucide-react';
 import BancaRankingChart from '@/components/Charts/BancaRankingChart';
 import CRMSection from '@/components/Admin/CRMSection';
 import UsersManagementSection from '@/components/Admin/UsersManagementSection';
+import SidebarPermissionsSection from '@/components/Admin/SidebarPermissionsSection';
 import EditCampaignModal, { CampaignUpdates } from '@/components/Campaigns/EditCampaignModal';
 import { getStoredUserId } from '@/lib/utils/stored-user-id';
 import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
@@ -276,7 +278,7 @@ export default function AdminDashboard() {
   const [loadingZaplotoRoles, setLoadingZaplotoRoles] = useState(false);
   const [usersLoadError, setUsersLoadError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('users');
+  const [activeSection, setActiveSection] = useState<'overview' | 'users' | 'sidebar' | 'campaigns' | 'settings' | 'proxys' | 'crm' | 'disparo' | 'maturador' | 'loto_assistencia'>('users');
   const [instances, setInstances] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ dbGroups: any[]; evolutionGroups: any[] }>({ dbGroups: [], evolutionGroups: [] });
   const [loadingInstances, setLoadingInstances] = useState(false);
@@ -897,6 +899,21 @@ export default function AdminDashboard() {
             <span>Usuários</span>
           </button>
 
+          {isSuperAdmin && (
+            <button
+              onClick={() => setActiveSection('sidebar')}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base ${
+                activeSection === 'sidebar'
+                  ? 'text-white'
+                  : 'text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]'
+              }`}
+              style={activeSection === 'sidebar' ? { backgroundColor: '#E86A24' } : {}}
+            >
+              <ListTree className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>Sidebar</span>
+            </button>
+          )}
+
           {/* Meta Ads: super_admin e admin */}
           {(isSuperAdmin || adminStatus === 'admin') && (
             <button
@@ -1457,6 +1474,13 @@ export default function AdminDashboard() {
               adminUserId={userId}
               isSuperAdmin={isSuperAdmin}
               getTenantHeader={getTenantHeader}
+            />
+          )}
+
+          {activeSection === 'sidebar' && isSuperAdmin && userId && (
+            <SidebarPermissionsSection
+              userId={userId}
+              selectedTenantId={selectedTenantId}
             />
           )}
 
@@ -2075,7 +2099,7 @@ const MetricCard = ({ title, value, icon, bgColor }: any) => {
 
 type ZaplotoRole = { id: string; code: string; label: string };
 
-const HIDDEN_USER_ROLE_CODES = new Set(['dono_banca', 'gerente', 'consultor', 'captador', 'auditoria', 'gestor', 'suporte']);
+const HIDDEN_USER_ROLE_CODES = new Set(['dono_banca', 'consultor', 'auditoria', 'gestor', 'suporte']);
 
 function formatRoleLabel(code: string, fallback?: string): string {
   const labels: Record<string, string> = {
@@ -2099,26 +2123,39 @@ function getSelectableUserRoles(
 ): ZaplotoRole[] {
   const hiddenRoleLabels: Record<string, string> = {
     dono_banca: 'Dono de Banca',
-    gerente: 'Gerente',
     consultor: 'Consultor',
-    captador: 'Captador',
     auditoria: 'Auditoria',
     super_admin: 'Super Admin',
     suporte: 'Atendente',
+    gestor: 'Gestor de Tráfego',
   };
+
+  const ACTIVE_CODES = new Set(['super_admin', 'admin', 'gerente', 'captador']);
 
   let roles: ZaplotoRole[];
   if (zaplotoRoles.length > 0) {
     roles = zaplotoRoles
       .filter(
-        (r) => !HIDDEN_USER_ROLE_CODES.has(r.code) && (r.code !== 'super_admin' || isSuperAdmin)
+        (r) =>
+          !HIDDEN_USER_ROLE_CODES.has(r.code) &&
+          ACTIVE_CODES.has(r.code) &&
+          (r.code !== 'super_admin' || isSuperAdmin)
       )
       .map((r) => ({ ...r, label: formatRoleLabel(r.code, r.label) }));
   } else {
     roles = [
       ...(isSuperAdmin ? [{ id: 'super_admin', code: 'super_admin', label: 'Super Admin' }] : []),
       { id: 'admin', code: 'admin', label: 'Admin' },
+      { id: 'gerente', code: 'gerente', label: 'Gerente' },
+      { id: 'captador', code: 'captador', label: 'Captador' },
     ];
+  }
+
+  // Garante gerente e captador mesmo se o catálogo do tenant ainda estiver desatualizado
+  for (const code of ['gerente', 'captador'] as const) {
+    if (!roles.some((r) => r.code === code)) {
+      roles.push({ id: code, code, label: formatRoleLabel(code) });
+    }
   }
 
   if (currentStatus && !roles.some((r) => r.code === currentStatus)) {
@@ -2131,6 +2168,16 @@ function getSelectableUserRoles(
       },
     ];
   }
+
+  const order = ['super_admin', 'admin', 'gerente', 'captador'];
+  roles.sort((a, b) => {
+    const ia = order.indexOf(a.code);
+    const ib = order.indexOf(b.code);
+    if (ia === -1 && ib === -1) return a.label.localeCompare(b.label, 'pt-BR');
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
 
   return roles;
 }
@@ -2519,7 +2566,12 @@ const UsersSection = ({
   // Filtra potenciais superiores baseados no status sendo editado (super_admin pode atribuir qualquer hierarquia)
   const getPotentialEnrollers = (status: string) => {
     if (status === 'gestor') return users.filter(u => ['admin', 'super_admin'].includes(u.status));
-    if (status === 'suporte') return users.filter(u => u.status === 'admin' || (isSuperAdmin && u.status === 'super_admin'));
+    if (status === 'captador') {
+      return users.filter(u => ['gerente', 'admin', 'super_admin'].includes(u.status));
+    }
+    if (status === 'gerente') {
+      return users.filter(u => ['gerente', 'admin', 'super_admin'].includes(u.status));
+    }
     return [];
   };
 
@@ -2727,19 +2779,48 @@ const UsersSection = ({
                   </div>
                 )}
 
-                {createFormData.status === 'suporte' && (
+                {createFormData.status === 'gerente' && (
                   <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">
-                      Selecionar Admin (Opcional)
+                      Superior (opcional)
                     </label>
-                    <select 
+                    <select
                       className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
                       value={createFormData.enroller}
                       onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
                     >
-                      <option value="">Sem superior (pode ser NULL)</option>
-                      {users.filter(u => u.status === 'admin').map(u => (
-                        <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
+                      <option value="">Sem superior (opcional)</option>
+                      {getPotentialEnrollers('gerente').map(u => (
+                        <option key={u.id} value={u.id}>
+                          {[
+                            u.full_name || u.email,
+                            u.status === 'super_admin' ? '(Super Admin)' : u.status === 'admin' ? '(Admin)' : u.status === 'gerente' ? '(Gerente)' : '',
+                          ].filter(Boolean).join(' ')}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {createFormData.status === 'captador' && (
+                  <div className="col-span-2 animate-in slide-in-from-top-2 duration-200">
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">
+                      Gerente / superior *
+                    </label>
+                    <select
+                      required
+                      className="w-full bg-gray-50 dark:bg-[#333] border-gray-100 dark:border-[#555] rounded-xl focus:ring-[#E86A24] focus:border-[#E86A24] p-3 text-sm text-gray-700 dark:text-white dark:placeholder-gray-400"
+                      value={createFormData.enroller}
+                      onChange={e => setCreateCreateFormData({...createFormData, enroller: e.target.value})}
+                    >
+                      <option value="">Selecione o gerente</option>
+                      {getPotentialEnrollers('captador').map(u => (
+                        <option key={u.id} value={u.id}>
+                          {[
+                            u.full_name || u.email,
+                            u.status === 'super_admin' ? '(Super Admin)' : u.status === 'admin' ? '(Admin)' : u.status === 'gerente' ? '(Gerente)' : '',
+                          ].filter(Boolean).join(' ')}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -2947,15 +3028,37 @@ const UsersSection = ({
                               ))}
                             </select>
                           )}
-                          {editFormData.status === 'suporte' && (
+                          {editFormData.status === 'gerente' && (
                             <select
                               value={editFormData.enroller || ''}
                               onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
                               className="w-full px-2 py-1 text-sm border rounded text-gray-700"
                             >
-                              <option value="">Sem superior (pode ser NULL)</option>
-                              {getPotentialEnrollers('suporte').map(pe => (
-                                <option key={pe.id} value={pe.id}>{pe.full_name || pe.email}</option>
+                              <option value="">Sem superior (opcional)</option>
+                              {getPotentialEnrollers('gerente').map(pe => (
+                                <option key={pe.id} value={pe.id}>
+                                  {[
+                                    pe.full_name || pe.email,
+                                    pe.status === 'super_admin' ? '(Super Admin)' : pe.status === 'admin' ? '(Admin)' : pe.status === 'gerente' ? '(Gerente)' : '',
+                                  ].filter(Boolean).join(' ')}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                          {editFormData.status === 'captador' && (
+                            <select
+                              value={editFormData.enroller || ''}
+                              onChange={e => setEditFormData({...editFormData, enroller: e.target.value || null})}
+                              className="w-full px-2 py-1 text-sm border rounded text-gray-700"
+                            >
+                              <option value="">Selecione o gerente</option>
+                              {getPotentialEnrollers('captador').map(pe => (
+                                <option key={pe.id} value={pe.id}>
+                                  {[
+                                    pe.full_name || pe.email,
+                                    pe.status === 'super_admin' ? '(Super Admin)' : pe.status === 'admin' ? '(Admin)' : pe.status === 'gerente' ? '(Gerente)' : '',
+                                  ].filter(Boolean).join(' ')}
+                                </option>
                               ))}
                             </select>
                           )}

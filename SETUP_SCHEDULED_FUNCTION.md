@@ -1,3 +1,9 @@
+# LEGADO — Scheduled Functions desativadas
+
+> A stack `modelagem` leve não registra Scheduled Functions no Netlify e não
+> sobe container cron. Use [DEPLOY_STACK_LEVE.md](./DEPLOY_STACK_LEVE.md).
+> O conteúdo abaixo é mantido apenas como histórico da stack completa.
+
 # Configurar Scheduled Function via API
 
 Este guia explica como configurar o scheduled function `process-campaign-queue` via API do Netlify.
@@ -172,4 +178,3 @@ Com isso, ao abrir a seção **Campanhas** no admin com campanhas ativas, o pró
 - [Netlify Scheduled Functions](https://docs.netlify.com/functions/trigger-on-events/scheduled-functions/)
 - [Netlify API](https://docs.netlify.com/api/get-started/)
 - [Cron Expression](https://crontab.guru/)
-

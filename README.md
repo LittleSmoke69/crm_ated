@@ -1,63 +1,38 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CRM AT — stack modelagem leve
 
-## Configuração Inicial
+Aplicação Next.js para o escopo de modelagem, implantada com Supabase
+self-hosted e duas réplicas HTTP.
 
-### Variáveis de Ambiente
+## Produção
 
-Antes de executar o projeto, você precisa configurar as variáveis de ambiente. Crie um arquivo `.env.local` na raiz do projeto `zaploto/` com as seguintes variáveis:
+A stack ativa contém somente:
 
-```env
-# Supabase Configuration
-# Obtenha essas informações no dashboard do Supabase: Settings > API
+- `app1`, porta 3000;
+- `app2`, porta 3001;
+- Supabase self-hosted em um Compose separado.
 
-# URL do projeto Supabase
-NEXT_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
+RabbitMQ, workers, anti-spam, maturação, container cron e Scheduled Functions
+do Netlify não fazem parte desta edição.
 
-# Chave anônima (anon key) - pública, segura para uso no frontend
-NEXT_PUBLIC_SUPABASE_ANON_KEY=sua_chave_anon_aqui
+O processo completo está em [DEPLOY_STACK_LEVE.md](./DEPLOY_STACK_LEVE.md).
 
-# Service Role Key - PRIVADA, use apenas no backend/server-side
-# ⚠️ NUNCA exponha esta chave no frontend ou em código versionado
-SUPABASE_SERVICE_ROLE_KEY=sua_service_role_key_aqui
-```
-
-**Onde encontrar essas informações:**
-1. Acesse o [Dashboard do Supabase](https://app.supabase.com)
-2. Selecione seu projeto
-3. Vá em **Settings** > **API**
-4. Copie a **URL** e as **chaves** (anon key e service_role key)
-
-## Getting Started
-
-First, run the development server:
+## Desenvolvimento
 
 ```bash
+cp .env.example .env
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abra `http://localhost:3000`. Para validar produção:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Banco
 
-## Learn More
+As migrations isoladas ficam em `migrations/modelagem` e devem ser executadas
+em ordem lexical. Veja [migrations/modelagem/README.md](./migrations/modelagem/README.md).
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Nunca versione `.env`, `SUPABASE_SERVICE_ROLE_KEY`, senhas ou tokens.

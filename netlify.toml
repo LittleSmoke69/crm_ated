@@ -5,8 +5,8 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Produção atual: agendamentos na VPS (crontab) via `npm run cron:install` + `npm run cron:run -- <job>`.
-# O bloco [functions].schedule abaixo permanece como referência legada Netlify / deploys que ainda usem.
+# Stack leve: nenhuma Scheduled Function esta registrada no Netlify.
+# Os handlers permanecem disponiveis para chamadas manuais, sem execucao periodica.
 # Timeout fetch Next → Evolution (sendMedia/vídeo): ACTIVATION_EVOLUTION_FETCH_TIMEOUT_MS (padrão 180000).
 # Rotas app/api/crm/activations/send e mass-send/process usam maxDuration = 300 onde suportado.
 # Scheduled Functions: process-campaign-queue, process-message-queue, check-instances-status
@@ -20,42 +20,28 @@
   [functions."groups-fetch-background"]
     timeout = 900
   [functions."process-campaign-queue"]
-    schedule = "*/1 * * * *"
     timeout = 120
   [functions."process-message-queue"]
-    schedule = "*/1 * * * *"
   [functions."process-activation-mass-send"]
-    schedule = "*/1 * * * *"
     # Timeout alto: a função faz vários POSTs a /mass-send/process com pausa de MASS_SEND_CRON_POLL_INTERVAL_MS (default 2s) entre eles.
     timeout = 120
   [functions."process-broadcast-queue"]
-    schedule = "*/1 * * * *"
     timeout = 26
   [functions."check-instances-status"]
-    schedule = "*/5 * * * *"
   [functions."list-cleaning-resume"]
-    schedule = "*/1 * * * *"
   [functions."process-group-fetch-jobs"]
-    schedule = "*/1 * * * *"
     timeout = 26
   [functions."audit-group-names-sync"]
-    schedule = "*/1 * * * *"
   [functions."academy-vturb-snapshots"]
-    schedule = "0 2 * * *"
   [functions."transfer-expired-notify"]
-    schedule = "0 8 * * *"
   [functions."transfer-resolve-expired"]
-    schedule = "*/10 * * * *" # A cada 10 minutos
     # Timeout em segundos (máx. 26 no Netlify). Permite esperar a resposta da API que processa até 5 logs por run.
     timeout = 26
   [functions."maturation-tick"]
-    schedule = "*/1 * * * *"
     # Resposta do cron-tick volta rápido (tick em after()); margem para cold start + fetch.
     timeout = 60
   [functions."flow-question-timeouts"]
-    schedule = "*/1 * * * *"
   [functions."anti-spam-group-scanner"]
-    schedule = "*/1 * * * *"
     # Timeout alto: escaneia grupos em lotes de 5, com rate limit de 1 req/s. Pode demorar dependendo do nº de grupos.
     timeout = 300
   # [functions."maturation-scheduler"]

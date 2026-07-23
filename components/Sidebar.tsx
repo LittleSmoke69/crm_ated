@@ -393,6 +393,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     icon: BarChart3,
     label: 'Gestão do Chat',
   };
+  const itemLeads: MenuItem = { href: '/admin/leads', icon: UserPlus, label: 'Leads' };
   const itemCRM: MenuItem = {
     label: 'CRM',
     icon: Layout,
@@ -481,6 +482,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemChatInterno,
         itemGestaoChat,
         itemLeadTransfer,
+        itemLeads,
         itemCRMAdmin,
         itemCampanhas,
         itemContatosAtivos,
@@ -513,6 +515,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAcademy,
         itemAgentesIAAdmin,
         itemGestaoChat,
+        itemLeads,
         itemCRMAdmin,
         itemCampanhas,
         itemContatosAtivos,
@@ -583,10 +586,34 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   };
 
   const menuItems = useMemo(
-    () =>
-      dynamicSidebar && !dynamicSidebar.useLegacy && dynamicSidebar.items.length > 0
-        ? dynamicSidebar.items
-        : getMenuItems(),
+    () => {
+      const legacy = getMenuItems();
+      if (!(dynamicSidebar && !dynamicSidebar.useLegacy && dynamicSidebar.items.length > 0)) {
+        return legacy;
+      }
+
+      const items = dynamicSidebar.items.map((item) => ({ ...item, submenu: item.submenu ? [...item.submenu] : undefined }));
+      const hasLeads =
+        items.some((it) => it.href === '/admin/leads' || it.label === 'Leads') ||
+        items.some((it) => it.submenu?.some((s) => s.href === '/admin/leads' || s.label === 'Leads'));
+
+      // Garante "Leads" para admin/super_admin mesmo se o seed dinâmico não tiver crm_leads
+      if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin')) {
+        const crmIdx = items.findIndex((it) => it.label === 'CRM');
+        const leadsSub = { href: '/admin/leads', icon: UserPlus, label: 'Leads' };
+        if (crmIdx >= 0) {
+          const crm = items[crmIdx];
+          items[crmIdx] = {
+            ...crm,
+            submenu: [leadsSub, ...(crm.submenu || [])],
+          };
+        } else {
+          items.splice(0, 0, itemLeads);
+        }
+      }
+
+      return items;
+    },
     [dynamicSidebar, userStatus]
   );
 
