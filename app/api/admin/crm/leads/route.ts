@@ -314,6 +314,23 @@ export async function PATCH(req: NextRequest) {
       const { error: upErr } = await supabaseServiceRole.from('crm_leads').update(update).eq('id', lead.id);
       if (upErr) return errorResponse(`Erro ao atualizar lead: ${upErr.message}`, 400);
 
+      // Mantém o Chat sincronizado quando a atribuição nasce na tela de Leads.
+      if (hasCaptador || hasGerente) {
+        const chatUpdate: Record<string, unknown> = { updated_at: nowIso };
+        if (hasCaptador) {
+          chatUpdate.user_id = captadorId;
+          chatUpdate.assigned_by = userId;
+          chatUpdate.assigned_at = captadorId ? nowIso : null;
+          chatUpdate.assignment_status = captadorId ? 'atribuido' : 'pendente';
+        }
+        if (hasGerente) chatUpdate.gerente_id = body.gerente_id || null;
+        else if (hasCaptador && captadorEnroller) chatUpdate.gerente_id = captadorEnroller;
+        await supabaseServiceRole
+          .from('chat_conversations')
+          .update(chatUpdate)
+          .eq('lead_id', lead.id);
+      }
+
       // Entra no kanban do novo captador (coluna inicial)
       if (hasCaptador && captadorId && lead.user_id !== captadorId) {
         await supabaseServiceRole.rpc('crm_move_lead', {

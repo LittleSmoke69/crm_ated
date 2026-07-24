@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     // 1. Validar acesso à conversa
     const { data: conversation, error: convError } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('instance_id, whatsapp_config_id, user_id, workspace_id')
+      .select('instance_id, whatsapp_config_id, user_id, gerente_id, workspace_id')
       .eq('id', conversation_id)
       .single();
 
@@ -68,9 +68,16 @@ export async function GET(req: NextRequest) {
         );
       }
     }
-    const canAccessWhatsAppOfficial =
-      conversation.whatsapp_config_id &&
-      (isAdminOrSuporte || conversation.workspace_id === profile?.zaploto_id);
+    const sameTenant = conversation.workspace_id === profile?.zaploto_id;
+    const canAccessWhatsAppOfficial = !!conversation.whatsapp_config_id && (
+      profile?.status === 'super_admin' ||
+      (sameTenant && (
+        isAdminOrSuporte ||
+        (profile?.status === 'captador' && conversation.user_id === userId) ||
+        (profile?.status === 'gerente' &&
+          (conversation.gerente_id === userId || (!conversation.gerente_id && !conversation.user_id)))
+      ))
+    );
     if (!canAccessEvolution && !canAccessWhatsAppOfficial) {
       return errorResponse('Acesso negado.', 403);
     }
@@ -163,7 +170,7 @@ export async function DELETE(req: NextRequest) {
 
     const { data: conversation, error: convError } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('instance_id, whatsapp_config_id, user_id, workspace_id')
+      .select('instance_id, whatsapp_config_id, user_id, gerente_id, workspace_id')
       .eq('id', message.conversation_id)
       .single();
 
@@ -189,7 +196,14 @@ export async function DELETE(req: NextRequest) {
         if (!allowed) return errorResponse('Acesso negado.', 403);
       }
     } else if (conversation.whatsapp_config_id) {
-      if (!isAdminOrSuporte && conversation.workspace_id !== profile?.zaploto_id) {
+      const sameTenant = conversation.workspace_id === profile?.zaploto_id;
+      const allowed = profile?.status === 'super_admin' || (sameTenant && (
+          isAdminOrSuporte ||
+          (profile?.status === 'captador' && conversation.user_id === userId) ||
+          (profile?.status === 'gerente' &&
+            (conversation.gerente_id === userId || (!conversation.gerente_id && !conversation.user_id)))
+        ));
+      if (!allowed) {
         return errorResponse('Acesso negado.', 403);
       }
     } else {

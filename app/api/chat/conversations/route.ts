@@ -61,6 +61,23 @@ async function enrichWhatsAppOfficialConversations(
   );
 }
 
+async function enrichConversationAssignees(conversations: Record<string, unknown>[]) {
+  const ids = Array.from(new Set(conversations.flatMap((c) =>
+    [c.user_id, c.gerente_id].filter((id): id is string => typeof id === 'string' && !!id)
+  )));
+  if (ids.length === 0) return conversations;
+  const { data } = await supabaseServiceRole
+    .from('profiles')
+    .select('id, full_name, username, last_seen_at')
+    .in('id', ids);
+  const byId = new Map((data ?? []).map((p) => [p.id, p]));
+  return conversations.map((c) => ({
+    ...c,
+    assignee: typeof c.user_id === 'string' ? byId.get(c.user_id) ?? null : null,
+    gerente: typeof c.gerente_id === 'string' ? byId.get(c.gerente_id) ?? null : null,
+  }));
+}
+
 function normalizeToBrWhatsappPhone(rawPhone: string): string {
   const digits = String(rawPhone || '').replace(/\D/g, '');
   if (!digits) return '';
@@ -215,17 +232,23 @@ export async function GET(req: NextRequest) {
       return errorResponse('Acesso negado.', 403);
     }
 
-    const { data: conversations, error } = await supabaseServiceRole
+    let officialQuery = supabaseServiceRole
       .from('chat_conversations')
       .select('*')
-      .eq('whatsapp_config_id', whatsapp_config_id)
-      .order('last_message_at', { ascending: false });
+      .eq('whatsapp_config_id', whatsapp_config_id);
+    if (profile?.status === 'captador') {
+      officialQuery = officialQuery.eq('user_id', userId);
+    } else if (profile?.status === 'gerente') {
+      officialQuery = officialQuery.or(`gerente_id.eq.${userId},and(gerente_id.is.null,user_id.is.null)`);
+    }
+    const { data: conversations, error } = await officialQuery.order('last_message_at', { ascending: false });
 
     if (error) {
       console.error('[Zaploto Chat] conversations GET — whatsapp_config_id:', whatsapp_config_id, '| erro:', error.message);
       return errorResponse(`Erro ao buscar conversas: ${error.message}`);
     }
-    const enriched = await enrichWhatsAppOfficialConversations(conversations ?? []);
+    const enrichedWindow = await enrichWhatsAppOfficialConversations(conversations ?? []);
+    const enriched = await enrichConversationAssignees(enrichedWindow);
     const list = sortConversationsForInbox(
       enriched as Array<{
         id: string;
@@ -512,4 +535,3 @@ export async function PATCH(req: NextRequest) {
     return serverErrorResponse(err);
   }
 }
-

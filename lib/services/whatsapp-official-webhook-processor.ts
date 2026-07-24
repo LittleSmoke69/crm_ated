@@ -7,6 +7,7 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import { ensurePendingLeadForOfficialConversation } from '@/lib/services/chat-crm-integration';
 import {
   extensionForWhatsAppMedia,
   storageContentTypeForWhatsAppMedia,
@@ -422,6 +423,12 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
         title,
         is_group: false,
         last_message_at: lastMsgAt,
+      });
+      await ensurePendingLeadForOfficialConversation({
+        conversationId: conversation.id,
+        tenantId: config.zaploto_id,
+        phone: contactNumber,
+        name: title,
       });
     } catch (err) {
       errors.push(`Falha ao upsertConversation ${remoteJid}: ${sanitizeErrorMessage(err)}`);

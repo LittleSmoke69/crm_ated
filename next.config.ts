@@ -1,6 +1,11 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [
+      { source: '/chat-atendimento', destination: '/chat', permanent: false },
+    ];
+  },
   // Skip type checking during Docker build (handled in dev/CI).
   // Next 16 não roda lint no build, então não há flag equivalente para eslint aqui.
   typescript: { ignoreBuildErrors: true },

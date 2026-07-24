@@ -92,6 +92,17 @@ interface Conversation {
   resolved_at?: string | null;
   assigned_at?: string | null;
   tags?: string[] | null;
+  gerente_id?: string | null;
+  assignment_status?: string | null;
+  assignee?: { id: string; full_name?: string | null; username?: string | null; last_seen_at?: string | null } | null;
+  gerente?: { id: string; full_name?: string | null; username?: string | null } | null;
+}
+
+interface ChatAssignee {
+  id: string;
+  full_name?: string | null;
+  username?: string | null;
+  last_seen_at?: string | null;
 }
 
 interface ChannelEvolution {
@@ -839,6 +850,13 @@ export default function ChatPage() {
   const [showConvMenu, setShowConvMenu] = useState(false);
   const convMenuRef = useRef<HTMLDivElement>(null);
   const [reopeningConversation, setReopeningConversation] = useState(false);
+  const [assignmentOpen, setAssignmentOpen] = useState(false);
+  const [assignees, setAssignees] = useState<ChatAssignee[]>([]);
+  const [assignmentIds, setAssignmentIds] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedForAssignment, setSelectedForAssignment] = useState<Set<string>>(new Set());
+  const [conversationPresence, setConversationPresence] = useState<Array<{ user_id: string; profiles?: { full_name?: string; username?: string } }>>([]);
 
   // Deleção de mensagem
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
@@ -2154,6 +2172,51 @@ export default function ChatPage() {
     }
   };
 
+  const openAssignment = async (ids: string[]) => {
+    setAssignmentIds(ids);
+    setShowConvMenu(false);
+    setAssignmentOpen(true);
+    const res = await fetch('/api/chat/assignees', { headers: authHeaders() });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.success) setAssignees(json.data || []);
+  };
+
+  const submitAssignment = async (assigneeUserId: string) => {
+    if (!assignmentIds.length || assigning) return;
+    setAssigning(true);
+    try {
+      const res = await fetch('/api/chat/conversations/bulk-assignment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ conversation_ids: assignmentIds, assignee_user_id: assigneeUserId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'Falha ao atribuir.');
+      setAssignmentOpen(false);
+      setSelectedForAssignment(new Set());
+      setSelectionMode(false);
+      await loadConversationsFromApi(true);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Falha ao atribuir conversas.');
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedConversationId || !userId) { setConversationPresence([]); return; }
+    let cancelled = false;
+    const sync = async () => {
+      await fetch(`/api/chat/conversations/${selectedConversationId}/presence`, { method: 'POST', headers: authHeaders() }).catch(() => null);
+      const res = await fetch(`/api/chat/conversations/${selectedConversationId}/presence`, { headers: authHeaders() }).catch(() => null);
+      const json = await res?.json().catch(() => ({}));
+      if (!cancelled && json?.success) setConversationPresence(json.data || []);
+    };
+    sync();
+    const timer = window.setInterval(sync, 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selectedConversationId, userId]);
+
   const requestDeleteMessage = (messageRowId: string) => {
     if (deletingMessageId) return;
     const isOfficialApi = selectedChannel?.type === 'whatsapp_official';
@@ -2715,6 +2778,31 @@ export default function ChatPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Layout onSignOut={handleSignOut}>
+      {assignmentOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60" onClick={() => setAssignmentOpen(false)}>
+          <div className="zap-chat-panel w-full max-w-md rounded-xl border border-[#E86A24]/20 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-white">Atribuir ao captador</h3>
+                <p className="text-xs text-gray-400">{assignmentIds.length} conversa(s) selecionada(s)</p>
+              </div>
+              <button onClick={() => setAssignmentOpen(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="max-h-80 space-y-2 overflow-y-auto">
+              {assignees.map((person) => {
+                const online = !!person.last_seen_at && Date.now() - new Date(person.last_seen_at).getTime() < 90_000;
+                return (
+                  <button key={person.id} disabled={assigning} onClick={() => submitAssignment(person.id)} className="flex w-full items-center justify-between rounded-lg border border-[#404040] p-3 text-left hover:border-[#E86A24] disabled:opacity-60">
+                    <span><span className="block text-sm font-medium text-white">{person.full_name || person.username}</span><span className="text-xs text-gray-400">@{person.username || 'sem-username'}</span></span>
+                    <span className={`text-xs ${online ? 'text-emerald-400' : 'text-gray-500'}`}>{online ? 'Online' : 'Offline'}</span>
+                  </button>
+                );
+              })}
+              {!assignees.length && <p className="py-6 text-center text-sm text-gray-400">Nenhum captador ativo disponível.</p>}
+            </div>
+          </div>
+        </div>
+      )}
       {mediaModal && (
         <MediaModal
           url={mediaModal.url}
@@ -3452,6 +3540,18 @@ export default function ChatPage() {
                     Histórico ({historyCount})
                   </button>
                 </div>
+                {(userStatus === 'admin' || userStatus === 'super_admin' || userStatus === 'gerente') && selectedChannel?.type === 'whatsapp_official' && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <button type="button" onClick={() => { setSelectionMode((v) => !v); setSelectedForAssignment(new Set()); }} className="rounded-md border border-[#404040] px-2 py-1 text-xs text-gray-300 hover:border-[#E86A24]">
+                      {selectionMode ? 'Cancelar seleção' : 'Selecionar conversas'}
+                    </button>
+                    {selectionMode && selectedForAssignment.size > 0 && (
+                      <button type="button" onClick={() => openAssignment([...selectedForAssignment])} className="rounded-md bg-[#E86A24] px-2 py-1 text-xs font-medium text-white">
+                        Atribuir ({selectedForAssignment.size})
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Lista com scroll infinito */}
@@ -3499,7 +3599,17 @@ export default function ChatPage() {
                       return (
                         <div
                           key={conv.id}
-                          onClick={() => setSelectedConversationId(conv.id)}
+                          onClick={() => {
+                            if (selectionMode) {
+                              setSelectedForAssignment((prev) => { const next = new Set(prev); next.has(conv.id) ? next.delete(conv.id) : next.add(conv.id); return next; });
+                            } else setSelectedConversationId(conv.id);
+                          }}
+                          onContextMenu={(e) => {
+                            if (userStatus === 'admin' || userStatus === 'super_admin' || userStatus === 'gerente') {
+                              e.preventDefault();
+                              openAssignment([conv.id]);
+                            }
+                          }}
                           className={`mx-2 mb-2 cursor-pointer rounded-xl border p-3 transition-all ${
                             isSelected
                               ? 'zap-card-client border-[#E86A24]/50 bg-[#E86A24]/10 shadow-[0_4px_12px_rgba(232,106,36,0.15)]'
@@ -3507,6 +3617,7 @@ export default function ChatPage() {
                           }`}
                         >
                           <div className="flex items-start gap-3">
+                            {selectionMode && <input type="checkbox" readOnly checked={selectedForAssignment.has(conv.id)} className="mt-3 accent-[#E86A24]" />}
                             <div
                               className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0"
                               style={{ backgroundColor: getConversationColor(conv.title || '') }}
@@ -3564,6 +3675,14 @@ export default function ChatPage() {
                               <p className="text-xs text-gray-600 dark:text-gray-400 truncate mb-1">
                                 {conv.last_message_preview || '—'}
                               </p>
+                              <div className="flex flex-wrap gap-1 text-[10px]">
+                                {conv.assignee ? (
+                                  <span className="rounded bg-[#E86A24]/15 px-1.5 py-0.5 text-[#E86A24]">Captador: {conv.assignee.full_name || conv.assignee.username}</span>
+                                ) : (
+                                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-400">Pendente</span>
+                                )}
+                                {conv.gerente && <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-300">Gerente: {conv.gerente.full_name || conv.gerente.username}</span>}
+                              </div>
                               <div className="flex items-center justify-end">
                                 {conv.unread_count > 0 && (
                                   <span
@@ -3674,6 +3793,16 @@ export default function ChatPage() {
                         <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">
                           {selectedConversation.remote_jid}
                         </span>
+                        {selectedConversation.assignee && (
+                          <span className="text-[11px] text-[#E86A24]">
+                            Captador: {selectedConversation.assignee.full_name || selectedConversation.assignee.username}
+                            {conversationPresence.some((p) => p.user_id === selectedConversation.user_id)
+                              ? ' • atendendo esta conversa agora'
+                              : selectedConversation.assignee.last_seen_at && Date.now() - new Date(selectedConversation.assignee.last_seen_at).getTime() < 90_000
+                                ? ' • online'
+                                : ' • offline'}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {(userStatus === 'admin' || userStatus === 'super_admin') && (
@@ -3777,6 +3906,16 @@ export default function ChatPage() {
                       </button>
                       {showConvMenu && (
                         <div className="absolute right-0 top-full mt-1 z-30 w-52 py-1 zap-chat-panel border border-[#E86A24]/12 rounded-lg shadow-lg">
+                          {(userStatus === 'admin' || userStatus === 'super_admin' || userStatus === 'gerente') && (
+                            <button
+                              type="button"
+                              onClick={() => openAssignment([selectedConversation.id])}
+                              className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#E86A24]/10 text-gray-700 dark:text-gray-200"
+                            >
+                              <UserPlus className="w-4 h-4" />
+                              {selectedConversation.user_id ? 'Reatribuir' : 'Atribuir'}
+                            </button>
+                          )}
                           {selectedConversation.attendance_status === 'resolvido' &&
                             (userStatus === 'admin' || userStatus === 'super_admin') && (
                             <button
