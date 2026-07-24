@@ -43,7 +43,7 @@ WHERE c.whatsapp_config_id = w.id
 -- Backfill conservador: vincula somente quando existe exatamente um lead com o mesmo
 -- telefone normalizado no tenant. Ambiguidades permanecem para revisão manual.
 WITH deterministic AS (
-  SELECT c.id AS conversation_id, min(l.id) AS lead_id
+  SELECT c.id AS conversation_id, min(l.id::text)::uuid AS lead_id
   FROM public.chat_conversations c
   JOIN public.crm_leads l
     ON l.zaploto_id = c.workspace_id
