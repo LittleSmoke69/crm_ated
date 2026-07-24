@@ -62,11 +62,11 @@ function resolveProfile(profiles: ProfileRow[], value: unknown, role: 'gerente' 
 }
 
 const STATUS_MAP: Record<string, { captureStatus: string; columnKey: string }> = {
-  pendente: { captureStatus: 'pendente', columnKey: 'novo' },
-  'em atendimento': { captureStatus: 'em_contato', columnKey: 'contatado' },
-  'nao responde': { captureStatus: 'descartado', columnKey: 'perdido' },
-  encerrado: { captureStatus: 'descartado', columnKey: 'perdido' },
-  convertido: { captureStatus: 'convertido', columnKey: 'ganho' },
+  pendente: { captureStatus: 'pendente', columnKey: 'status_pendente' },
+  'em atendimento': { captureStatus: 'em_contato', columnKey: 'status_em_atendimento' },
+  'nao responde': { captureStatus: 'descartado', columnKey: 'status_nao_responde' },
+  encerrado: { captureStatus: 'descartado', columnKey: 'status_encerrado' },
+  convertido: { captureStatus: 'convertido', columnKey: 'status_convertido' },
 };
 
 /**
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
         name: r.name || null,
         phone: r.phone || null,
         email: r.email || null,
-        status: 'novo',
+        status: normalizeLabel(r.statusLabel).replace(/\s+/g, '_') || 'pendente',
         capture_status: r.mappedStatus!.captureStatus,
         source: 'import',
         zaploto_id: zaplotoId,

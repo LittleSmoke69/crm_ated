@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     while (true) {
       const { data, error } = await supabaseServiceRole
         .from('profiles')
-        .select('id, email, full_name, status, enroller, created_at')
+        .select('id, email, full_name, status, enroller, created_at, last_seen_at, last_login_at, total_online_time, total_crm_time')
         .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
         .order('created_at', { ascending: false })
         .range(from, from + PAGE_SIZE - 1);
@@ -85,6 +85,10 @@ export async function GET(req: NextRequest) {
         enroller: u.enroller,
         enroller_name: enrollerProfile ? (enrollerProfile.full_name || enrollerProfile.email) : null,
         created_at: u.created_at,
+        last_seen_at: u.last_seen_at,
+        last_login_at: u.last_login_at,
+        total_online_time: u.total_online_time || 0,
+        total_crm_time: u.total_crm_time || 0,
         is_active: activeByUser.has(u.id) ? activeByUser.get(u.id) : true,
         leads_count: leadsByUser.get(u.id) || 0,
       };

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Edit,
+  Activity,
+  Clock3,
   KeyRound,
   Link2,
   Plus,
@@ -28,6 +30,10 @@ type OverviewUser = {
   created_at: string;
   is_active: boolean;
   leads_count: number;
+  last_seen_at: string | null;
+  last_login_at: string | null;
+  total_online_time: number;
+  total_crm_time: number;
 };
 
 type TabKey = 'todos' | 'admins' | 'gerentes' | 'captadores';
@@ -64,6 +70,26 @@ function formatDate(iso: string): string {
   } catch {
     return '';
   }
+}
+
+function formatDuration(seconds = 0): string {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  return hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`;
+}
+
+function formatLastAccess(iso: string | null): string {
+  if (!iso) return 'Sem atividade registrada';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Sem atividade registrada';
+  return date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function isUserOnline(iso: string | null): boolean {
+  if (!iso) return false;
+  const timestamp = new Date(iso).getTime();
+  return Number.isFinite(timestamp) && Date.now() - timestamp < 120_000;
 }
 
 const inputClass =
@@ -110,23 +136,25 @@ export default function UsersManagementSection({
     ...(getTenantHeader ? getTenantHeader() : {}),
   }), [adminUserId, getTenantHeader]);
 
-  const loadUsers = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const loadUsers = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setLoadError(null);
     try {
       const res = await fetch('/api/admin/users/overview', { headers: headers() });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao carregar usuários');
       setUsers((json.data || []) as OverviewUser[]);
     } catch (e: any) {
-      setLoadError(e?.message || 'Erro ao carregar usuários');
+      if (!silent) setLoadError(e?.message || 'Erro ao carregar usuários');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [headers]);
 
   useEffect(() => {
     loadUsers();
+    const interval = window.setInterval(() => loadUsers(true), 30_000);
+    return () => window.clearInterval(interval);
   }, [loadUsers]);
 
   const counts = useMemo(() => ({
@@ -342,7 +370,7 @@ export default function UsersManagementSection({
           variant="error"
           title="Erro ao carregar usuários"
           action={
-            <Button variant="danger" size="sm" onClick={loadUsers}>
+            <Button variant="danger" size="sm" onClick={() => loadUsers()}>
               Tentar novamente
             </Button>
           }
@@ -362,6 +390,7 @@ export default function UsersManagementSection({
           {visible.map((u) => {
             const role = u.status || 'captador';
             const displayName = u.full_name || handleFromEmail(u.email);
+            const online = isUserOnline(u.last_seen_at);
             return (
               <div key={u.id} className={`rounded-2xl border bg-white dark:bg-[#2a2a2a] border-gray-200 dark:border-gray-600 p-5 flex flex-col gap-3 transition-colors hover:border-[#E86A24]/40 ${u.is_active ? '' : 'opacity-70'}`}>
                 <div className="flex items-start justify-between gap-2">
@@ -381,6 +410,32 @@ export default function UsersManagementSection({
                     <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-semibold border ${u.is_active ? 'border-emerald-400/60 text-emerald-600 dark:text-emerald-300 bg-emerald-500/10' : 'border-red-400/60 text-red-600 dark:text-red-300 bg-red-500/10'}`}>
                       {u.is_active ? 'Ativo' : 'Inativo'}
                     </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-600 dark:bg-black/15">
+                  <div className="col-span-2 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-2 text-xs font-semibold text-gray-700 dark:text-gray-300">
+                      <span className={`h-2.5 w-2.5 rounded-full ${online ? 'bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]' : 'bg-gray-400 dark:bg-gray-600'}`} />
+                      {online ? 'Online agora' : 'Offline'}
+                    </span>
+                    <span className="text-[11px] text-gray-500 dark:text-gray-400" title={u.last_seen_at || undefined}>
+                      {formatLastAccess(u.last_seen_at)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 dark:bg-white/5" title="Tempo total ativo na plataforma">
+                    <Clock3 className="h-4 w-4 shrink-0 text-blue-500" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">Online</p>
+                      <p className="truncate text-xs font-bold text-gray-800 dark:text-gray-100">{formatDuration(u.total_online_time)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 dark:bg-white/5" title="Tempo acumulado dentro do CRM">
+                    <Activity className="h-4 w-4 shrink-0 text-[#E86A24]" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">No CRM</p>
+                      <p className="truncate text-xs font-bold text-gray-800 dark:text-gray-100">{formatDuration(u.total_crm_time)}</p>
+                    </div>
                   </div>
                 </div>
 
