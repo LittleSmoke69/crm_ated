@@ -6,7 +6,6 @@ import Sidebar from './Sidebar';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { Menu, X, LogOut } from 'lucide-react';
 import Logo from './Logo';
-import BancasModal from './BancasModal';
 import { getInternalAppPathname } from '@/lib/utils/white-label-path';
 
 interface LayoutProps {
@@ -19,10 +18,6 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
   const [sidebarWidth, setSidebarWidth] = useState(80);
   const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
   const [isMobile, setIsMobile] = useState(false);
-  const [showBancasModal, setShowBancasModal] = useState(false);
-  const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [userStatus, setUserStatus] = useState<'captador' | 'gerente' | 'super_admin' | null>(null);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -62,65 +57,6 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       clearInterval(interval);
     };
   }, [isMobile]);
-
-  // Verifica se usuário precisa escolher bancas (captador/gerente)
-  useEffect(() => {
-    if (typeof window === 'undefined' || hasCheckedProfile) return;
-
-    const checkProfile = async () => {
-      const uid =
-        sessionStorage.getItem('user_id') ||
-        sessionStorage.getItem('profile_id') ||
-        localStorage.getItem('profile_id');
-
-      if (!uid) {
-        setHasCheckedProfile(true);
-        return;
-      }
-
-      try {
-        const response = await fetch('/api/user/profile', {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
-          credentials: 'include',
-        });
-
-        if (response.ok) {
-          const text = await response.text();
-          let result: { success?: boolean; data?: { status?: string; needs_bancas_choice?: boolean; bancas?: unknown[] } } = {};
-          if (text.trim()) {
-            try {
-              result = JSON.parse(text);
-            } catch {
-              setHasCheckedProfile(true);
-              return;
-            }
-          }
-          if (result.success && result.data) {
-            const d = result.data;
-            setUserId(uid);
-            const canSeeBancasModal = !!(d.status && ['captador', 'gerente'].includes(d.status));
-            if (canSeeBancasModal) {
-              setUserStatus(d.status as 'captador' | 'gerente' | 'super_admin');
-            }
-
-            if (
-              canSeeBancasModal &&
-              (d.needs_bancas_choice === true || (Array.isArray(d.bancas) && d.bancas.length === 0))
-            ) {
-              setShowBancasModal(true);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Erro ao verificar perfil:', error);
-      } finally {
-        setHasCheckedProfile(true);
-      }
-    };
-
-    checkProfile();
-  }, [hasCheckedProfile]);
 
   // Heartbeat para rastrear tempo logado (Zaploto e CRM)
   useEffect(() => {
@@ -168,51 +104,6 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
       clearInterval(heartbeatInterval);
     };
   }, [pathname]);
-
-  const handleSaveBancas = async (bancaIds: string[]) => {
-    if (!userId) {
-      console.warn('[handleSaveBancas] Tentativa de salvar sem userId');
-      throw new Error('Usuário não autenticado');
-    }
-
-    console.log('[handleSaveBancas] Iniciando salvamento de bancas:', { userId, bancaIds });
-
-    try {
-      const response = await fetch('/api/user/bancas', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        credentials: 'include',
-        body: JSON.stringify({ banca_ids: bancaIds }),
-      });
-
-      console.log('[handleSaveBancas] Resposta recebida:', {
-        status: response.status,
-        ok: response.ok,
-        statusText: response.statusText
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        console.error('[handleSaveBancas] Erro na resposta da API:', text);
-
-        let result: { error?: string } = {};
-        if (text.trim()) {
-          try {
-            result = JSON.parse(text);
-          } catch (e) {
-            console.error('[handleSaveBancas] Falha ao parsear erro JSON:', e);
-          }
-        }
-        throw new Error(result.error || `Erro ${response.status}: ${response.statusText}`);
-      }
-
-      console.log('[handleSaveBancas] Bancas salvas com sucesso!');
-      setShowBancasModal(false);
-    } catch (error: any) {
-      console.error('[handleSaveBancas] Exceção capturada:', error);
-      throw error;
-    }
-  };
 
   // Normaliza o pathname removendo o prefixo de tenant (`/zaploto/chat-atendimento` → `/chat-atendimento`),
   // senão o modo full-screen do chat e o editor de flows não ativam em tenants white label.
@@ -273,16 +164,6 @@ const Layout: React.FC<LayoutProps> = ({ children, onSignOut }) => {
         )}
       </main>
 
-      {/* Modal de bancas (captador/gerente) */}
-      {showBancasModal && userId && (
-        <BancasModal
-          isOpen={showBancasModal}
-          onClose={() => setShowBancasModal(false)}
-          onSave={handleSaveBancas}
-          userStatus={userStatus || 'captador'}
-          userId={userId}
-        />
-      )}
     </div>
   );
 };

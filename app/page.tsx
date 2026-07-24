@@ -38,7 +38,7 @@ const Dashboard = () => {
     loadInitialData,
   } = useDashboardData();
 
-  // Captadores: redireciona para o próprio dashboard (/consultor) em segundo plano
+  // Gerentes e captadores trabalham diretamente no Kanban do CRM.
   useEffect(() => {
     if (checking || !userId) return;
 
@@ -55,8 +55,8 @@ const Dashboard = () => {
 
         if (response.ok) {
           const result = await response.json();
-          if (result.success && result.data?.status === 'captador') {
-            router.replace('/consultor');
+          if (result.success && ['gerente', 'captador'].includes(result.data?.status)) {
+            router.replace('/crm/kanban');
           }
         }
       } catch (error) {
