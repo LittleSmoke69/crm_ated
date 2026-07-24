@@ -144,8 +144,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const shouldShowLogout =
     routePath === '/perfil' ||
     routePath === '/list-cleaning' ||
-    routePath === '/crm/transferido' ||
-    routePath === '/crm/avulsos' ||
+    routePath?.startsWith('/crm/') ||
     routePath === '/anti-spam' ||
     routePath === '/admin' ||
     routePath?.startsWith('/admin/') ||

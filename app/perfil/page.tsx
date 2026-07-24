@@ -33,7 +33,9 @@ interface UserProfile {
   theme_preference?: 'light' | 'dark';
 }
 
-const ROLES_COM_BANCAS = ['captador', 'gerente', 'super_admin'] as const;
+// A associação operacional de bancas é administrada fora do perfil da equipe.
+// Apenas o super admin mantém esse controle nesta tela.
+const ROLES_COM_BANCAS = ['super_admin'] as const;
 /** Perfis que podem usar "Carregar bancas" (busca por email nas APIs das bancas). */
 const ROLES_CARREGAR_BANCAS_POR_EMAIL = ['captador', 'gerente'] as const;
 
@@ -118,7 +120,7 @@ const PerfilPage = () => {
 
   useEffect(() => {
     if (!userId || !profile) return;
-    const canLoad = ROLES_COM_BANCAS.includes(profile.status as any) || profile.needs_bancas_choice === true;
+    const canLoad = ROLES_COM_BANCAS.includes(profile.status as any);
     if (!canLoad) return;
     loadBancasList();
   }, [userId, profile?.status, profile?.needs_bancas_choice]);
@@ -207,7 +209,7 @@ const PerfilPage = () => {
   };
 
   const canEditBancas = profile ? ROLES_COM_BANCAS.includes(profile.status as any) : false;
-  const showBancasSection = canEditBancas || profile?.needs_bancas_choice === true;
+  const showBancasSection = canEditBancas;
 
   const toggleBanca = (bancaId: string) => {
     setSelectedBancaIds((prev) => {
