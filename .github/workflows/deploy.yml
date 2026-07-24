@@ -35,18 +35,24 @@ jobs:
             echo "Atualizando código..."
             test -d .git
             test -f .env
-            previous_commit="$(git rev-parse HEAD)"
+            deploy_marker="$DEPLOY_DIR/.git/last-successful-deploy"
             git fetch origin main
             git checkout main
             git merge --ff-only origin/main
 
             application_changed=1
-            if git diff --quiet "$previous_commit" HEAD -- . \
-              ':(exclude)migrations/**' \
-              ':(exclude)docs/**' \
-              ':(exclude)*.md' \
-              ':(exclude).github/**'; then
-              application_changed=0
+            if [ -s "$deploy_marker" ]; then
+              last_successful_commit="$(cat "$deploy_marker")"
+              if git cat-file -e "${last_successful_commit}^{commit}" 2>/dev/null && \
+                git diff --quiet "$last_successful_commit" HEAD -- . \
+                  ':(exclude)migrations/**' \
+                  ':(exclude)docs/**' \
+                  ':(exclude)*.md' \
+                  ':(exclude).github/**'; then
+                application_changed=0
+              fi
+            else
+              echo "Sem marcador de deploy concluído: rebuild completo será executado."
             fi
 
             echo "Validando ambiente e Compose..."
@@ -77,6 +83,7 @@ jobs:
 
             if [ "$application_changed" = "0" ]; then
               echo "Somente migrations/documentação: build e restart dispensados."
+              git rev-parse HEAD > "$deploy_marker"
               docker compose ps
               exit 0
             fi
@@ -112,4 +119,5 @@ jobs:
 
             docker image prune -f
             docker compose ps
+            git rev-parse HEAD > "$deploy_marker"
             echo "Deploy concluído."
