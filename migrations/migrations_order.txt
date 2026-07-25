@@ -213,3 +213,4 @@ create_smtp_accounts.sql
 create_email_newsletters.sql
 create_email_logs.sql
 add_sidebar_emails_item.sql
+add_whatsapp_official_template_messages.sql
