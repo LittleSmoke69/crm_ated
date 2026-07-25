@@ -61,6 +61,7 @@ import {
   ListFilter,
   Pencil,
   LayoutTemplate,
+  Upload,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -139,7 +140,7 @@ interface ChannelWhatsAppOfficial {
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'mine' | 'unassigned';
-type ActiveView = 'chat' | 'contacts' | 'broadcast' | 'agent';
+type ActiveView = 'chat' | 'contacts' | 'broadcast' | 'agent' | 'broadcast_meta' | 'templates_meta';
 
 /** Presets de intervalo aleatório (segundos entre envios). */
 const BROADCAST_DELAY_PRESETS = {
@@ -171,6 +172,11 @@ interface BroadcastJob {
   id: string;
   title: string;
   instance_name: string;
+  /** 'evolution' (padrão) | 'whatsapp_official' (templates Meta). */
+  channel_type?: string;
+  whatsapp_config_id?: string | null;
+  /** Só para channel_type='whatsapp_official' — nome do template disparado. */
+  template_name?: string | null;
   total_count: number;
   current_index: number;
   delay_seconds: number;
@@ -963,6 +969,25 @@ export default function ChatPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
   const [templateVarValues, setTemplateVarValues] = useState<string[]>([]);
   const [sendingTemplate, setSendingTemplate] = useState(false);
+
+  // Disparo em massa por template (WhatsApp Oficial) — admin/super_admin
+  const [showMetaBroadcastPanel, setShowMetaBroadcastPanel] = useState(false);
+  const [showMetaBroadcastForm, setShowMetaBroadcastForm] = useState(false);
+  const [metaBroadcastContacts, setMetaBroadcastContacts] = useState<BroadcastContact[]>([]);
+  const [metaBroadcastContactsFileName, setMetaBroadcastContactsFileName] = useState('');
+  const [metaBroadcastTitle, setMetaBroadcastTitle] = useState('');
+  const [metaBroadcastTemplate, setMetaBroadcastTemplate] = useState<MetaTemplate | null>(null);
+  const [metaBroadcastTemplateVars, setMetaBroadcastTemplateVars] = useState<string[]>([]);
+  const [metaBroadcastDelayMode, setMetaBroadcastDelayMode] = useState<'fixed' | 'random'>('random');
+  const [metaBroadcastDelaySeconds, setMetaBroadcastDelaySeconds] = useState(120);
+  const [metaBroadcastDelayMin, setMetaBroadcastDelayMin] = useState(120);
+  const [metaBroadcastDelayMax, setMetaBroadcastDelayMax] = useState(240);
+  const [creatingMetaBroadcast, setCreatingMetaBroadcast] = useState(false);
+  const [metaBroadcastError, setMetaBroadcastError] = useState<string | null>(null);
+  const [allTemplates, setAllTemplates] = useState<MetaTemplate[]>([]);
+  const [loadingAllTemplates, setLoadingAllTemplates] = useState(false);
+  const [allTemplatesError, setAllTemplatesError] = useState<string | null>(null);
+  const [showTemplatesListModal, setShowTemplatesListModal] = useState(false);
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
   const selectedConversationIdRef = useRef('');
@@ -1391,6 +1416,9 @@ export default function ChatPage() {
     userStatus === 'admin' ||
     userStatus === 'gerente' ||
     userStatus === 'captador';
+
+  /** Disparo em massa por template (WhatsApp Oficial) e listagem de templates — só admin/super_admin */
+  const isAdminOrSuperAdmin = userStatus === 'admin' || userStatus === 'super_admin';
 
   /** Lista Contatos + sync CRM (kanban / transferidos) — consultor e gerente */
   const crmChatContactsUser =
@@ -1849,6 +1877,20 @@ export default function ChatPage() {
     startBroadcastRunner(running.id, running);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [broadcasts, selectedChannel]);
+
+  /** Retoma automaticamente um disparo de template (WhatsApp Oficial) que já estava rodando. */
+  useEffect(() => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    const running = broadcasts.find((b) => b.status === 'running' && b.channel_type === 'whatsapp_official');
+    if (!running) return;
+    if (broadcastRunnerRef.current.jobId === running.id) return;
+    startBroadcastRunner(running.id, running);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcasts, selectedChannel]);
+
+  useEffect(() => {
+    if (showMetaBroadcastPanel) loadBroadcasts();
+  }, [showMetaBroadcastPanel, loadBroadcasts]);
 
   // ── CSV Parser para contatos ───────────────────────────────────────────────
   const parseBroadcastCSV = (raw: string): BroadcastContact[] => {
@@ -3688,6 +3730,113 @@ export default function ChatPage() {
     }
   };
 
+  // ── Disparo em massa por template (WhatsApp Oficial) — admin/super_admin ──
+  const loadAllTemplates = useCallback(async () => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    setLoadingAllTemplates(true);
+    setAllTemplatesError(null);
+    try {
+      const res = await fetch(`/api/chat/whatsapp-official/templates?config_id=${selectedChannel.id}`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'Erro ao carregar templates');
+      setAllTemplates(json.data || []);
+    } catch (e: any) {
+      setAllTemplatesError(e?.message || 'Erro ao carregar templates');
+    } finally {
+      setLoadingAllTemplates(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannel?.type, selectedChannel?.id]);
+
+  const openTemplatesListModal = () => {
+    setShowTemplatesListModal(true);
+    void loadAllTemplates();
+  };
+
+  const openMetaBroadcastPanel = () => {
+    setShowMetaBroadcastPanel(true);
+    void loadAllTemplates();
+  };
+
+  const selectMetaBroadcastTemplate = (t: MetaTemplate) => {
+    setMetaBroadcastTemplate(t);
+    setMetaBroadcastTemplateVars(Array.from({ length: templateVarCount(t) }, () => ''));
+  };
+
+  const resetMetaBroadcastForm = () => {
+    setShowMetaBroadcastForm(false);
+    setMetaBroadcastTitle('');
+    setMetaBroadcastTemplate(null);
+    setMetaBroadcastTemplateVars([]);
+    setMetaBroadcastContacts([]);
+    setMetaBroadcastContactsFileName('');
+    setMetaBroadcastDelayMode('random');
+    setMetaBroadcastDelaySeconds(120);
+    setMetaBroadcastDelayMin(120);
+    setMetaBroadcastDelayMax(240);
+    setMetaBroadcastError(null);
+  };
+
+  const handleMetaBroadcastFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMetaBroadcastContactsFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const parsed = parseBroadcastCSV(text);
+      setMetaBroadcastContacts(parsed);
+      if (parsed.length === 0) setMetaBroadcastError('Nenhum contato válido encontrado no arquivo.');
+      else setMetaBroadcastError(null);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const createMetaBroadcast = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || creatingMetaBroadcast) return;
+    if (!metaBroadcastTemplate) { setMetaBroadcastError('Selecione um template'); return; }
+    if (metaBroadcastContacts.length === 0) { setMetaBroadcastError('Envie um CSV com ao menos um contato'); return; }
+    if (metaBroadcastTemplateVars.some((v) => !v.trim())) {
+      setMetaBroadcastError('Preencha todas as variáveis do template (use {{nome}} para personalizar pelo nome do contato)');
+      return;
+    }
+    setCreatingMetaBroadcast(true);
+    setMetaBroadcastError(null);
+    try {
+      const res = await fetch('/api/chat/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          channel_type: 'whatsapp_official',
+          whatsapp_config_id: selectedChannel.id,
+          title: metaBroadcastTitle || undefined,
+          template_name: metaBroadcastTemplate.name,
+          template_language: metaBroadcastTemplate.language,
+          template_params: metaBroadcastTemplateVars,
+          template_body_pattern: templateBodyText(metaBroadcastTemplate),
+          contacts: metaBroadcastContacts,
+          delay_mode: metaBroadcastDelayMode,
+          delay_seconds: metaBroadcastDelaySeconds,
+          delay_min_seconds: metaBroadcastDelayMin,
+          delay_max_seconds: metaBroadcastDelayMax,
+        }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!result.success) { setMetaBroadcastError(result.error ?? 'Erro ao criar disparo'); return; }
+      const newJob = result.data as BroadcastJob;
+      resetMetaBroadcastForm();
+      loadBroadcasts();
+      startBroadcastRunner(newJob.id, newJob);
+    } catch {
+      setMetaBroadcastError('Erro de rede');
+    } finally {
+      setCreatingMetaBroadcast(false);
+    }
+  };
+
   // ── Contato: abrir modal ───────────────────────────────────────────────────
   const openContactModal = () => {
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -4460,6 +4609,277 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      {showTemplatesListModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60" onClick={() => setShowTemplatesListModal(false)}>
+          <div className="bg-white dark:bg-[#2a2a2a] w-full max-w-lg rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between flex-shrink-0">
+              <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2"><LayoutTemplate className="w-4 h-4" /> Templates aprovados na Meta</h3>
+              <button onClick={() => setShowTemplatesListModal(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
+            </div>
+            {allTemplatesError && (
+              <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300 flex-shrink-0">
+                {allTemplatesError}
+              </div>
+            )}
+            <div className="overflow-y-auto space-y-2">
+              {loadingAllTemplates ? (
+                <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" /></div>
+              ) : !selectedChannel || selectedChannel.type !== 'whatsapp_official' ? (
+                <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">Selecione um canal WhatsApp Oficial para ver os templates.</p>
+              ) : allTemplates.length === 0 ? (
+                <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum template encontrado nesta conta.</p>
+              ) : (
+                allTemplates.map((t) => {
+                  const statusClass =
+                    t.status === 'APPROVED'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                      : t.status === 'REJECTED'
+                        ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200'
+                        : 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900/30 dark:text-yellow-200';
+                  return (
+                    <div key={t.id} className="rounded-lg border border-gray-200 dark:border-gray-600 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{t.name}</span>
+                        <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusClass}`}>
+                          {t.status}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">
+                        {t.category} · {t.language}
+                      </p>
+                      <p className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap line-clamp-3">{templateBodyText(t)}</p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {showMetaBroadcastPanel && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60" onClick={() => { setShowMetaBroadcastPanel(false); resetMetaBroadcastForm(); }}>
+          <div className="bg-white dark:bg-[#2a2a2a] w-full max-w-xl rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between flex-shrink-0">
+              <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2"><Megaphone className="w-4 h-4" /> Disparo em massa (Templates)</h3>
+              <button onClick={() => { setShowMetaBroadcastPanel(false); resetMetaBroadcastForm(); }} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
+            </div>
+
+            {!selectedChannel || selectedChannel.type !== 'whatsapp_official' ? (
+              <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">Selecione um canal WhatsApp Oficial para disparar templates em massa.</p>
+            ) : showMetaBroadcastForm ? (
+              <div className="overflow-y-auto space-y-3">
+                <button onClick={() => resetMetaBroadcastForm()} className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">← Voltar</button>
+
+                {metaBroadcastError && (
+                  <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
+                    {metaBroadcastError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Título da campanha (opcional)</label>
+                  <input
+                    value={metaBroadcastTitle}
+                    onChange={(e) => setMetaBroadcastTitle(e.target.value)}
+                    placeholder="Ex.: Promoção de julho"
+                    className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-[#E86A24] focus:outline-none"
+                  />
+                </div>
+
+                {!metaBroadcastTemplate ? (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Template</label>
+                    {loadingAllTemplates ? (
+                      <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" /></div>
+                    ) : (
+                      <div className="space-y-2 max-h-52 overflow-y-auto">
+                        {allTemplates.filter((t) => t.status === 'APPROVED').length === 0 ? (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 py-3">Nenhum template aprovado disponível.</p>
+                        ) : (
+                          allTemplates
+                            .filter((t) => t.status === 'APPROVED')
+                            .map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => selectMetaBroadcastTemplate(t)}
+                                className="flex w-full flex-col items-start gap-1 rounded-lg border border-gray-200 dark:border-gray-600 p-3 text-left hover:border-[#E86A24]"
+                              >
+                                <span className="text-sm font-medium text-gray-900 dark:text-white">{t.name} <span className="text-[10px] text-gray-400">({t.language})</span></span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">{templateBodyText(t)}</span>
+                              </button>
+                            ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-600 p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">{metaBroadcastTemplate.name}</p>
+                        <button type="button" onClick={() => setMetaBroadcastTemplate(null)} className="text-[11px] text-gray-500 hover:text-gray-900 dark:hover:text-white">Trocar</button>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap">{renderTemplateBody(metaBroadcastTemplate, metaBroadcastTemplateVars)}</p>
+                    </div>
+                    {metaBroadcastTemplateVars.length > 0 && (
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Dica: use <code className="px-1 rounded bg-gray-100 dark:bg-[#333]">{'{{nome}}'}</code> em uma variável para personalizar com o nome de cada contato do CSV.
+                      </p>
+                    )}
+                    {metaBroadcastTemplateVars.map((v, i) => (
+                      <div key={i}>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Variável {`{{${i + 1}}}`}</label>
+                        <input
+                          value={v}
+                          onChange={(e) => setMetaBroadcastTemplateVars((prev) => prev.map((x, idx) => (idx === i ? e.target.value : x)))}
+                          className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-[#E86A24] focus:outline-none"
+                        />
+                      </div>
+                    ))}
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Contatos (CSV)</label>
+                      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-3 py-3 text-xs text-gray-600 dark:text-gray-300 hover:border-[#E86A24]">
+                        <Upload className="w-4 h-4" />
+                        {metaBroadcastContactsFileName || 'Selecionar arquivo .csv (telefone, nome)'}
+                        <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleMetaBroadcastFileUpload} />
+                      </label>
+                      {metaBroadcastContacts.length > 0 && (
+                        <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{metaBroadcastContacts.length} contato(s) válido(s) carregado(s).</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Intervalo entre contatos</label>
+                      <div className="flex gap-2 mb-2">
+                        <button
+                          type="button"
+                          onClick={() => setMetaBroadcastDelayMode('random')}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${metaBroadcastDelayMode === 'random' ? 'bg-[#E86A24] text-white' : 'bg-gray-100 text-gray-600 dark:bg-[#333] dark:text-gray-300'}`}
+                        >
+                          Aleatório
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMetaBroadcastDelayMode('fixed')}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${metaBroadcastDelayMode === 'fixed' ? 'bg-[#E86A24] text-white' : 'bg-gray-100 text-gray-600 dark:bg-[#333] dark:text-gray-300'}`}
+                        >
+                          Fixo
+                        </button>
+                      </div>
+                      {metaBroadcastDelayMode === 'random' ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            value={metaBroadcastDelayMin}
+                            onChange={(e) => setMetaBroadcastDelayMin(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
+                          />
+                          <span className="text-xs text-gray-500">a</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={metaBroadcastDelayMax}
+                            onChange={(e) => setMetaBroadcastDelayMax(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
+                          />
+                          <span className="text-xs text-gray-500 flex-shrink-0">seg</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={10}
+                            value={metaBroadcastDelaySeconds}
+                            onChange={(e) => setMetaBroadcastDelaySeconds(Math.max(10, parseInt(e.target.value, 10) || 10))}
+                            className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
+                          />
+                          <span className="text-xs text-gray-500 flex-shrink-0">seg</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={createMetaBroadcast}
+                      disabled={creatingMetaBroadcast || metaBroadcastContacts.length === 0}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-white disabled:opacity-50"
+                      style={{ backgroundColor: '#E86A24' }}
+                    >
+                      {creatingMetaBroadcast && <Loader2 className="w-4 h-4 animate-spin" />} Iniciar disparo
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-y-auto space-y-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowMetaBroadcastForm(true); if (allTemplates.length === 0) void loadAllTemplates(); }}
+                  className="mb-2 w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-[#E86A24] px-3 py-2 text-sm font-medium text-[#E86A24] hover:bg-[#E86A24]/10"
+                >
+                  <Plus className="w-4 h-4" /> Nova campanha
+                </button>
+                {broadcastsLoading ? (
+                  <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" /></div>
+                ) : broadcasts.filter((b) => b.channel_type === 'whatsapp_official').length === 0 ? (
+                  <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum disparo de template criado ainda.</p>
+                ) : (
+                  broadcasts
+                    .filter((b) => b.channel_type === 'whatsapp_official')
+                    .map((job) => {
+                      const isActive = activeBroadcastJobId === job.id;
+                      const pct = job.total_count > 0 ? Math.round((job.current_index / job.total_count) * 100) : 0;
+                      const statusLabel: Record<string, string> = {
+                        pending: 'Pendente', running: 'Rodando', paused: 'Pausado',
+                        completed: 'Concluído', failed: 'Falhou', cancelled: 'Cancelado',
+                      };
+                      return (
+                        <div key={job.id} className="rounded-xl border border-gray-200 dark:border-gray-600 p-3">
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{job.title}</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">Template: {job.template_name || '—'}</p>
+                            </div>
+                            <span className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-700 dark:bg-[#404040] dark:text-gray-200">
+                              {statusLabel[job.status] ?? job.status}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-1.5">{job.current_index}/{job.total_count} contatos</p>
+                          <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-[#444]">
+                            <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: '#E86A24' }} />
+                          </div>
+                          {job.last_error ? (
+                            <p className="mb-2 truncate text-[11px] text-red-600 dark:text-red-400" title={job.last_error}>{job.last_error}</p>
+                          ) : null}
+                          <div className="flex flex-wrap gap-1.5">
+                            {(job.status === 'pending' || job.status === 'paused') && !isActive ? (
+                              <button type="button" onClick={() => handleBroadcastAction(job.id, 'running')} className="inline-flex items-center gap-1 rounded-lg border border-blue-400 px-2 py-1 text-[11px] text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-400 dark:hover:bg-blue-950/30">
+                                <Play className="h-3 w-3" /> {job.status === 'paused' ? 'Retomar' : 'Iniciar'}
+                              </button>
+                            ) : null}
+                            {(job.status === 'running' || isActive) ? (
+                              <button type="button" onClick={() => handleBroadcastAction(job.id, 'paused')} className="inline-flex items-center gap-1 rounded-lg border border-orange-400 px-2 py-1 text-[11px] text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950/20">
+                                <Pause className="h-3 w-3" /> Pausar
+                              </button>
+                            ) : null}
+                            {(job.status === 'pending' || job.status === 'running' || job.status === 'paused' || isActive) ? (
+                              <button type="button" onClick={() => handleBroadcastAction(job.id, 'cancelled')} className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100 dark:border-[#505050] dark:text-gray-400 dark:hover:bg-[#3a3a3a]">
+                                <Square className="h-3 w-3" /> Cancelar
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {mediaModal && (
         <MediaModal
           url={mediaModal.url}
@@ -4533,20 +4953,32 @@ export default function ChatPage() {
               </button>
               <div className="space-y-0.5">
                 {(() => {
-                  const navItems: { key: ActiveView; label: string; Icon: typeof MessageCircle; evoOnly?: boolean }[] = [
+                  const navItems: {
+                    key: ActiveView | 'templates_meta' | 'broadcast_meta';
+                    label: string;
+                    Icon: typeof MessageCircle;
+                    evoOnly?: boolean;
+                    officialOnly?: boolean;
+                    adminOnly?: boolean;
+                    onSelect?: () => void;
+                  }[] = [
                     { key: 'chat', label: 'Todas as conversas', Icon: MessageCircle },
                     { key: 'contacts', label: 'Contatos', Icon: BookUser },
+                    { key: 'broadcast_meta', label: 'Disparo em massa', Icon: Megaphone, officialOnly: true, adminOnly: true, onSelect: openMetaBroadcastPanel },
+                    { key: 'templates_meta', label: 'Ver templates', Icon: LayoutTemplate, officialOnly: true, adminOnly: true, onSelect: openTemplatesListModal },
                     { key: 'broadcast', label: 'Disparo em Massa', Icon: Megaphone, evoOnly: true },
                     { key: 'agent', label: 'Agente de IA', Icon: Bot, evoOnly: true },
                   ];
                   return navItems
                     .filter((it) => !it.evoOnly || selectedChannel?.type === 'evolution')
-                    .map(({ key, label, Icon }) => {
-                      const isActive = activeView === key;
+                    .filter((it) => !it.officialOnly || selectedChannel?.type === 'whatsapp_official')
+                    .filter((it) => !it.adminOnly || isAdminOrSuperAdmin)
+                    .map(({ key, label, Icon, onSelect }) => {
+                      const isActive = !onSelect && activeView === key;
                       return (
                         <button
                           key={key}
-                          onClick={() => setActiveView(key)}
+                          onClick={() => (onSelect ? onSelect() : setActiveView(key as ActiveView))}
                           aria-current={isActive ? 'page' : undefined}
                           className={`group relative w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                             isActive
