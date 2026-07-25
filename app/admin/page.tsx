@@ -946,6 +946,17 @@ export default function AdminDashboard() {
               <span>WhatsApp Oficial</span>
             </button>
           )}
+
+          {/* E-mails: super_admin e admin */}
+          {(isSuperAdmin || adminStatus === 'admin') && (
+            <button
+              onClick={() => router.push('/admin/emails')}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm sm:text-base text-gray-700 dark:text-[#ccc] hover:bg-gray-100 dark:hover:bg-[#333]"
+            >
+              <Mail className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span>E-mails</span>
+            </button>
+          )}
         </div>
 
         <div>
