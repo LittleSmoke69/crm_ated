@@ -10,6 +10,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
+import { getGerenteTeamCaptadorIds, gerenteOfficialOrFilter } from '@/lib/services/chat-visibility';
 import { syncEvolutionDirectoryToChatConversations } from '@/lib/server/evolution-chat-directory-sync';
 import { chatService } from '@/lib/services/chat-service';
 import {
@@ -228,8 +229,13 @@ export async function GET(req: NextRequest) {
       return errorResponse('Configuração WhatsApp Oficial não encontrada', 404);
     }
 
-    if (!isAdminOrSuporte && config.zaploto_id !== profile?.zaploto_id) {
-      return errorResponse('Acesso negado.', 403);
+    {
+      const isSuperAdmin = profile?.status === 'super_admin';
+      const sameTenant = config.zaploto_id === profile?.zaploto_id;
+      const adminNoTenant = (profile?.status === 'admin' || profile?.status === 'suporte') && !profile?.zaploto_id;
+      if (!isSuperAdmin && !sameTenant && !adminNoTenant) {
+        return errorResponse('Acesso negado.', 403);
+      }
     }
 
     let officialQuery = supabaseServiceRole
@@ -239,7 +245,8 @@ export async function GET(req: NextRequest) {
     if (profile?.status === 'captador') {
       officialQuery = officialQuery.eq('user_id', userId);
     } else if (profile?.status === 'gerente') {
-      officialQuery = officialQuery.or(`gerente_id.eq.${userId},and(gerente_id.is.null,user_id.is.null)`);
+      const teamCaptadorIds = await getGerenteTeamCaptadorIds(userId);
+      officialQuery = officialQuery.or(gerenteOfficialOrFilter(userId, teamCaptadorIds));
     }
     const { data: conversations, error } = await officialQuery.order('last_message_at', { ascending: false });
 
@@ -298,7 +305,7 @@ export async function POST(req: NextRequest) {
     const remoteJid = `${normalizedPhone}@s.whatsapp.net`;
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
-      .select('status, zaploto_id')
+      .select('status, zaploto_id, enroller')
       .eq('id', userId)
       .single();
 
@@ -362,8 +369,13 @@ export async function POST(req: NextRequest) {
       return errorResponse('Configuração WhatsApp Oficial não encontrada', 404);
     }
 
-    if (!isAdminOrSuporte && config.zaploto_id !== profile?.zaploto_id) {
-      return errorResponse('Acesso negado.', 403);
+    {
+      const isSuperAdmin = profile?.status === 'super_admin';
+      const sameTenant = config.zaploto_id === profile?.zaploto_id;
+      const adminNoTenant = (profile?.status === 'admin' || profile?.status === 'suporte') && !profile?.zaploto_id;
+      if (!isSuperAdmin && !sameTenant && !adminNoTenant) {
+        return errorResponse('Acesso negado.', 403);
+      }
     }
 
     const { data: existingConversation } = await supabaseServiceRole
@@ -382,6 +394,10 @@ export async function POST(req: NextRequest) {
       instance_id: null,
       workspace_id: profile?.zaploto_id ?? null,
       user_id: userId,
+      // Se quem cria é captador, propaga o gerente do time — sem isso a conversa
+      // ficaria invisível para o gerente na listagem (que depende de gerente_id
+      // ou de user_id pertencer a um captador do time).
+      gerente_id: profile?.status === 'captador' ? profile?.enroller ?? null : null,
       remote_jid: remoteJid,
       title,
       is_group: false,

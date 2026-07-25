@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { gerenteCanSeeOfficialConversation } from '@/lib/services/chat-visibility';
 
 async function mayAccess(userId: string, conversationId: string) {
   const [{ data: profile }, { data: conversation }] = await Promise.all([
@@ -12,7 +13,7 @@ async function mayAccess(userId: string, conversationId: string) {
   if (profile.status === 'super_admin') return true;
   if (conversation.workspace_id !== profile.zaploto_id) return false;
   if (profile.status === 'admin') return true;
-  if (profile.status === 'gerente') return conversation.gerente_id === userId || (!conversation.gerente_id && !conversation.user_id);
+  if (profile.status === 'gerente') return gerenteCanSeeOfficialConversation(userId, conversation);
   return profile.status === 'captador' && conversation.user_id === userId;
 }
 
