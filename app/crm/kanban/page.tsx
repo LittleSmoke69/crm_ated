@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3 } from 'lucide-react';
+import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3, Pencil } from 'lucide-react';
 import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
 import Modal, { ConfirmDialog } from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
@@ -54,6 +54,10 @@ function KanbanBoard() {
   const [addTargetColumn, setAddTargetColumn] = useState('');
   const [form, setForm] = useState({ name: '', phone: '', email: '' });
   const [saving, setSaving] = useState(false);
+
+  const [editClient, setEditClient] = useState<Client | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', email: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const [showNewCol, setShowNewCol] = useState(false);
   const [newCol, setNewCol] = useState({ title: '', color: 'gray' });
@@ -167,6 +171,41 @@ function KanbanBoard() {
       toast.error('Erro ao adicionar cliente. Verifique sua conexão e tente novamente.');
     } finally { setSaving(false); }
   }, [userId, form, addTargetColumn, headers, toast]);
+
+  const openEditClient = (client: Client) => {
+    setEditClient(client);
+    setEditForm({ name: client.name, phone: client.phone, email: client.email });
+  };
+
+  const saveEditClient = useCallback(async () => {
+    if (!userId || !editClient || !editForm.name.trim()) return;
+    setSavingEdit(true);
+    try {
+      const res = await fetch('/api/crm/board', {
+        method: 'PATCH', headers, credentials: 'include',
+        body: JSON.stringify({
+          lead_external_id: editClient.external_id,
+          owner_user_id: editClient.owner_user_id,
+          name: editForm.name.trim(),
+          phone: editForm.phone.trim(),
+          email: editForm.email.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (json?.success) {
+        setClients((prev) => prev.map((c) => (
+          c.external_id === editClient.external_id
+            ? { ...c, name: editForm.name.trim(), phone: editForm.phone.trim(), email: editForm.email.trim() }
+            : c
+        )));
+        setEditClient(null);
+      } else {
+        toast.error(json?.error || 'Erro ao salvar cliente. Tente novamente.');
+      }
+    } catch {
+      toast.error('Erro ao salvar cliente. Verifique sua conexão e tente novamente.');
+    } finally { setSavingEdit(false); }
+  }, [userId, editClient, editForm, headers, toast]);
 
   const createColumn = useCallback(async () => {
     if (!userId || !newCol.title.trim()) return;
@@ -358,11 +397,20 @@ function KanbanBoard() {
                         onDragEnd={() => setDragId(null)}
                         className="cursor-grab rounded-xl border border-white/10 bg-[#2a2a2a] p-3 shadow-sm transition hover:shadow-md active:cursor-grabbing"
                         style={{ borderLeft: `3px solid ${accent}` }}>
-                        {canViewAll && c.owner_name && (
-                          <div className="mb-2 inline-flex max-w-full items-center rounded-full bg-[#E86A24]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#E86A24]">
-                            <span className="truncate">{c.owner_name}</span>
-                          </div>
-                        )}
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          {canViewAll && c.owner_name ? (
+                            <div className="inline-flex max-w-full items-center rounded-full bg-[#E86A24]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#E86A24]">
+                              <span className="truncate">{c.owner_name}</span>
+                            </div>
+                          ) : <span />}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEditClient(c); }}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-[#E86A24]"
+                            title="Editar informações do cliente"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                         <div className="mb-1 flex items-center gap-2">
                           <User className="h-4 w-4 shrink-0 text-gray-400" />
                           <span className="truncate text-sm font-semibold text-white">{c.name}</span>
@@ -494,6 +542,37 @@ function KanbanBoard() {
                   id={`kanban-add-client-${field}`}
                   value={form[field]}
                   onChange={(e) => setForm((f) => ({ ...f, [field]: e.target.value }))}
+                  placeholder={field === 'name' ? 'Nome do cliente' : field === 'phone' ? 'Telefone' : 'E-mail'}
+                />
+              </Field>
+            ))}
+          </div>
+        </Modal>
+
+        <Modal
+          open={!!editClient}
+          onClose={() => setEditClient(null)}
+          title="Editar informações do cliente"
+          size="sm"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setEditClient(null)}>Cancelar</Button>
+              <Button onClick={saveEditClient} loading={savingEdit} disabled={!editForm.name.trim()}>Salvar</Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            {(['name', 'phone', 'email'] as const).map((field) => (
+              <Field
+                key={field}
+                label={field === 'name' ? 'Nome' : field === 'phone' ? 'Telefone' : 'E-mail'}
+                required={field === 'name'}
+                htmlFor={`kanban-edit-client-${field}`}
+              >
+                <Input
+                  id={`kanban-edit-client-${field}`}
+                  value={editForm[field]}
+                  onChange={(e) => setEditForm((f) => ({ ...f, [field]: e.target.value }))}
                   placeholder={field === 'name' ? 'Nome do cliente' : field === 'phone' ? 'Telefone' : 'E-mail'}
                 />
               </Field>

@@ -265,8 +265,17 @@ export async function PATCH(req: NextRequest) {
     const hasStatus = typeof body.capture_status === 'string' && CAPTURE_STATUSES.includes(body.capture_status);
     const hasGerente = body.gerente_id !== undefined;
     const hasCaptador = body.captador_id !== undefined;
-    if (!hasStatus && !hasGerente && !hasCaptador) {
+    const hasName = typeof body.name === 'string';
+    const hasPhone = typeof body.phone === 'string';
+    const hasEmail = typeof body.email === 'string';
+    if (!hasStatus && !hasGerente && !hasCaptador && !hasName && !hasPhone && !hasEmail) {
       return errorResponse('Nada para atualizar.', 400);
+    }
+    if ((hasName || hasPhone || hasEmail) && ids.length !== 1) {
+      return errorResponse('Editar nome/telefone/e-mail só pode ser feito em um lead por vez.', 400);
+    }
+    if (hasName && !body.name.trim()) {
+      return errorResponse('Nome é obrigatório.', 400);
     }
 
     const { data: leads, error: leadsErr } = await supabaseServiceRole
@@ -294,6 +303,11 @@ export async function PATCH(req: NextRequest) {
       const update: any = { updated_at: nowIso, zaploto_id: zaplotoId };
       if (hasStatus) update.capture_status = body.capture_status;
       if (hasGerente) update.gerente_id = body.gerente_id || null;
+      // Nome inteiro vai para `name`; zera `last_name` para não duplicar o sobrenome
+      // antigo por trás de um nome completo novo (GET concatena name + last_name).
+      if (hasName) { update.name = body.name.trim(); update.last_name = null; }
+      if (hasPhone) update.phone = normalizePhone(body.phone) || null;
+      if (hasEmail) update.email = body.email.trim().toLowerCase() || null;
 
       if (hasCaptador) {
         update.user_id = captadorId;
