@@ -824,6 +824,21 @@ function MessageContent({
 
 type UserStatus = 'super_admin' | 'admin' | string | null;
 
+/** Cargos legados → cargos atuais (sessões/perfis antigos ainda podem retornar valores aposentados). */
+const LEGACY_STATUS_MAP: Record<string, string> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+function normalizeLegacyStatus(status: string | null | undefined): string | null {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return null;
+  return LEGACY_STATUS_MAP[raw] ?? raw;
+}
+
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
 /** Cache local do histórico por conversa (sessionStorage) — reabrir sem depender só da rede */
@@ -1194,11 +1209,13 @@ export default function ChatPage() {
       const result = await r.json();
       if (result.success && result.data) {
         const evo: ChannelEvolution[] = result.data.evolution || [];
-        setChannels({ evolution: evo, whatsapp_official: [] });
-        const firstChannel: Channel | null = evo.length > 0 ? evo[0] : null;
+        const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
+        setChannels({ evolution: evo, whatsapp_official: wa });
+        const firstChannel: Channel | null = evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
         setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
         const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
           ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
+          ...wa.map((c) => ({ id: c.id, type: 'whatsapp_official' as const })),
         ];
         allChannels.forEach(({ id, type }) => {
           const params = type === 'evolution' ? `instance_id=${id}` : `whatsapp_config_id=${id}`;
@@ -1531,7 +1548,8 @@ export default function ChatPage() {
     fetch('/api/user/profile', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
-        if (data.success && data.data?.status) setUserStatus(data.data.status);
+        const normalized = normalizeLegacyStatus(data.success ? data.data?.status : null);
+        if (normalized) setUserStatus(normalized);
       })
       .catch(() => {});
   }, [userId]);
@@ -4334,7 +4352,7 @@ export default function ChatPage() {
                   {/* Label */}
                   <div className="px-5 pt-5 pb-3 border-b border-gray-100 dark:border-[#3a3a3a]">
                     <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
-                      {channels.evolution.length} {channels.evolution.length === 1 ? 'instância disponível' : 'instâncias disponíveis'}
+                      {totalCanais} {totalCanais === 1 ? 'instância disponível' : 'instâncias disponíveis'}
                     </p>
                   </div>
 
@@ -4501,6 +4519,50 @@ export default function ChatPage() {
                         </div>
                       );
                     })}
+                    {userStatus !== 'gerente' &&
+                      channels.whatsapp_official.map((ch) => {
+                        const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
+                        return (
+                          <button
+                            key={channelPickerKey(ch)}
+                            type="button"
+                            onClick={() => setPendingAtendimentoChannel(ch)}
+                            className={`relative text-left rounded-xl border-2 overflow-hidden transition-all duration-150 p-4 ${
+                              selected
+                                ? 'border-[#E86A24] bg-[#E86A24]/8 dark:bg-[#E86A24]/12 shadow-sm'
+                                : 'border-gray-200 dark:border-[#3a3a3a] hover:border-[#E86A24]/50 hover:bg-gray-50 dark:hover:bg-[#333]'
+                            }`}
+                          >
+                            {selected && (
+                              <span
+                                className="absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center z-[1]"
+                                style={{ backgroundColor: '#E86A24' }}
+                              >
+                                <CheckCheck className="w-3 h-3 text-white" />
+                              </span>
+                            )}
+                            <div className="flex items-center gap-3 mb-3">
+                              <div className="relative flex-shrink-0">
+                                <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-[#444] flex items-center justify-center">
+                                  <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                                </div>
+                                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-[#2a2a2a] bg-emerald-400" />
+                              </div>
+                              <div className="min-w-0 flex-1 pr-6">
+                                <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
+                                  {ch.name}
+                                </p>
+                                <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Ativo</p>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                                WhatsApp Oficial
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
                   </div>
 
                   {/* Footer com botão */}
@@ -4530,7 +4592,11 @@ export default function ChatPage() {
                         <Headphones className="w-4 h-4" />
                       )}
                       {pendingAtendimentoChannel
-                        ? `Entrar com ${(pendingAtendimentoChannel as ChannelEvolution).instance_name}`
+                        ? `Entrar com ${
+                            pendingAtendimentoChannel.type === 'evolution'
+                              ? pendingAtendimentoChannel.instance_name
+                              : pendingAtendimentoChannel.name
+                          }`
                         : 'Selecione uma instância'}
                     </button>
                   </div>

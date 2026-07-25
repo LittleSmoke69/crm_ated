@@ -758,6 +758,21 @@ function MessageContent({
 
 type UserStatus = 'super_admin' | 'admin' | string | null;
 
+/** Cargos legados → cargos atuais (sessões/perfis antigos ainda podem retornar valores aposentados). */
+const LEGACY_STATUS_MAP: Record<string, string> = {
+  consultor: 'captador',
+  dono_banca: 'gerente',
+  gestor: 'admin',
+  auditoria: 'admin',
+  suporte: 'admin',
+};
+
+function normalizeLegacyStatus(status: string | null | undefined): string | null {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return null;
+  return LEGACY_STATUS_MAP[raw] ?? raw;
+}
+
 const CONVERSATIONS_PAGE_SIZE = 10;
 const MESSAGES_PAGE_SIZE = 50;
 
@@ -1233,7 +1248,8 @@ export default function ChatPage() {
     fetch('/api/user/profile', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
-        if (data.success && data.data?.status) setUserStatus(data.data.status);
+        const normalized = normalizeLegacyStatus(data.success ? data.data?.status : null);
+        if (normalized) setUserStatus(normalized);
       })
       .catch(() => {});
   }, [userId]);
