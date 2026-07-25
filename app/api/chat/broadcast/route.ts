@@ -25,6 +25,111 @@ export interface BroadcastContact {
   name?: string;
 }
 
+/** Body de criação de um job de disparo em massa via WhatsApp Oficial (templates Meta). */
+interface OfficialBroadcastCreateBody {
+  channel_type: 'whatsapp_official';
+  whatsapp_config_id?: string;
+  title?: string;
+  template_name?: string;
+  template_language?: string;
+  template_params?: string[];
+  template_body_pattern?: string;
+  contacts: BroadcastContact[];
+  delay_seconds?: number;
+  delay_mode?: 'fixed' | 'random';
+  delay_min_seconds?: number;
+  delay_max_seconds?: number;
+}
+
+function resolveDelayFields(input: {
+  delay_seconds?: number;
+  delay_mode?: 'fixed' | 'random';
+  delay_min_seconds?: number;
+  delay_max_seconds?: number;
+}): { delaySecondsStored: number; delayMode: 'fixed' | 'random'; delayMin: number | null; delayMax: number | null } {
+  const delayMode: 'fixed' | 'random' = input.delay_mode === 'random' ? 'random' : 'fixed';
+  let delaySecondsStored = Math.min(7200, Math.max(10, Math.floor(Number(input.delay_seconds) || 120)));
+  let delayMin: number | null = null;
+  let delayMax: number | null = null;
+  if (delayMode === 'random') {
+    let lo = Math.max(1, Math.min(7200, Math.floor(Number(input.delay_min_seconds) || BROADCAST_DEFAULT_RANDOM_MIN_SEC)));
+    let hi = Math.max(1, Math.min(7200, Math.floor(Number(input.delay_max_seconds) || BROADCAST_DEFAULT_RANDOM_MAX_SEC)));
+    if (lo > hi) [lo, hi] = [hi, lo];
+    delayMin = lo;
+    delayMax = hi;
+    delaySecondsStored = hi;
+  }
+  return { delaySecondsStored, delayMode, delayMin, delayMax };
+}
+
+async function createOfficialBroadcast(userId: string, body: OfficialBroadcastCreateBody) {
+  const { whatsapp_config_id, title, template_name, template_language, template_params, template_body_pattern, contacts } = body;
+
+  if (!whatsapp_config_id) return errorResponse('whatsapp_config_id é obrigatório', 400);
+  if (!template_name || !template_language) return errorResponse('template_name e template_language são obrigatórios', 400);
+  if (!contacts || contacts.length === 0) return errorResponse('contacts não pode ser vazio', 400);
+
+  const { data: config, error: configError } = await supabaseServiceRole
+    .from('whatsapp_official_configs')
+    .select('id, zaploto_id')
+    .eq('id', whatsapp_config_id)
+    .eq('is_active', true)
+    .single();
+  if (configError || !config) return errorResponse('Configuração WhatsApp Oficial não encontrada ou inativa', 404);
+
+  const { data: profile } = await supabaseServiceRole
+    .from('profiles')
+    .select('status, zaploto_id')
+    .eq('id', userId)
+    .single();
+  const status = String(profile?.status || '').toLowerCase();
+  const isAdminOrSuperAdmin = status === 'super_admin' || status === 'admin';
+  if (!isAdminOrSuperAdmin) {
+    return errorResponse('Disparo em massa via WhatsApp Oficial é restrito a administradores', 403);
+  }
+  if (status !== 'super_admin' && profile?.zaploto_id !== config.zaploto_id) {
+    return errorResponse('Acesso negado a esta configuração', 403);
+  }
+
+  const validContacts = contacts.filter((c) => String(c.phone || '').replace(/\D/g, '').length >= 8);
+  if (validContacts.length === 0) return errorResponse('Nenhum contato com telefone válido', 400);
+
+  const { delaySecondsStored, delayMode, delayMin, delayMax } = resolveDelayFields(body);
+
+  const insertRow: Record<string, unknown> = {
+    user_id: userId,
+    channel_type: 'whatsapp_official',
+    whatsapp_config_id,
+    instance_id: null,
+    instance_name: null,
+    title: title || `Disparo template ${new Date().toLocaleString('pt-BR')}`,
+    message_config: {
+      template_name,
+      template_language,
+      template_params: Array.isArray(template_params) ? template_params.filter((p) => typeof p === 'string') : [],
+      template_body_pattern: typeof template_body_pattern === 'string' ? template_body_pattern : undefined,
+    },
+    message_step_index: 0,
+    contacts: validContacts,
+    total_count: validContacts.length,
+    current_index: 0,
+    delay_seconds: delaySecondsStored,
+    delay_mode: delayMode,
+    delay_min_seconds: delayMode === 'random' ? delayMin : null,
+    delay_max_seconds: delayMode === 'random' ? delayMax : null,
+    status: 'pending',
+  };
+
+  const { data, error } = await supabaseServiceRole
+    .from('chat_broadcasts')
+    .insert(insertRow)
+    .select('id, title, channel_type, whatsapp_config_id, total_count, delay_seconds, delay_mode, delay_min_seconds, delay_max_seconds, status, created_at')
+    .single();
+
+  if (error) return errorResponse(error.message, 500);
+  return successResponse(data, 'Disparo criado com sucesso');
+}
+
 export interface BroadcastMessageConfig {
   type: 'text' | 'audio' | 'video' | 'image' | 'document';
   content?: string;
@@ -41,7 +146,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await supabaseServiceRole
       .from('chat_broadcasts')
       .select(
-        'id, title, instance_name, total_count, current_index, message_step_index, delay_seconds, delay_mode, delay_min_seconds, delay_max_seconds, broadcast_instances, status, started_at, completed_at, created_at, last_error, message_config'
+        'id, title, channel_type, whatsapp_config_id, instance_name, total_count, current_index, message_step_index, delay_seconds, delay_mode, delay_min_seconds, delay_max_seconds, broadcast_instances, status, started_at, completed_at, created_at, last_error, message_config'
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -50,10 +155,12 @@ export async function GET(req: NextRequest) {
     if (error) return errorResponse(error.message, 500);
     const rows = (data ?? []).map((row: Record<string, unknown>) => {
       const { message_config: mc, ...rest } = row;
+      const mcObj = (mc && typeof mc === 'object' ? mc : {}) as Record<string, unknown>;
       return {
         ...rest,
         message_steps_count: parseBroadcastSteps(mc).length,
         rotation_size: getRotationSize(mc),
+        template_name: row.channel_type === 'whatsapp_official' ? (mcObj.template_name as string | undefined) : undefined,
       };
     });
     return successResponse(rows);
@@ -65,7 +172,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
-    const body = await req.json() as {
+    const rawBody = await req.json();
+
+    if (rawBody?.channel_type === 'whatsapp_official') {
+      return createOfficialBroadcast(userId, rawBody as OfficialBroadcastCreateBody);
+    }
+
+    const body = rawBody as {
       instance_id?: string;
       /** Preferencial: uma ou mais instâncias (rotação por contato). Se omitido, usa instance_id. */
       instance_ids?: string[];

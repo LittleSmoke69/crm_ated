@@ -30,6 +30,7 @@ import {
 } from '@/lib/chat/broadcast-instance-failover';
 import { publicBroadcastSendErrorMessage } from '@/lib/chat/broadcast-send-user-message';
 import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from '@/lib/chat/broadcast-step-claim';
+import { processOfficialBroadcastStep } from '@/lib/chat/broadcast-official-processor';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -128,6 +129,11 @@ export async function POST(
       .single();
 
     if (jobError || !job) return errorResponse('Broadcast não encontrado', 404);
+
+    if (job.channel_type === 'whatsapp_official') {
+      return processOfficialBroadcastStep(jobId, job as Record<string, unknown>);
+    }
+
     if (job.status === 'cancelled') return errorResponse('Broadcast cancelado', 400);
     if (job.status === 'paused') return successResponse({ done: false, paused: true }, 'Broadcast pausado');
 
