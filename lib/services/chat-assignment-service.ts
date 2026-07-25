@@ -32,14 +32,21 @@ export async function assignConversations(input: {
   return Number(data || 0);
 }
 
-export async function listAvailableCaptadores(actor: ChatActor) {
+/**
+ * Destinatários possíveis para o modal de atribuição, respeitando a hierarquia:
+ * admin/super_admin só atribuem para gerente; gerente só atribui para captador do seu time
+ * (enroller = gerente). Um gerente então repassa a conversa a um captador com uma segunda atribuição.
+ */
+export async function listAssignmentTargets(actor: ChatActor) {
+  if (!['super_admin', 'admin', 'gerente'].includes(actor.status)) return [];
+  const targetStatus = actor.status === 'gerente' ? 'captador' : 'gerente';
+
   let query = supabaseServiceRole
     .from('profiles')
     .select('id, full_name, username, status, enroller, zaploto_id, last_seen_at')
-    .eq('status', 'captador')
+    .eq('status', targetStatus)
     .eq('zaploto_id', actor.zaploto_id);
   if (actor.status === 'gerente') query = query.eq('enroller', actor.id);
-  if (!['super_admin', 'admin', 'gerente'].includes(actor.status)) return [];
 
   const { data, error } = await query.order('full_name');
   if (error) throw error;

@@ -2783,7 +2783,7 @@ export default function ChatPage() {
           <div className="zap-chat-panel w-full max-w-md rounded-xl border border-[#E86A24]/20 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-white">Atribuir ao captador</h3>
+                <h3 className="font-semibold text-white">{userStatus === 'gerente' ? 'Atribuir ao captador' : 'Atribuir ao gerente'}</h3>
                 <p className="text-xs text-gray-400">{assignmentIds.length} conversa(s) selecionada(s)</p>
               </div>
               <button onClick={() => setAssignmentOpen(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
@@ -2798,7 +2798,11 @@ export default function ChatPage() {
                   </button>
                 );
               })}
-              {!assignees.length && <p className="py-6 text-center text-sm text-gray-400">Nenhum captador ativo disponível.</p>}
+              {!assignees.length && (
+                <p className="py-6 text-center text-sm text-gray-400">
+                  {userStatus === 'gerente' ? 'Nenhum captador ativo disponível no seu time.' : 'Nenhum gerente ativo disponível.'}
+                </p>
+              )}
             </div>
           </div>
         </div>
