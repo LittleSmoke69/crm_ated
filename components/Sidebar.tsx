@@ -39,7 +39,6 @@ import {
   UserPlus,
   Package,
   Globe,
-  Mail,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -231,7 +230,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const iconMap: Record<string, any> = {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
-    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones, Package, Mail,
+    ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones, Package,
   };
 
   useEffect(() => {
@@ -463,7 +462,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   };
   const itemAcademyPublic: MenuItem = { href: '/academy', icon: BookOpen, label: 'Academy' };
   const itemHierarquia: MenuItem = { href: '/admin/hierarchy', icon: BarChart3, label: 'Hierarquia' };
-  const itemEmails: MenuItem = { href: '/admin/emails', icon: Mail, label: 'E-mails' };
 
   // Define menus baseados no status do usuário (matriz de cargos)
   const getMenuItems = (): MenuItem[] => {
@@ -482,7 +480,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAgentesIAAdmin,
         itemChatInterno,
         itemGestaoChat,
-        itemEmails,
         itemLeadTransfer,
         itemLeads,
         itemCRMAdmin,
@@ -517,7 +514,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemAcademy,
         itemAgentesIAAdmin,
         itemGestaoChat,
-        itemEmails,
         itemLeads,
         itemCRMAdmin,
         itemCampanhas,
