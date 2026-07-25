@@ -31,6 +31,7 @@ import {
 import { publicBroadcastSendErrorMessage } from '@/lib/chat/broadcast-send-user-message';
 import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from '@/lib/chat/broadcast-step-claim';
 import { processOfficialBroadcastStep } from '@/lib/chat/broadcast-official-processor';
+import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -428,11 +429,20 @@ export async function POST(
         typeof job.user_id === 'string' && job.user_id.length > 0
           ? job.user_id
           : (instance.user_id ?? undefined);
+      // Preserva o dono já gravado da conversa (contato que já tinha atendimento
+      // atribuído a outro agente) — só atribui ao dono do disparo quando a
+      // conversa é nova, para não "roubar" um contato já em atendimento.
+      const conversationUserId = await resolveEvolutionConversationUserIdForUpsert(
+        supabaseServiceRole,
+        instance.id,
+        remoteJid,
+        broadcastAttributionUserId
+      );
 
       const conversation = await chatService.upsertConversation({
         instance_id: instance.id,
         workspace_id: instance.workspace_id ?? undefined,
-        user_id: broadcastAttributionUserId,
+        user_id: conversationUserId,
         remote_jid: remoteJid,
         title: contact.name || remoteJid.replace('@s.whatsapp.net', ''),
         is_group: false,

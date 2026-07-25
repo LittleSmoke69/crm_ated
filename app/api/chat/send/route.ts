@@ -11,6 +11,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 import { messageIndicatesEvolutionSessionDropped, maybeMarkEvolutionInstanceDisconnected } from '@/lib/evolution/mark-instance-disconnected';
+import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
 
 /** Código retornado ao cliente quando a Evolution não consegue enviar (instância/sessão caída). */
 export const EVOLUTION_INSTANCE_UNREACHABLE_CODE = 'EVOLUTION_INSTANCE_UNREACHABLE';
@@ -129,10 +130,19 @@ export async function POST(req: NextRequest) {
       const messageId = returnedMessageId;
       
       // Buscar ou criar conversa
+      // Preserva o dono já gravado (ex.: conversa já atribuída a outro agente do time)
+      // em vez de sempre reatribuir ao dono da instância — mesma proteção já aplicada
+      // ao caminho de webhook (resolveEvolutionConversationUserIdForUpsert).
+      const resolvedConversationUserId = await resolveEvolutionConversationUserIdForUpsert(
+        supabaseServiceRole,
+        instance.id,
+        normalizedRemoteJid,
+        instance.user_id
+      );
       const conversationData = {
         instance_id: instance.id,
         workspace_id: instance.workspace_id,
-        user_id: instance.user_id,
+        user_id: resolvedConversationUserId,
         remote_jid: normalizedRemoteJid,
         last_message_at: new Date().toISOString(),
         last_message_preview: text || caption || (type === 'media' ? `Mídia: ${mediatype}` : ''),

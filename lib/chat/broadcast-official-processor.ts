@@ -12,6 +12,7 @@ import { chatService } from '@/lib/services/chat-service';
 import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
 import { computeNextDelaySeconds } from './broadcast-delay';
 import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from './broadcast-step-claim';
+import { resolveWhatsAppOfficialConversationUserIdForUpsert } from './resolve-evolution-conversation-user-id';
 
 interface OfficialBroadcastMessageConfig {
   template_name: string;
@@ -159,11 +160,20 @@ export async function processOfficialBroadcastStep(
       : msgConfig.template_name;
 
     try {
+      // Preserva o dono já gravado da conversa (contato já em atendimento com outro
+      // agente) — só atribui ao dono do disparo quando a conversa é nova.
+      const conversationUserId = await resolveWhatsAppOfficialConversationUserIdForUpsert(
+        supabaseServiceRole,
+        config.id,
+        remoteJid,
+        job.user_id as string
+      );
+
       const conversation = await chatService.upsertConversation({
         whatsapp_config_id: config.id,
         instance_id: null,
         workspace_id: (job.workspace_id as string | undefined) ?? undefined,
-        user_id: job.user_id as string,
+        user_id: conversationUserId,
         remote_jid: remoteJid,
         title: contact?.name || normalizedPhone,
         is_group: false,

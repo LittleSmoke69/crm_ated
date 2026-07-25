@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
     // Janela de 24h (WhatsApp Oficial): mensagem livre só dentro de 24h da última mensagem do contato
     const { data: existingConversation } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('id, last_customer_message_at')
+      .select('id, last_customer_message_at, user_id')
       .eq('whatsapp_config_id', config_id)
       .eq('remote_jid', remoteJid)
       .maybeSingle();
@@ -287,7 +287,11 @@ export async function POST(req: NextRequest) {
       whatsapp_config_id: config.id,
       instance_id: null,
       workspace_id: profile?.zaploto_id ?? null,
-      user_id: userId,
+      // Preserva o dono já gravado da conversa (ex.: gerente respondendo numa
+      // conversa do captador do seu time) — sem isso, o upsert (conflito por
+      // whatsapp_config_id+remote_jid) reatribuiria a conversa para quem está
+      // enviando agora, e o dono anterior perderia acesso a ela.
+      user_id: existingConversation?.user_id || userId,
       remote_jid: remoteJid,
       title: normalizedTo,
       is_group: false,
