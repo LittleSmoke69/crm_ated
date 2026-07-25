@@ -139,7 +139,7 @@ interface ChannelWhatsAppOfficial {
 
 type Channel = ChannelEvolution | ChannelWhatsAppOfficial;
 type ConversationFilter = 'all' | 'mine' | 'unassigned';
-type ActiveView = 'chat' | 'contacts' | 'agente-ia' | 'broadcast';
+type ActiveView = 'chat' | 'contacts' | 'agente-ia' | 'broadcast' | 'broadcast_meta';
 
 const CONV_SESSION_PREFIX = 'zaploto_chat_conv_v1_';
 const CONV_SESSION_TTL_MS = 3 * 60 * 1000;
@@ -201,6 +201,10 @@ interface BroadcastJob {
   id: string;
   title: string;
   instance_name: string;
+  /** 'evolution' (padrão) | 'whatsapp_official' (templates Meta). */
+  channel_type?: string;
+  whatsapp_config_id?: string | null;
+  template_name?: string | null;
   total_count: number;
   current_index: number;
   delay_seconds: number;
@@ -956,6 +960,22 @@ export default function ChatPage() {
   const [broadcastProgress, setBroadcastProgress] = useState<{ current: number; total: number } | null>(null);
   const [broadcastLog, setBroadcastLog] = useState<Array<{ phone: string; name?: string; success: boolean; error?: string }>>([]);
   const broadcastLogRef = useRef<HTMLDivElement>(null);
+
+  // ── Disparo em massa por template (WhatsApp Oficial) ───────────────────────
+  const [allTemplates, setAllTemplates] = useState<MetaTemplate[]>([]);
+  const [loadingAllTemplates, setLoadingAllTemplates] = useState(false);
+  const [allTemplatesError, setAllTemplatesError] = useState<string | null>(null);
+  const [metaBroadcastContacts, setMetaBroadcastContacts] = useState<BroadcastContact[]>([]);
+  const [metaBroadcastContactsFileName, setMetaBroadcastContactsFileName] = useState('');
+  const [metaBroadcastTitle, setMetaBroadcastTitle] = useState('');
+  const [metaBroadcastTemplate, setMetaBroadcastTemplate] = useState<MetaTemplate | null>(null);
+  const [metaBroadcastTemplateVars, setMetaBroadcastTemplateVars] = useState<string[]>([]);
+  const [metaBroadcastDelayMode, setMetaBroadcastDelayMode] = useState<'fixed' | 'random'>('random');
+  const [metaBroadcastDelaySeconds, setMetaBroadcastDelaySeconds] = useState(120);
+  const [metaBroadcastDelayMin, setMetaBroadcastDelayMin] = useState(120);
+  const [metaBroadcastDelayMax, setMetaBroadcastDelayMax] = useState(240);
+  const [creatingMetaBroadcast, setCreatingMetaBroadcast] = useState(false);
+  const [metaBroadcastError, setMetaBroadcastError] = useState<string | null>(null);
 
   const authHeaders = (): Record<string, string> => (userId ? { 'X-User-Id': userId } : {});
   const canSelectChannel =
@@ -2638,6 +2658,111 @@ export default function ChatPage() {
     }
   };
 
+  // ── Disparo em massa por template (WhatsApp Oficial) ───────────────────────
+  const loadAllTemplates = useCallback(async () => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    setLoadingAllTemplates(true);
+    setAllTemplatesError(null);
+    try {
+      const res = await fetch(`/api/chat/whatsapp-official/templates?config_id=${selectedChannel.id}`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'Erro ao carregar templates');
+      setAllTemplates(json.data || []);
+    } catch (e: any) {
+      setAllTemplatesError(e?.message || 'Erro ao carregar templates');
+    } finally {
+      setLoadingAllTemplates(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannel?.type, selectedChannel?.id]);
+
+  const openMetaBroadcastPanel = () => {
+    setActiveView('broadcast_meta');
+    void loadAllTemplates();
+  };
+
+  const selectMetaBroadcastTemplate = (t: MetaTemplate) => {
+    setMetaBroadcastTemplate(t);
+    setMetaBroadcastTemplateVars(Array.from({ length: templateVarCount(t) }, () => ''));
+  };
+
+  const resetMetaBroadcastForm = () => {
+    setMetaBroadcastTitle('');
+    setMetaBroadcastTemplate(null);
+    setMetaBroadcastTemplateVars([]);
+    setMetaBroadcastContacts([]);
+    setMetaBroadcastContactsFileName('');
+    setMetaBroadcastDelayMode('random');
+    setMetaBroadcastDelaySeconds(120);
+    setMetaBroadcastDelayMin(120);
+    setMetaBroadcastDelayMax(240);
+    setMetaBroadcastError(null);
+  };
+
+  const handleMetaBroadcastFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMetaBroadcastContactsFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const parsed = parseBroadcastCsv(text);
+      setMetaBroadcastContacts(parsed);
+      if (parsed.length === 0) setMetaBroadcastError('Nenhum contato válido encontrado no arquivo.');
+      else setMetaBroadcastError(null);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const createMetaBroadcast = async () => {
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official' || creatingMetaBroadcast) return;
+    if (!metaBroadcastTemplate) { setMetaBroadcastError('Selecione um template'); return; }
+    if (metaBroadcastContacts.length === 0) { setMetaBroadcastError('Envie um CSV com ao menos um contato'); return; }
+    if (metaBroadcastTemplateVars.some((v) => !v.trim())) {
+      setMetaBroadcastError('Preencha todas as variáveis do template (use {{nome}} para personalizar pelo nome do contato)');
+      return;
+    }
+    setCreatingMetaBroadcast(true);
+    setMetaBroadcastError(null);
+    try {
+      const res = await fetch('/api/chat/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          channel_type: 'whatsapp_official',
+          whatsapp_config_id: selectedChannel.id,
+          title: metaBroadcastTitle || undefined,
+          template_name: metaBroadcastTemplate.name,
+          template_language: metaBroadcastTemplate.language,
+          template_params: metaBroadcastTemplateVars,
+          template_body_pattern: templateBodyText(metaBroadcastTemplate),
+          contacts: metaBroadcastContacts,
+          delay_mode: metaBroadcastDelayMode,
+          delay_seconds: metaBroadcastDelaySeconds,
+          delay_min_seconds: metaBroadcastDelayMin,
+          delay_max_seconds: metaBroadcastDelayMax,
+        }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!result.success) { setMetaBroadcastError(result.error ?? 'Erro ao criar disparo'); return; }
+      const newJob = result.data as BroadcastJob;
+      resetMetaBroadcastForm();
+      setBroadcastJob(newJob);
+      setBroadcastProgress({ current: 0, total: metaBroadcastContacts.length });
+      setBroadcastLog([]);
+      broadcastAbortRef.current = false;
+      loadBroadcastJobs();
+      runBroadcast(newJob.id, metaBroadcastContacts.length);
+    } catch {
+      setMetaBroadcastError('Erro de rede');
+    } finally {
+      setCreatingMetaBroadcast(false);
+    }
+  };
+
   // ── Contato: abrir modal ───────────────────────────────────────────────────
   const openContactModal = () => {
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -3191,6 +3316,24 @@ export default function ChatPage() {
                     )}
                   </button>
                 )}
+
+                {/* Disparo em Massa por template — apenas WhatsApp Oficial, admin/super_admin */}
+                {selectedChannel?.type === 'whatsapp_official' && canSelectChannel && (
+                  <button
+                    onClick={openMetaBroadcastPanel}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
+                      activeView === 'broadcast_meta'
+                        ? 'bg-[#E86A24] text-white shadow-md shadow-[#E86A24]/25'
+                        : 'text-gray-300 hover:bg-[#E86A24]/10'
+                    }`}
+                  >
+                    <Radio className="w-5 h-5" />
+                    Disparo em Massa
+                    {broadcastRunning && broadcastJob?.channel_type === 'whatsapp_official' && (
+                      <span className="ml-auto w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                    )}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -3355,7 +3498,7 @@ export default function ChatPage() {
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {selectedChannel?.type !== 'evolution' ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">Disponível apenas para canais Evolution.</p>
-                ) : broadcastJob ? (
+                ) : broadcastJob && broadcastJob.channel_type !== 'whatsapp_official' ? (
                   /* ── Progresso do disparo ── */
                   <div className="space-y-4">
                     <div>
@@ -3575,11 +3718,11 @@ export default function ChatPage() {
                     </button>
 
                     {/* Histórico de disparos */}
-                    {broadcastJobs.length > 0 && (
+                    {broadcastJobs.filter((job) => job.channel_type !== 'whatsapp_official').length > 0 && (
                       <div>
                         <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Disparos anteriores</p>
                         <div className="space-y-2 max-h-48 overflow-y-auto">
-                          {broadcastJobs.map((job) => (
+                          {broadcastJobs.filter((job) => job.channel_type !== 'whatsapp_official').map((job) => (
                             <div
                               key={job.id}
                               className="p-2.5 rounded-lg border border-[#E86A24]/12 cursor-pointer hover:border-[#E86A24] transition-colors"
@@ -3607,6 +3750,336 @@ export default function ChatPage() {
                               </div>
                               <p className="text-xs text-gray-400 mt-0.5">
                                 {job.current_index}/{job.total_count} • {job.instance_name}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : activeView === 'broadcast_meta' ? (
+            /* ── Vista Disparo em Massa por Template (WhatsApp Oficial) ── */
+            <div className="min-w-0 flex-1 md:w-96 md:flex-shrink-0 overflow-hidden zap-chat-panel border-r border-[#E86A24]/10 flex flex-col">
+              <div className="flex-shrink-0 p-4 border-b border-[#E86A24]/10 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-5 h-5 text-[#E86A24]" />
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Disparo em Massa (Templates)</h3>
+                  {broadcastRunning && broadcastJob?.channel_type === 'whatsapp_official' && (
+                    <span className="text-xs text-green-500 font-medium animate-pulse">• Executando</span>
+                  )}
+                </div>
+                {broadcastJob && broadcastJob.channel_type === 'whatsapp_official' && !broadcastRunning && broadcastJob.status !== 'completed' && broadcastJob.status !== 'cancelled' && (
+                  <button
+                    onClick={resumeBroadcast}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg text-white"
+                    style={{ backgroundColor: '#E86A24' }}
+                  >
+                    <Play className="w-3 h-3" /> Retomar
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {selectedChannel?.type !== 'whatsapp_official' ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Disponível apenas para canais WhatsApp Oficial.</p>
+                ) : broadcastJob && broadcastJob.channel_type === 'whatsapp_official' ? (
+                  /* ── Progresso do disparo por template ── */
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{broadcastJob.title}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          broadcastJob.status === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                          : broadcastJob.status === 'running' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                          : broadcastJob.status === 'paused' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                          : broadcastJob.status === 'cancelled' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>
+                          {broadcastJob.status === 'completed' ? 'Concluído'
+                           : broadcastJob.status === 'running' ? 'Enviando...'
+                           : broadcastJob.status === 'paused' ? 'Pausado'
+                           : broadcastJob.status === 'cancelled' ? 'Cancelado'
+                           : 'Aguardando'}
+                        </span>
+                      </div>
+
+                      {/* Barra de progresso */}
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1">
+                        <div
+                          className="h-2 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${broadcastJob.total_count > 0 ? Math.round(((broadcastProgress?.current ?? broadcastJob.current_index) / broadcastJob.total_count) * 100) : 0}%`,
+                            backgroundColor: '#E86A24',
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 text-right">
+                        {broadcastProgress?.current ?? broadcastJob.current_index} / {broadcastJob.total_count} enviados
+                      </p>
+                    </div>
+
+                    {/* Botões de controle */}
+                    <div className="flex gap-2">
+                      {broadcastRunning ? (
+                        <button
+                          onClick={pauseBroadcast}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium"
+                        >
+                          <Pause className="w-4 h-4" /> Pausar
+                        </button>
+                      ) : broadcastJob.status !== 'completed' && broadcastJob.status !== 'cancelled' ? (
+                        <button
+                          onClick={resumeBroadcast}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-medium"
+                          style={{ backgroundColor: '#E86A24' }}
+                        >
+                          <Play className="w-4 h-4" /> Retomar
+                        </button>
+                      ) : null}
+                      {broadcastJob.status !== 'completed' && (
+                        <button
+                          onClick={cancelBroadcast}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white text-sm font-medium"
+                        >
+                          <StopCircle className="w-4 h-4" /> Cancelar
+                        </button>
+                      )}
+                      {(broadcastJob.status === 'completed' || broadcastJob.status === 'cancelled') && (
+                        <button
+                          onClick={() => { setBroadcastJob(null); setBroadcastLog([]); setBroadcastProgress(null); resetMetaBroadcastForm(); }}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium"
+                        >
+                          <RotateCcw className="w-4 h-4" /> Novo disparo
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Log em tempo real */}
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Log de envio</p>
+                      <div className="h-48 overflow-y-auto rounded-lg border border-[#E86A24]/12 bg-[#160f0a]/60 p-2 space-y-1 text-xs font-mono">
+                        {broadcastLog.length === 0 && (
+                          <p className="text-gray-400 text-center py-4">Nenhum envio ainda...</p>
+                        )}
+                        {broadcastLog.map((entry, i) => (
+                          <div key={i} className={`flex items-start gap-2 ${entry.success ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                            <span>{entry.success ? '✓' : '✗'}</span>
+                            <span className="truncate">{entry.name ? `${entry.name} (${entry.phone})` : entry.phone}</span>
+                            {entry.error && <span className="text-gray-400 truncate">— {entry.error}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Formulário de criação de disparo por template ── */
+                  <div className="space-y-4">
+                    {metaBroadcastError && (
+                      <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
+                        {metaBroadcastError}
+                      </div>
+                    )}
+
+                    {/* Título */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Título (opcional)</label>
+                      <input
+                        type="text"
+                        value={metaBroadcastTitle}
+                        onChange={(e) => setMetaBroadcastTitle(e.target.value)}
+                        placeholder="Ex: Promoção de julho"
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                      />
+                    </div>
+
+                    {/* Template */}
+                    {!metaBroadcastTemplate ? (
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Template</label>
+                        {loadingAllTemplates ? (
+                          <div className="flex items-center gap-2 text-sm text-gray-400">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+                          </div>
+                        ) : allTemplatesError ? (
+                          <p className="text-xs text-red-500">{allTemplatesError}</p>
+                        ) : (
+                          <div className="space-y-2 max-h-52 overflow-y-auto">
+                            {allTemplates.filter((t) => t.status === 'APPROVED').length === 0 ? (
+                              <p className="text-xs text-gray-500 dark:text-gray-400 py-3">Nenhum template aprovado disponível.</p>
+                            ) : (
+                              allTemplates
+                                .filter((t) => t.status === 'APPROVED')
+                                .map((t) => (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => selectMetaBroadcastTemplate(t)}
+                                    className="flex w-full flex-col items-start gap-1 rounded-lg border border-gray-300 dark:border-[#404040] p-3 text-left hover:border-[#E86A24] transition-colors"
+                                  >
+                                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                                      {t.name} <span className="text-[10px] text-gray-400">({t.language})</span>
+                                    </span>
+                                    <span className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">{templateBodyText(t)}</span>
+                                  </button>
+                                ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="rounded-lg border border-[#E86A24]/12 p-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">{metaBroadcastTemplate.name}</p>
+                            <button type="button" onClick={() => setMetaBroadcastTemplate(null)} className="text-[11px] text-gray-500 hover:text-gray-900 dark:hover:text-white">Trocar</button>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap">{renderTemplateBody(metaBroadcastTemplate, metaBroadcastTemplateVars)}</p>
+                        </div>
+                        {metaBroadcastTemplateVars.length > 0 && (
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            Dica: use <code className="px-1 rounded bg-gray-100 dark:bg-[#333]">{'{{nome}}'}</code> em uma variável para personalizar com o nome de cada contato do CSV.
+                          </p>
+                        )}
+                        {metaBroadcastTemplateVars.map((v, i) => (
+                          <div key={i}>
+                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Variável {`{{${i + 1}}}`}</label>
+                            <input
+                              value={v}
+                              onChange={(e) => setMetaBroadcastTemplateVars((prev) => prev.map((x, idx) => (idx === i ? e.target.value : x)))}
+                              className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-[#E86A24] focus:border-[#E86A24] bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                            />
+                          </div>
+                        ))}
+
+                        {/* Import de contatos via CSV */}
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                            Contatos (.csv)
+                          </label>
+                          <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 dark:border-[#404040] cursor-pointer hover:border-[#E86A24] transition-colors">
+                            <Upload className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                              {metaBroadcastContactsFileName || 'Selecionar arquivo .csv (telefone, nome)'}
+                            </span>
+                            <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleMetaBroadcastFileUpload} />
+                          </label>
+                          {metaBroadcastContacts.length > 0 && (
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                              ✓ {metaBroadcastContacts.length} contato(s) carregado(s)
+                            </p>
+                          )}
+                          <p className="text-xs text-gray-400 mt-1">
+                            CSV com colunas: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">telefone</code> e <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">nome</code> (opcional)
+                          </p>
+                        </div>
+
+                        {/* Intervalo entre disparos */}
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">
+                            Intervalo entre contatos
+                          </label>
+                          <div className="flex gap-2 mb-2">
+                            <button
+                              type="button"
+                              onClick={() => setMetaBroadcastDelayMode('random')}
+                              className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${metaBroadcastDelayMode === 'random' ? 'text-white' : 'bg-gray-100 text-gray-600 dark:bg-[#333] dark:text-gray-300'}`}
+                              style={metaBroadcastDelayMode === 'random' ? { backgroundColor: '#E86A24' } : undefined}
+                            >
+                              Aleatório
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMetaBroadcastDelayMode('fixed')}
+                              className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium ${metaBroadcastDelayMode === 'fixed' ? 'text-white' : 'bg-gray-100 text-gray-600 dark:bg-[#333] dark:text-gray-300'}`}
+                              style={metaBroadcastDelayMode === 'fixed' ? { backgroundColor: '#E86A24' } : undefined}
+                            >
+                              Fixo
+                            </button>
+                          </div>
+                          {metaBroadcastDelayMode === 'random' ? (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={1}
+                                value={metaBroadcastDelayMin}
+                                onChange={(e) => setMetaBroadcastDelayMin(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                              />
+                              <span className="text-xs text-gray-500 flex-shrink-0">a</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={metaBroadcastDelayMax}
+                                onChange={(e) => setMetaBroadcastDelayMax(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                              />
+                              <span className="text-xs text-gray-500 flex-shrink-0">seg</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={10}
+                                value={metaBroadcastDelaySeconds}
+                                onChange={(e) => setMetaBroadcastDelaySeconds(Math.max(10, parseInt(e.target.value, 10) || 10))}
+                                className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-[#333] text-gray-900 dark:text-gray-100 border-gray-300 dark:border-[#404040]"
+                              />
+                              <span className="text-xs text-gray-500 flex-shrink-0">seg</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Botão iniciar */}
+                        <button
+                          onClick={createMetaBroadcast}
+                          disabled={creatingMetaBroadcast || metaBroadcastContacts.length === 0}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          style={{ backgroundColor: '#E86A24' }}
+                        >
+                          {creatingMetaBroadcast
+                            ? <><Loader2 className="w-4 h-4 animate-spin" /> Iniciando...</>
+                            : <><Send className="w-4 h-4" /> Iniciar disparo ({metaBroadcastContacts.length} contatos)</>
+                          }
+                        </button>
+                      </>
+                    )}
+
+                    {/* Histórico de disparos por template */}
+                    {broadcastJobs.filter((job) => job.channel_type === 'whatsapp_official').length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Disparos anteriores</p>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {broadcastJobs.filter((job) => job.channel_type === 'whatsapp_official').map((job) => (
+                            <div
+                              key={job.id}
+                              className="p-2.5 rounded-lg border border-[#E86A24]/12 cursor-pointer hover:border-[#E86A24] transition-colors"
+                              onClick={() => {
+                                setBroadcastJob(job);
+                                setBroadcastProgress({ current: job.current_index, total: job.total_count });
+                                setBroadcastLog([]);
+                              }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium text-gray-700 dark:text-gray-200 truncate">{job.title}</span>
+                                <span className={`text-xs ml-2 flex-shrink-0 ${
+                                  job.status === 'completed' ? 'text-green-500'
+                                  : job.status === 'running' ? 'text-blue-500'
+                                  : job.status === 'paused' ? 'text-amber-500'
+                                  : job.status === 'cancelled' ? 'text-red-500'
+                                  : 'text-gray-400'
+                                }`}>
+                                  {job.status === 'completed' ? '✓ Concluído'
+                                   : job.status === 'running' ? '⟳ Em execução'
+                                   : job.status === 'paused' ? '⏸ Pausado'
+                                   : job.status === 'cancelled' ? '✗ Cancelado'
+                                   : '○ Pendente'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                {job.current_index}/{job.total_count} • {job.template_name || job.title}
                               </p>
                             </div>
                           ))}
