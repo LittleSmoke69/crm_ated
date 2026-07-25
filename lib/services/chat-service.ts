@@ -25,6 +25,11 @@ export interface ChatMessage {
   media_filename?: string;
   media_recovery_status?: 'pending' | 'ready' | 'failed';
   media_recovery_attempts?: number;
+  /** Preenchidos quando media_type = 'template' (disparo de template Meta): nome/idioma cadastrados na WABA. */
+  template_name?: string | null;
+  template_language?: string | null;
+  /** Components enviados à Cloud API (variáveis preenchidas) — auditoria/depuração. */
+  template_components?: unknown;
   caption?: string;
   status?: string;
   timestamp: number;

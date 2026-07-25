@@ -20,6 +20,12 @@ function buildUrl(config: WhatsAppOfficialConfig, path: string): string {
   return `${base}/v${version}/${config.phone_number_id}${path}`;
 }
 
+function buildGraphUrl(config: WhatsAppOfficialConfig, nodeId: string, pathAndQuery: string): string {
+  const base = 'https://graph.facebook.com';
+  const version = (config.graph_version || DEFAULT_GRAPH_VERSION).replace(/^v/, '');
+  return `${base}/v${version}/${nodeId}${pathAndQuery}`;
+}
+
 function sanitizeMetaResponseText(text: string): string {
   // Evita logs gigantes (HTML inteiro, payloads longos etc.)
   return text.length > 2000 ? `${text.slice(0, 2000)}... [truncated]` : text;
@@ -189,6 +195,109 @@ export async function sendDocument(
   }
 
   return postMessages(config, body, 'sendDocument');
+}
+
+export interface MetaTemplateButton {
+  type: string;
+  text?: string;
+  url?: string;
+  phone_number?: string;
+}
+
+export interface MetaTemplateComponent {
+  type: 'HEADER' | 'BODY' | 'FOOTER' | 'BUTTONS' | string;
+  format?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | string;
+  text?: string;
+  buttons?: MetaTemplateButton[];
+  example?: { header_text?: string[]; body_text?: string[][] };
+}
+
+export interface MetaTemplate {
+  id: string;
+  name: string;
+  language: string;
+  category: string;
+  status: string;
+  components: MetaTemplateComponent[];
+}
+
+/**
+ * Lista os templates cadastrados na conta WABA (aprovados, pendentes e rejeitados —
+ * a UI decide o que oferecer para disparo). Pagina automaticamente (limit=200/página).
+ */
+export async function listApprovedTemplates(config: WhatsAppOfficialConfig): Promise<MetaTemplate[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+  const templates: MetaTemplate[] = [];
+  let url = buildGraphUrl(
+    config,
+    config.waba_id,
+    '/message_templates?fields=name,language,category,status,components&limit=200'
+  );
+
+  try {
+    while (url) {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${config.access_token}` },
+        signal: controller.signal,
+      });
+      const rawText = await res.text();
+      let parsed: any = null;
+      try {
+        parsed = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        parsed = null;
+      }
+      if (!res.ok) {
+        const safeText = sanitizeMetaResponseText(rawText);
+        throw new Error(`WhatsApp API ${res.status}: ${safeText}`);
+      }
+      for (const row of (parsed?.data ?? []) as MetaTemplate[]) {
+        templates.push(row);
+      }
+      url = parsed?.paging?.next ?? '';
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return templates;
+}
+
+export interface MetaTemplateSendComponent {
+  type: 'header' | 'body' | 'button';
+  sub_type?: 'quick_reply' | 'url';
+  index?: number;
+  parameters: Array<{ type: 'text'; text: string }>;
+}
+
+/**
+ * Dispara um template aprovado — único tipo de mensagem aceito pela Meta fora da
+ * janela de 24h (usado para reabrir conversas). `components` traz as variáveis
+ * já preenchidas pelo agente, no formato exigido pela Cloud API.
+ */
+export async function sendTemplate(
+  config: WhatsAppOfficialConfig,
+  to: string,
+  template: { name: string; language: string; components?: MetaTemplateSendComponent[] },
+  replyToMessageId?: string
+): Promise<{ messages: Array<{ id: string }> }> {
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: to.replace(/\D/g, ''),
+    type: 'template',
+    template: {
+      name: template.name,
+      language: { code: template.language },
+      ...(template.components && template.components.length > 0 ? { components: template.components } : {}),
+    },
+  };
+  if (replyToMessageId) {
+    body.context = { message_id: replyToMessageId };
+  }
+
+  return postMessages(config, body, 'sendTemplate');
 }
 
 export type WhatsAppAudioSendMedia =

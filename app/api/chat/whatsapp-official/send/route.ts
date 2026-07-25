@@ -54,7 +54,7 @@ async function resolveMetaMediaInBackground(
   }
 }
 
-type SendType = 'text' | 'image' | 'audio' | 'video' | 'document';
+type SendType = 'text' | 'image' | 'audio' | 'video' | 'document' | 'template';
 
 export async function POST(req: NextRequest) {
   try {
@@ -72,6 +72,10 @@ export async function POST(req: NextRequest) {
       caption,
       filename,
       reply_to_message_id: replyToMessageId,
+      template_name: templateName,
+      template_language: templateLanguage,
+      template_params: templateParams,
+      template_rendered_text: templateRenderedText,
     } = body as {
       config_id?: string;
       to?: string;
@@ -83,6 +87,10 @@ export async function POST(req: NextRequest) {
       caption?: string;
       filename?: string;
       reply_to_message_id?: string;
+      template_name?: string;
+      template_language?: string;
+      template_params?: string[];
+      template_rendered_text?: string;
     };
 
     if (!config_id || !to || !type) {
@@ -90,8 +98,11 @@ export async function POST(req: NextRequest) {
     }
 
     const sendType = type as SendType;
-    if (!['text', 'image', 'audio', 'video', 'document'].includes(sendType)) {
-      return errorResponse('type deve ser text, image, audio, video ou document', 400);
+    if (!['text', 'image', 'audio', 'video', 'document', 'template'].includes(sendType)) {
+      return errorResponse('type deve ser text, image, audio, video, document ou template', 400);
+    }
+    if (sendType === 'template' && (!templateName || !templateLanguage)) {
+      return errorResponse('template_name e template_language são obrigatórios quando type=template', 400);
     }
 
     if (sendType === 'text' && (bodyText == null || String(bodyText).trim() === '')) {
@@ -161,7 +172,8 @@ export async function POST(req: NextRequest) {
       : null;
     const isWithin24h = lastCustomerAt != null && Date.now() - lastCustomerAt < WINDOW_24H_MS;
 
-    if (!isWithin24h) {
+    // Template é o único tipo aceito pela Meta fora da janela de 24h — pula o bloqueio.
+    if (!isWithin24h && sendType !== 'template') {
       return errorResponse(
         'Fora da janela de 24h: o contato não enviou mensagem nas últimas 24 horas. Use mensagem template para iniciar ou reabrir a conversa.',
         400
@@ -222,7 +234,19 @@ export async function POST(req: NextRequest) {
           docFilename,
           replyToMessageId
         );
-      } else {
+      } else if (sendType === 'template') {
+        const params = Array.isArray(templateParams) ? templateParams.filter((p) => typeof p === 'string') : [];
+        const components =
+          params.length > 0
+            ? [{ type: 'body' as const, parameters: params.map((t) => ({ type: 'text' as const, text: t })) }]
+            : undefined;
+        metaResponse = await whatsappOfficial.sendTemplate(
+          configForApi,
+          normalizedTo,
+          { name: String(templateName), language: String(templateLanguage), components },
+          replyToMessageId
+        );
+      } else if (sendType === 'audio') {
         const audioMedia =
           meta_id && String(meta_id).trim()
             ? { id: String(meta_id).trim(), voice: true as const }
@@ -239,6 +263,8 @@ export async function POST(req: NextRequest) {
           audioMedia,
           replyToMessageId
         );
+      } else {
+        throw new Error(`Tipo de envio não suportado: ${sendType}`);
       }
     } catch (err: unknown) {
       const e = err as Error & { name?: string };
@@ -266,12 +292,12 @@ export async function POST(req: NextRequest) {
       title: normalizedTo,
       is_group: false,
       last_message_at: new Date().toISOString(),
-      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : sendType === 'video' ? `Vídeo${caption ? `: ${caption}` : ''}` : sendType === 'document' ? `Documento${caption ? `: ${caption}` : ''}` : 'Áudio',
+      last_message_preview: sendType === 'text' ? (bodyText || '').slice(0, 100) : sendType === 'template' ? `Template: ${templateName}` : sendType === 'image' ? `Imagem${caption ? `: ${caption}` : ''}` : sendType === 'video' ? `Vídeo${caption ? `: ${caption}` : ''}` : sendType === 'document' ? `Documento${caption ? `: ${caption}` : ''}` : 'Áudio',
     };
 
     const conversation = await chatService.upsertConversation(conversationData);
 
-    const resolvedMediaUrl = sendType !== 'text' ? (media_url || undefined) : undefined;
+    const resolvedMediaUrl = sendType !== 'text' && sendType !== 'template' ? (media_url || undefined) : undefined;
 
     const messageData = {
       instance_id: null,
@@ -286,15 +312,24 @@ export async function POST(req: NextRequest) {
       text:
         sendType === 'text'
           ? String(bodyText).trim()
-          : sendType === 'audio'
-            ? 'Nota de voz'
-            : '',
+          : sendType === 'template'
+            ? (typeof templateRenderedText === 'string' && templateRenderedText.trim()) || String(templateName)
+            : sendType === 'audio'
+              ? 'Nota de voz'
+              : '',
       media_type: sendType === 'text' ? 'text' : sendType,
       media_url: resolvedMediaUrl,
       provider_media_id: meta_id || undefined,
       media_mime_type: media_mime_type || undefined,
       media_filename: typeof filename === 'string' ? filename.trim() || undefined : undefined,
-      media_recovery_status: sendType === 'text' ? undefined : resolvedMediaUrl ? 'ready' as const : 'pending' as const,
+      media_recovery_status: sendType === 'text' || sendType === 'template' ? undefined : resolvedMediaUrl ? 'ready' as const : 'pending' as const,
+      template_name: sendType === 'template' ? String(templateName) : undefined,
+      template_language: sendType === 'template' ? String(templateLanguage) : undefined,
+      template_components: sendType === 'template'
+        ? (Array.isArray(templateParams) && templateParams.length > 0
+            ? [{ type: 'body', parameters: templateParams.filter((p) => typeof p === 'string').map((t) => ({ type: 'text', text: t })) }]
+            : null)
+        : undefined,
       caption:
         sendType === 'document'
           ? (typeof filename === 'string' && filename.trim()) ||

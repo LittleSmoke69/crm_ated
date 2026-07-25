@@ -60,6 +60,7 @@ import {
   History,
   ListFilter,
   Pencil,
+  LayoutTemplate,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -74,13 +75,29 @@ interface Message {
   timestamp: number;
   created_at: string;
   from_me: boolean;
-  media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | null;
+  media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'template' | null;
   media_url?: string | null;
   caption?: string | null;
   sender_jid?: string | null;
   whatsapp_config_id?: string | null;
   instance_id?: string | null;
   provider?: 'evolution' | 'whatsapp_official' | null;
+  template_name?: string | null;
+}
+
+interface MetaTemplateComponent {
+  type: string;
+  format?: string;
+  text?: string;
+}
+
+interface MetaTemplate {
+  id: string;
+  name: string;
+  language: string;
+  category: string;
+  status: string;
+  components: MetaTemplateComponent[];
 }
 
 interface Conversation {
@@ -782,6 +799,16 @@ function MessageContent({
       {msg.caption && msg.media_type && msg.media_type !== 'text' && msg.media_type !== 'document' && (
         <p className={`text-sm mt-1 ${textClass}`}>{msg.caption}</p>
       )}
+      {msg.media_type === 'template' && (
+        <div>
+          <span className="inline-flex items-center gap-1 rounded bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide mb-1">
+            📋 Template: {msg.template_name || 'sem nome'}
+          </span>
+          {msg.text != null && msg.text !== '' && (
+            <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+          )}
+        </div>
+      )}
       {(!msg.media_type || msg.media_type === 'text') && msg.text != null && msg.text !== '' && (
         <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
       )}
@@ -927,6 +954,15 @@ export default function ChatPage() {
   const [videoUploadProgress, setVideoUploadProgress] = useState<number | null>(null);
   const [videoUploadStage, setVideoUploadStage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Templates (WhatsApp Cloud API / Meta) — disparo fora da janela de 24h
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [templates, setTemplates] = useState<MetaTemplate[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
+  const [templateVarValues, setTemplateVarValues] = useState<string[]>([]);
+  const [sendingTemplate, setSendingTemplate] = useState(false);
   // Cache de conversas por canal — permite exibição imediata ao trocar de canal
   const conversationsCacheRef = useRef<Record<string, Conversation[]>>({});
   const selectedConversationIdRef = useRef('');
@@ -3569,6 +3605,89 @@ export default function ChatPage() {
     }
   };
 
+  // ── Templates (WhatsApp Cloud API / Meta) ──────────────────────────────────
+  const templateBodyText = (t: MetaTemplate): string =>
+    t.components?.find((c) => c.type === 'BODY')?.text || '';
+
+  const templateVarCount = (t: MetaTemplate): number => {
+    const matches = templateBodyText(t).match(/\{\{\d+\}\}/g);
+    return matches ? new Set(matches).size : 0;
+  };
+
+  const renderTemplateBody = (t: MetaTemplate, values: string[]): string => {
+    let out = templateBodyText(t);
+    values.forEach((v, i) => {
+      out = out.split(`{{${i + 1}}}`).join(v || `{{${i + 1}}}`);
+    });
+    return out;
+  };
+
+  const openTemplatePicker = async () => {
+    setShowTemplatePicker(true);
+    setSelectedTemplate(null);
+    setTemplateVarValues([]);
+    if (!selectedChannel || selectedChannel.type !== 'whatsapp_official') return;
+    setLoadingTemplates(true);
+    setTemplatesError(null);
+    try {
+      const res = await fetch(`/api/chat/whatsapp-official/templates?config_id=${selectedChannel.id}`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'Erro ao carregar templates');
+      setTemplates((json.data || []).filter((t: MetaTemplate) => t.status === 'APPROVED'));
+    } catch (e: any) {
+      setTemplatesError(e?.message || 'Erro ao carregar templates');
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  const selectTemplateForSend = (t: MetaTemplate) => {
+    setSelectedTemplate(t);
+    setTemplateVarValues(Array.from({ length: templateVarCount(t) }, () => ''));
+  };
+
+  const submitTemplateSend = async () => {
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (!selectedTemplate || !selectedChannel || !conv || sendingTemplate) return;
+    setSendingTemplate(true);
+    setTemplatesError(null);
+    try {
+      const to = conv.remote_jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+      const res = await fetch('/api/chat/whatsapp-official/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          config_id: selectedChannel.id,
+          to,
+          type: 'template',
+          template_name: selectedTemplate.name,
+          template_language: selectedTemplate.language,
+          template_params: templateVarValues,
+          template_rendered_text: renderTemplateBody(selectedTemplate, templateVarValues),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || json.message || 'Falha ao enviar template');
+      const saved = json.data?.message as (Message & { timestamp: number | string }) | undefined;
+      if (saved?.id) {
+        const msg: Message = {
+          ...saved,
+          timestamp: typeof saved.timestamp === 'string' ? parseInt(saved.timestamp, 10) : saved.timestamp,
+        };
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      }
+      setShowTemplatePicker(false);
+      setSelectedTemplate(null);
+    } catch (e: any) {
+      setTemplatesError(e?.message || 'Falha ao enviar template');
+    } finally {
+      setSendingTemplate(false);
+    }
+  };
+
   // ── Contato: abrir modal ───────────────────────────────────────────────────
   const openContactModal = () => {
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -4278,6 +4397,69 @@ export default function ChatPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Layout onSignOut={handleSignOut}>
+      {showTemplatePicker && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60" onClick={() => setShowTemplatePicker(false)}>
+          <div className="bg-white dark:bg-[#2a2a2a] w-full max-w-lg rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between flex-shrink-0">
+              <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2"><LayoutTemplate className="w-4 h-4" /> Enviar template</h3>
+              <button onClick={() => setShowTemplatePicker(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
+            </div>
+
+            {templatesError && (
+              <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300 flex-shrink-0">
+                {templatesError}
+              </div>
+            )}
+
+            {!selectedTemplate ? (
+              <div className="overflow-y-auto space-y-2">
+                {loadingTemplates ? (
+                  <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-[#E86A24]" /></div>
+                ) : templates.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum template aprovado disponível nesta conta.</p>
+                ) : (
+                  templates.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => selectTemplateForSend(t)}
+                      className="flex w-full flex-col items-start gap-1 rounded-lg border border-gray-200 dark:border-gray-600 p-3 text-left hover:border-[#E86A24]"
+                    >
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{t.name} <span className="text-[10px] text-gray-400">({t.language})</span></span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">{templateBodyText(t)}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="overflow-y-auto space-y-3">
+                <button onClick={() => setSelectedTemplate(null)} className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">← Voltar para a lista</button>
+                <div className="rounded-lg border border-gray-200 dark:border-gray-600 p-3">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">{selectedTemplate.name}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap">{renderTemplateBody(selectedTemplate, templateVarValues)}</p>
+                </div>
+                {templateVarValues.map((v, i) => (
+                  <div key={i}>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Variável {`{{${i + 1}}}`}</label>
+                    <input
+                      value={v}
+                      onChange={(e) => setTemplateVarValues((prev) => prev.map((x, idx) => (idx === i ? e.target.value : x)))}
+                      className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#1a120d] px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-[#E86A24] focus:outline-none"
+                    />
+                  </div>
+                ))}
+                <button
+                  onClick={submitTemplateSend}
+                  disabled={sendingTemplate || templateVarValues.some((v) => !v.trim())}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-white disabled:opacity-50"
+                  style={{ backgroundColor: '#E86A24' }}
+                >
+                  {sendingTemplate && <Loader2 className="w-4 h-4 animate-spin" />} Enviar template
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {mediaModal && (
         <MediaModal
           url={mediaModal.url}
@@ -6764,6 +6946,19 @@ export default function ChatPage() {
                     >
                       <ImageIcon className="w-4 h-4" />
                     </button>
+                    {selectedChannel?.type === 'whatsapp_official' && (
+                      <button
+                        type="button"
+                        onClick={openTemplatePicker}
+                        className={`p-2 sm:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#333] flex items-center gap-1 ${
+                          !canSendFreeMessage ? 'text-[#E86A24]' : 'text-gray-500 dark:text-gray-400'
+                        }`}
+                        title="Enviar template"
+                      >
+                        <LayoutTemplate className="w-4 h-4" />
+                        {!canSendFreeMessage && <span className="text-[10px] font-bold hidden sm:inline">Template</span>}
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-end gap-2">
                     <div className="flex-1 min-w-0">
