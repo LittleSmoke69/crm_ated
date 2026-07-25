@@ -54,6 +54,9 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
   // ── Snapshots VTurb (academy) — diário 2h UTC ──────────────────────────────
   // Timeout maior: snapshot completo pode ler muitos vídeos.
   { name: 'academy-vturb-snapshots',    cron: '0 2 * * *', timeout_s: 900 },
+
+  // ── E-mails: newsletters agendadas (Admin > E-mails) ───────────────────────
+  { name: 'send-scheduled-newsletters', cron: '*/1 * * * *' },
 ];
 
 export const SCHEDULED_JOB_NAMES = new Set(SCHEDULED_JOBS.map((job) => job.name));
