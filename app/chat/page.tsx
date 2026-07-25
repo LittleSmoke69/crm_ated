@@ -2788,12 +2788,34 @@ export default function ChatPage() {
               </div>
               <button onClick={() => setAssignmentOpen(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
             </div>
+            {(() => {
+              if (assignmentIds.length !== 1) return null;
+              const conv = conversations.find((c) => c.id === assignmentIds[0]);
+              if (!conv) return null;
+              const current = userStatus === 'gerente' ? conv.assignee : conv.gerente;
+              if (!current) return null;
+              return (
+                <div className="mb-3 rounded-lg border border-[#E86A24]/40 bg-[#E86A24]/10 px-3 py-2 text-xs text-gray-200">
+                  Atualmente atribuída a <span className="font-semibold text-[#E86A24]">{current.full_name || current.username}</span>
+                  {' '}({userStatus === 'gerente' ? 'captador' : 'gerente'})
+                </div>
+              );
+            })()}
             <div className="max-h-80 space-y-2 overflow-y-auto">
               {assignees.map((person) => {
                 const online = !!person.last_seen_at && Date.now() - new Date(person.last_seen_at).getTime() < 90_000;
+                const conv = assignmentIds.length === 1 ? conversations.find((c) => c.id === assignmentIds[0]) : undefined;
+                const currentId = userStatus === 'gerente' ? conv?.assignee?.id : conv?.gerente?.id;
+                const isCurrent = !!currentId && currentId === person.id;
                 return (
-                  <button key={person.id} disabled={assigning} onClick={() => submitAssignment(person.id)} className="flex w-full items-center justify-between rounded-lg border border-[#404040] p-3 text-left hover:border-[#E86A24] disabled:opacity-60">
-                    <span><span className="block text-sm font-medium text-white">{person.full_name || person.username}</span><span className="text-xs text-gray-400">@{person.username || 'sem-username'}</span></span>
+                  <button key={person.id} disabled={assigning} onClick={() => submitAssignment(person.id)} className={`flex w-full items-center justify-between rounded-lg border p-3 text-left hover:border-[#E86A24] disabled:opacity-60 ${isCurrent ? 'border-[#E86A24]' : 'border-[#404040]'}`}>
+                    <span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="block text-sm font-medium text-white">{person.full_name || person.username}</span>
+                        {isCurrent && <span className="rounded bg-[#E86A24]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#E86A24]">Atual</span>}
+                      </span>
+                      <span className="text-xs text-gray-400">@{person.username || 'sem-username'}</span>
+                    </span>
                     <span className={`text-xs ${online ? 'text-emerald-400' : 'text-gray-500'}`}>{online ? 'Online' : 'Offline'}</span>
                   </button>
                 );
