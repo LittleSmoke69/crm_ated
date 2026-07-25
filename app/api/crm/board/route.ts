@@ -228,21 +228,19 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// PATCH /api/crm/board — move um cliente de estágio (drag-and-drop)
+// PATCH /api/crm/board — move um cliente de estágio (drag-and-drop) OU edita nome/telefone/e-mail
 export async function PATCH(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const viewer = await getViewerContext(userId);
     const body = await req.json().catch(() => ({}));
     const leadExternalId = typeof body.lead_external_id === 'string' ? body.lead_external_id : String(body.lead_external_id ?? '');
-    const columnKey = typeof body.column_key === 'string' ? body.column_key : '';
-    if (!leadExternalId || !columnKey) return errorResponse('Dados incompletos.', 400);
+    if (!leadExternalId) return errorResponse('Dados incompletos.', 400);
 
     const ownerUserId = typeof body.owner_user_id === 'string' && body.owner_user_id ? body.owner_user_id : userId;
-    const position = Number.isFinite(body.position) ? Number(body.position) : 0;
 
     if (!viewer.canViewAll && ownerUserId !== userId) {
-      return errorResponse('Sem permissão para mover clientes de outro atendente.', 403);
+      return errorResponse('Sem permissão para alterar clientes de outro atendente.', 403);
     }
 
     if (viewer.canViewAll && viewer.status === 'admin' && viewer.tenantId) {
@@ -266,6 +264,34 @@ export async function PATCH(req: NextRequest) {
       .eq('user_id', ownerUserId)
       .maybeSingle();
     if (!lead) return errorResponse('Cliente não encontrado.', 404);
+
+    // Edição de dados cadastrais (nome/telefone/e-mail) — sinalizada pela presença de qualquer um desses campos.
+    const isInfoEdit = body.name !== undefined || body.phone !== undefined || body.email !== undefined;
+    if (isInfoEdit) {
+      const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+      if (name !== undefined && !name) return errorResponse('Nome é obrigatório.', 400);
+
+      const updates: Record<string, unknown> = {};
+      // Nome inteiro vai para a coluna `name`; zera `last_name` para não duplicar
+      // o sobrenome antigo por trás de um nome completo novo (ver GET, que concatena os dois).
+      if (name !== undefined) { updates.name = name; updates.last_name = null; }
+      if (typeof body.phone === 'string') updates.phone = body.phone.trim() || null;
+      if (typeof body.email === 'string') updates.email = body.email.trim() || null;
+
+      const { error: updateError } = await supabaseServiceRole
+        .from('crm_leads')
+        .update(updates)
+        .eq('external_id', leadExternalId)
+        .eq('user_id', ownerUserId);
+      if (updateError) return errorResponse(`Erro ao salvar cliente: ${updateError.message}`, 500);
+
+      return successResponse({ ok: true });
+    }
+
+    // Mover de estágio (drag-and-drop)
+    const columnKey = typeof body.column_key === 'string' ? body.column_key : '';
+    if (!columnKey) return errorResponse('Dados incompletos.', 400);
+    const position = Number.isFinite(body.position) ? Number(body.position) : 0;
 
     const { error } = await supabaseServiceRole.rpc('crm_move_lead', {
       p_lead_external_id: leadExternalId,

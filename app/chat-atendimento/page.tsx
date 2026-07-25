@@ -6171,23 +6171,16 @@ export default function ChatPage() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        {convContact !== undefined && (
-                          convContact ? (
-                            <button
-                              onClick={openContactModal}
-                              className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline truncate max-w-[120px]"
-                            >
-                              {convContact.name || 'Contato'}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={openContactModal}
-                              className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-0.5"
-                            >
-                              <UserPlus className="w-3 h-3" /> Salvar
-                            </button>
-                          )
-                        )}
+                        <button
+                          onClick={openContactModal}
+                          disabled={convContact === undefined}
+                          className={`text-[11px] font-medium hover:underline flex items-center gap-1 truncate max-w-[160px] disabled:opacity-50 ${
+                            convContact ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          <Pencil className="w-3 h-3 flex-shrink-0" />
+                          {convContact === undefined ? 'Contato…' : convContact ? `Editar: ${convContact.name || 'Contato'}` : 'Editar/salvar contato'}
+                        </button>
                         <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">
                           {selectedConversation.remote_jid}
                         </span>

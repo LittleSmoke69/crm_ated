@@ -8,6 +8,7 @@ import {
   FileUp,
   Loader2,
   MessageCircle,
+  Pencil,
   Search,
   Trash2,
   Upload,
@@ -164,6 +165,8 @@ export default function LeadsSection({ userId }: { userId: string }) {
   const [assignLeads, setAssignLeads] = useState<CapturedLead[] | null>(null);
   const [assignForm, setAssignForm] = useState({ gerente_id: '', captador_id: '' });
   const [viewLead, setViewLead] = useState<CapturedLead | null>(null);
+  const [editingLeadInfo, setEditingLeadInfo] = useState(false);
+  const [editLeadForm, setEditLeadForm] = useState({ name: '', phone: '', email: '' });
   const [deleteLeads, setDeleteLeads] = useState<CapturedLead[] | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -260,6 +263,24 @@ export default function LeadsSection({ userId }: { userId: string }) {
 
   const changeStatus = (lead: CapturedLead, status: string) => {
     patchLeads([lead.id], { capture_status: status }, 'Status atualizado.');
+  };
+
+  const openEditLeadInfo = (lead: CapturedLead) => {
+    setEditLeadForm({ name: lead.name || '', phone: lead.phone || '', email: lead.email || '' });
+    setEditingLeadInfo(true);
+  };
+
+  const saveLeadInfo = async () => {
+    if (!viewLead || !editLeadForm.name.trim()) return;
+    const ok = await patchLeads(
+      [viewLead.id],
+      { name: editLeadForm.name.trim(), phone: editLeadForm.phone.trim(), email: editLeadForm.email.trim() },
+      'Informações do cliente atualizadas.'
+    );
+    if (ok) {
+      setViewLead({ ...viewLead, name: editLeadForm.name.trim(), phone: editLeadForm.phone.trim(), email: editLeadForm.email.trim() });
+      setEditingLeadInfo(false);
+    }
   };
 
   const submitCreate = async (e: React.FormEvent) => {
@@ -695,7 +716,7 @@ export default function LeadsSection({ userId }: { userId: string }) {
                         >
                           <UserPlus className="w-4 h-4" />
                         </button>
-                        <button onClick={() => setViewLead(l)} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-sky-500 hover:bg-sky-500/10" title="Ver detalhes">
+                        <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-sky-500 hover:bg-sky-500/10" title="Ver detalhes">
                           <Eye className="w-4 h-4" />
                         </button>
                         <button onClick={() => setDeleteLeads([l])} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10" title="Excluir">
@@ -842,34 +863,65 @@ export default function LeadsSection({ userId }: { userId: string }) {
 
       {/* Modal: detalhes */}
       {viewLead && modalShell(`Lead #${viewLead.external_id.slice(-6)}`, () => setViewLead(null), (
-        <div className="p-5 space-y-3 text-sm">
-          {[
-            ['Nome', viewLead.name || '—'],
-            ['WhatsApp', viewLead.phone || '—'],
-            ['Email', viewLead.email || '—'],
-            ['Status', STATUS_OPTIONS.find((s) => s.value === viewLead.capture_status)?.label || viewLead.capture_status],
-            ['Gerente', viewLead.gerente_name || '—'],
-            ['Captador', viewLead.captador_name || '—'],
-            ['Origem', viewLead.source || '—'],
-            ['Ocorrência', viewLead.occurrence_total > 1 ? `${viewLead.occurrence}ª de ${viewLead.occurrence_total} capturas deste telefone` : 'Única captura'],
-            ['Capturado em', formatDateTime(viewLead.created_at)],
-          ].map(([k, v]) => (
-            <div key={k} className="flex justify-between gap-4 border-b border-gray-100 dark:border-gray-700 pb-2">
-              <span className="text-gray-500 dark:text-gray-400 font-medium">{k}</span>
-              <span className="text-gray-900 dark:text-white text-right">{v}</span>
+        editingLeadInfo ? (
+          <div className="p-5 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Nome</label>
+              <input value={editLeadForm.name} onChange={(e) => setEditLeadForm((f) => ({ ...f, name: e.target.value }))} className={inputClass} placeholder="Nome do cliente" />
             </div>
-          ))}
-          {viewLead.captador_id && (
-            <a
-              href="/crm/kanban"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 hover:underline font-medium pt-1"
-            >
-              <Eye className="w-4 h-4" /> Ver no CRM Kanban
-            </a>
-          )}
-        </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">WhatsApp</label>
+              <input value={editLeadForm.phone} onChange={(e) => setEditLeadForm((f) => ({ ...f, phone: e.target.value }))} className={inputClass} placeholder="DDD + número" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Email</label>
+              <input type="email" value={editLeadForm.email} onChange={(e) => setEditLeadForm((f) => ({ ...f, email: e.target.value }))} className={inputClass} />
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setEditingLeadInfo(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
+              <button onClick={saveLeadInfo} disabled={busy || !editLeadForm.name.trim()} className="px-5 py-2 rounded-lg bg-[#E86A24] text-white font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
+                {busy && <Loader2 className="w-4 h-4 animate-spin" />} Salvar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-5 space-y-3 text-sm">
+            {[
+              ['Nome', viewLead.name || '—'],
+              ['WhatsApp', viewLead.phone || '—'],
+              ['Email', viewLead.email || '—'],
+              ['Status', STATUS_OPTIONS.find((s) => s.value === viewLead.capture_status)?.label || viewLead.capture_status],
+              ['Gerente', viewLead.gerente_name || '—'],
+              ['Captador', viewLead.captador_name || '—'],
+              ['Origem', viewLead.source || '—'],
+              ['Ocorrência', viewLead.occurrence_total > 1 ? `${viewLead.occurrence}ª de ${viewLead.occurrence_total} capturas deste telefone` : 'Única captura'],
+              ['Capturado em', formatDateTime(viewLead.created_at)],
+            ].map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-4 border-b border-gray-100 dark:border-gray-700 pb-2">
+                <span className="text-gray-500 dark:text-gray-400 font-medium">{k}</span>
+                <span className="text-gray-900 dark:text-white text-right">{v}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-4 pt-1">
+              <button
+                onClick={() => openEditLeadInfo(viewLead)}
+                className="inline-flex items-center gap-2 text-[#E86A24] hover:underline font-medium"
+              >
+                <Pencil className="w-4 h-4" /> Editar informações do cliente
+              </button>
+              {viewLead.captador_id && (
+                <a
+                  href="/crm/kanban"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                >
+                  <Eye className="w-4 h-4" /> Ver no CRM Kanban
+                </a>
+              )}
+            </div>
+          </div>
+        )
       ))}
 
       {/* Modal: excluir */}
