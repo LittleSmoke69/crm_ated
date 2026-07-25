@@ -10,6 +10,7 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
+import { gerenteCanSeeOfficialConversation } from '@/lib/services/chat-visibility';
 
 /**
  * GET /api/chat/messages
@@ -69,13 +70,15 @@ export async function GET(req: NextRequest) {
       }
     }
     const sameTenant = conversation.workspace_id === profile?.zaploto_id;
+    const gerenteVisible =
+      profile?.status === 'gerente' &&
+      (await gerenteCanSeeOfficialConversation(userId, conversation));
     const canAccessWhatsAppOfficial = !!conversation.whatsapp_config_id && (
       profile?.status === 'super_admin' ||
       (sameTenant && (
         isAdminOrSuporte ||
         (profile?.status === 'captador' && conversation.user_id === userId) ||
-        (profile?.status === 'gerente' &&
-          (conversation.gerente_id === userId || (!conversation.gerente_id && !conversation.user_id)))
+        gerenteVisible
       ))
     );
     if (!canAccessEvolution && !canAccessWhatsAppOfficial) {
@@ -197,11 +200,13 @@ export async function DELETE(req: NextRequest) {
       }
     } else if (conversation.whatsapp_config_id) {
       const sameTenant = conversation.workspace_id === profile?.zaploto_id;
+      const gerenteVisible =
+        profile?.status === 'gerente' &&
+        (await gerenteCanSeeOfficialConversation(userId, conversation));
       const allowed = profile?.status === 'super_admin' || (sameTenant && (
           isAdminOrSuporte ||
           (profile?.status === 'captador' && conversation.user_id === userId) ||
-          (profile?.status === 'gerente' &&
-            (conversation.gerente_id === userId || (!conversation.gerente_id && !conversation.user_id)))
+          gerenteVisible
         ));
       if (!allowed) {
         return errorResponse('Acesso negado.', 403);

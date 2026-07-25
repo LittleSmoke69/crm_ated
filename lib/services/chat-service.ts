@@ -38,6 +38,8 @@ export interface ChatConversation {
   user_id?: string;
   instance_id?: string | null;
   whatsapp_config_id?: string | null;
+  /** Gerente responsável (time do captador em user_id) — usado na visibilidade hierárquica do chat oficial. */
+  gerente_id?: string | null;
   remote_jid: string;
   title?: string;
   profile_pic_url?: string | null;
