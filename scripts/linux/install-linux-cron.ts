@@ -99,6 +99,7 @@ const HTTP_BOUND_CRONS: Array<{ name: string; requires: string[] }> = [
   { name: 'process-activation-mass-send',requires: ['URL', 'CRON_SECRET'] },
   { name: 'process-group-fetch-jobs',    requires: ['SITE_URL', 'GROUP_FETCH_JOB_SECRET'] },
   { name: 'transfer-resolve-expired',    requires: ['URL', 'TRANSFER_RESOLVE_CRON_SECRET'] },
+  { name: 'send-scheduled-newsletters',  requires: ['SITE_URL', 'CRON_SECRET'] },
 ];
 
 function warnMissingEnvForCrons(): void {

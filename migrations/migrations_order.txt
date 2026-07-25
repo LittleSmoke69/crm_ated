@@ -208,3 +208,8 @@ add_chat_media_recovery_columns.sql
 new_role_line_super_admin_admin_gerente_captador.sql
 crm_leads_capture_management.sql
 add_sidebar_crm_leads_item.sql
+
+create_smtp_accounts.sql
+create_email_newsletters.sql
+create_email_logs.sql
+add_sidebar_emails_item.sql
