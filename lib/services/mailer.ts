@@ -94,12 +94,15 @@ function smtpTransportOptions(acc: Pick<SmtpAccount, 'host' | 'port' | 'username
   return {
     host: acc.host,
     port,
+    // Evita timeout em VPS onde IPv6 do smtp.hostinger.com (Cloudflare) não roteia
+    family: 4 as const,
     secure: port === 465,
     requireTLS: starttls,
     auth: { user: acc.username, pass: acc.password },
     connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
     greetingTimeout: SMTP_CONNECTION_TIMEOUT_MS,
     socketTimeout: Math.max(30_000, SMTP_CONNECTION_TIMEOUT_MS * 2),
+    tls: { servername: acc.host },
   };
 }
 
