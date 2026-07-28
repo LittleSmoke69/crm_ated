@@ -1,12 +1,22 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+
+async function requireColumnEditor(req: NextRequest): Promise<void> {
+  const { userId } = await requireAuth(req);
+  const profile = await getUserProfile(userId);
+  const s = profile?.status;
+  if (s !== 'super_admin' && s !== 'admin') {
+    throw new Error('Apenas administradores podem editar colunas do CRM.');
+  }
+}
 
 // DELETE /api/crm/columns/[id] — remove uma coluna (os clientes nela voltam ao 1º estágio)
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requireColumnEditor(req);
     const { id } = await params;
     const { error } = await supabaseServiceRole.from('crm_columns').delete().eq('id', id);
     if (error) return errorResponse(`Erro ao remover coluna: ${error.message}`, 500);
@@ -19,7 +29,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 // PATCH /api/crm/columns/[id] — renomeia / troca cor / reordena
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requireColumnEditor(req);
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
     const patch: Record<string, unknown> = {};

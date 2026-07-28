@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3, Pencil } from 'lucide-react';
+import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3, Pencil, Trophy } from 'lucide-react';
 import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
 import Modal, { ConfirmDialog } from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
@@ -25,6 +25,8 @@ type Client = {
   tags: Tag[];
 };
 type Attendant = { id: string; name: string };
+
+const WON_COLUMN_KEY = 'ganho';
 
 const COLOR_HEX: Record<string, string> = {
   gray: '#6b7280', blue: '#3b82f6', indigo: '#6366f1', amber: '#f59e0b', orange: '#E86A24',
@@ -78,6 +80,7 @@ function KanbanBoard() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [canViewAll, setCanViewAll] = useState(false);
+  const [canEditColumns, setCanEditColumns] = useState(false);
   const [attendants, setAttendants] = useState<Attendant[]>([]);
   const [attendantFilter, setAttendantFilter] = useState('all');
 
@@ -96,6 +99,7 @@ function KanbanBoard() {
         setColumns(board.data.columns ?? []);
         setClients(board.data.clients ?? []);
         setCanViewAll(!!board.data.meta?.can_view_all);
+        setCanEditColumns(!!board.data.meta?.can_edit_columns);
         setAttendants(board.data.meta?.attendants ?? []);
       }
       if (tags?.success) setAllTags((tags.data ?? []).map((t: Tag) => ({ id: t.id, label: t.label, color: t.color, move_to_column_key: t.move_to_column_key ?? null })));
@@ -301,14 +305,14 @@ function KanbanBoard() {
             <h1 className="text-xl font-bold text-white">CRM — Clientes</h1>
             <p className="text-sm text-gray-400">
               {canViewAll
-                ? 'Visão de todos os clientes por atendente. Use o filtro para focar em um atendente.'
+                ? 'Visão dos clientes da equipe por captador. Use o filtro para focar em um captador.'
                 : 'Arraste os clientes entre os estágios do funil.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canViewAll && attendants.length > 0 && (
               <label className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-gray-200">
-                <span className="text-gray-400">Atendente</span>
+                <span className="text-gray-400">Captador</span>
                 <select
                   value={attendantFilter}
                   onChange={(e) => setAttendantFilter(e.target.value)}
@@ -323,6 +327,7 @@ function KanbanBoard() {
                 </select>
               </label>
             )}
+            {canEditColumns && (
             <button
               onClick={() => {
                 setNewCol({ title: '', color: 'gray' });
@@ -332,6 +337,7 @@ function KanbanBoard() {
             >
               <Columns3 className="h-4 w-4" /> Nova coluna
             </button>
+            )}
             <button onClick={() => { setImportColumn(columns[0]?.key ?? ''); setImportText(''); setImportFileName(''); setShowImport(true); }}
               className="inline-flex items-center gap-2 rounded-xl border border-[#E86A24]/40 bg-[#E86A24]/10 px-4 py-2 text-sm font-bold text-[#E86A24] transition hover:bg-[#E86A24]/20">
               <Upload className="h-4 w-4" /> Importar
@@ -360,7 +366,7 @@ function KanbanBoard() {
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
-                      {editColId === col.id ? (
+                      {canEditColumns && editColId === col.id ? (
                         <input autoFocus value={editColTitle}
                           onChange={(e) => setEditColTitle(e.target.value)}
                           onBlur={() => saveColumnTitle(col)}
@@ -383,9 +389,13 @@ function KanbanBoard() {
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setMenuColId(null)} />
                       <div className="absolute right-3 top-11 z-20 w-48 overflow-hidden rounded-xl border border-white/10 bg-[#1c130d] py-1 shadow-xl">
-                        <MenuItem icon={<Pencilish />} label="Editar nome" onClick={() => { setEditColId(col.id); setEditColTitle(col.title); setMenuColId(null); }} />
+                        {canEditColumns && (
+                          <MenuItem icon={<Pencilish />} label="Editar nome" onClick={() => { setEditColId(col.id); setEditColTitle(col.title); setMenuColId(null); }} />
+                        )}
                         <MenuItem icon={<UserPlus className="h-4 w-4" />} label="Adicionar cliente" onClick={() => openAddClient(col.key)} />
-                        <MenuItem icon={<Trash2 className="h-4 w-4" />} label="Deletar coluna" danger onClick={() => { setMenuColId(null); setColToDelete(col); }} />
+                        {canEditColumns && (
+                          <MenuItem icon={<Trash2 className="h-4 w-4" />} label="Deletar coluna" danger onClick={() => { setMenuColId(null); setColToDelete(col); }} />
+                        )}
                       </div>
                     </>
                   )}
@@ -417,6 +427,16 @@ function KanbanBoard() {
                         </div>
                         {c.phone && <div className="flex items-center gap-2 text-xs text-gray-400"><Phone className="h-3 w-3 shrink-0" /> <span className="truncate">{c.phone}</span></div>}
                         {c.email && <div className="flex items-center gap-2 text-xs text-gray-400"><Mail className="h-3 w-3 shrink-0" /> <span className="truncate">{c.email}</span></div>}
+
+                        {c.column_key !== WON_COLUMN_KEY && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); moveTo(c.external_id, WON_COLUMN_KEY); }}
+                            className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-[11px] font-bold text-emerald-400 transition hover:bg-emerald-500/20"
+                          >
+                            <Trophy className="h-3.5 w-3.5" /> Venda fechada
+                          </button>
+                        )}
 
                         {/* Etiquetas */}
                         <div className="relative mt-2 flex flex-wrap items-center gap-1">

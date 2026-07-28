@@ -133,7 +133,14 @@ function parseLeadsCsv(text: string): ImportLead[] {
     }));
 }
 
-export default function LeadsSection({ userId }: { userId: string }) {
+export default function LeadsSection({
+  userId,
+  userRole = 'admin',
+}: {
+  userId: string;
+  userRole?: 'admin' | 'gerente';
+}) {
+  const isGerente = userRole === 'gerente';
   const [leads, setLeads] = useState<CapturedLead[]>([]);
   const [gerentes, setGerentes] = useState<PersonOption[]>([]);
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
@@ -362,12 +369,17 @@ export default function LeadsSection({ userId }: { userId: string }) {
   const submitAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignLeads) return;
-    if (!assignForm.gerente_id && !assignForm.captador_id) {
+    if (!assignForm.gerente_id && !assignForm.captador_id && !isGerente) {
       showToast('Selecione um gerente e/ou um captador.', 'error');
       return;
     }
+    if (isGerente && !assignForm.captador_id) {
+      showToast('Selecione um captador da sua equipe.', 'error');
+      return;
+    }
     const body: Record<string, unknown> = {};
-    if (assignForm.gerente_id) body.gerente_id = assignForm.gerente_id;
+    if (isGerente) body.gerente_id = userId;
+    else if (assignForm.gerente_id) body.gerente_id = assignForm.gerente_id;
     if (assignForm.captador_id) body.captador_id = assignForm.captador_id;
     const ok = await patchLeads(
       assignLeads.map((l) => l.id),
@@ -442,11 +454,17 @@ export default function LeadsSection({ userId }: { userId: string }) {
     }
   };
 
+  const teamCaptadores = useMemo(() => {
+    if (!isGerente) return captadores;
+    return captadores.filter((c) => c.enroller === userId);
+  }, [captadores, isGerente, userId]);
+
   const captadoresForGerente = useMemo(() => {
+    if (isGerente) return teamCaptadores;
     if (!assignForm.gerente_id) return captadores;
     const team = captadores.filter((c) => c.enroller === assignForm.gerente_id);
     return team.length > 0 ? team : captadores;
-  }, [captadores, assignForm.gerente_id]);
+  }, [captadores, assignForm.gerente_id, isGerente, teamCaptadores]);
 
   const selectedLeadObjs = leads.filter((l) => selected.has(l.id));
 
@@ -544,6 +562,7 @@ export default function LeadsSection({ userId }: { userId: string }) {
               {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           </div>
+          {!isGerente && (
           <div>
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Gerente</label>
             <select value={fGerente} onChange={(e) => setFGerente(e.target.value)} className={inputClass}>
@@ -551,11 +570,12 @@ export default function LeadsSection({ userId }: { userId: string }) {
               {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Captador</label>
             <select value={fCaptador} onChange={(e) => setFCaptador(e.target.value)} className={inputClass}>
               <option value="">Todos</option>
-              {captadores.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {(isGerente ? teamCaptadores : captadores).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div>
@@ -594,17 +614,19 @@ export default function LeadsSection({ userId }: { userId: string }) {
         <div className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 flex flex-wrap items-center gap-3">
           <span className="text-sm font-bold text-blue-700 dark:text-blue-300">{selected.size} selecionado(s)</span>
           <button
-            onClick={() => { setAssignLeads(selectedLeadObjs); setAssignForm({ gerente_id: '', captador_id: '' }); }}
+            onClick={() => { setAssignLeads(selectedLeadObjs); setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' }); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-500/60 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-500/10"
           >
             <UserPlus className="w-3.5 h-3.5" /> Atribuir
           </button>
+          {!isGerente && (
           <button
             onClick={() => setDeleteLeads(selectedLeadObjs)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-500/60 text-red-600 dark:text-red-400 hover:bg-red-500/10"
           >
             <Trash2 className="w-3.5 h-3.5" /> Excluir
           </button>
+          )}
         </div>
       )}
 
@@ -710,7 +732,7 @@ export default function LeadsSection({ userId }: { userId: string }) {
                           </a>
                         )}
                         <button
-                          onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: l.gerente_id || '', captador_id: '' }); }}
+                          onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: isGerente ? userId : (l.gerente_id || ''), captador_id: '' }); }}
                           className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-blue-500 hover:bg-blue-500/10"
                           title="Atribuir gerente/captador"
                         >
@@ -719,9 +741,11 @@ export default function LeadsSection({ userId }: { userId: string }) {
                         <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-sky-500 hover:bg-sky-500/10" title="Ver detalhes">
                           <Eye className="w-4 h-4" />
                         </button>
+                        {!isGerente && (
                         <button onClick={() => setDeleteLeads([l])} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10" title="Excluir">
                           <Trash2 className="w-4 h-4" />
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -836,6 +860,7 @@ export default function LeadsSection({ userId }: { userId: string }) {
         () => setAssignLeads(null),
         (
           <form onSubmit={submitAssign} className="p-5 space-y-4">
+            {!isGerente && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente</label>
               <select value={assignForm.gerente_id} onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })} className={inputClass}>
@@ -843,10 +868,11 @@ export default function LeadsSection({ userId }: { userId: string }) {
                 {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Captador</label>
-              <select value={assignForm.captador_id} onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })} className={inputClass}>
-                <option value="">Somente gerente (sem captador)</option>
+              <select value={assignForm.captador_id} onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })} className={inputClass} required={isGerente}>
+                <option value="">{isGerente ? 'Selecione o captador...' : 'Somente gerente (sem captador)'}</option>
                 {captadoresForGerente.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
               <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">Ao escolher um captador, o lead entra na coluna inicial do kanban dele.</p>

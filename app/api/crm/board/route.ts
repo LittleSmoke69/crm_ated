@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
+import { canAccessUser } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 /**
  * Kanban de gestão de clientes (sem loteria).
@@ -20,7 +22,9 @@ type LeadRow = {
 type ViewerContext = {
   status: string;
   canViewAll: boolean;
+  canEditColumns: boolean;
   tenantId: string | null;
+  teamUserIds: string[] | null;
 };
 
 async function getViewerContext(userId: string): Promise<ViewerContext> {
@@ -30,9 +34,21 @@ async function getViewerContext(userId: string): Promise<ViewerContext> {
     .eq('id', userId)
     .maybeSingle();
   const status = String((data as { status?: string } | null)?.status ?? '').toLowerCase();
-  const canViewAll = status === 'super_admin' || status === 'admin';
+  const isAdmin = status === 'super_admin' || status === 'admin';
+  const isGerente = status === 'gerente';
   const tenantId = ((data as { zaploto_id?: string | null } | null)?.zaploto_id ?? null) as string | null;
-  return { status, canViewAll, tenantId };
+  let teamUserIds: string[] | null = null;
+  if (isGerente) {
+    const team = await getConsultorsByManager(userId);
+    teamUserIds = team.map((c) => c.id);
+  }
+  return {
+    status,
+    canViewAll: isAdmin || isGerente,
+    canEditColumns: isAdmin,
+    tenantId,
+    teamUserIds,
+  };
 }
 
 async function getTenantUserIds(tenantId: string, options?: { excludeSuperAdmin?: boolean }): Promise<string[]> {
@@ -58,6 +74,7 @@ export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const viewer = await getViewerContext(userId);
+    const targetUserId = req.nextUrl.searchParams.get('target_user_id') || req.nextUrl.searchParams.get('userId');
 
     const { data: columns } = await supabaseServiceRole
       .from('crm_columns')
@@ -71,7 +88,25 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(2000);
 
-    if (!viewer.canViewAll) {
+    if (viewer.status === 'gerente') {
+      const teamIds = viewer.teamUserIds ?? [];
+      if (teamIds.length === 0) {
+        return successResponse({
+          columns: columns ?? [],
+          clients: [],
+          meta: { can_view_all: true, can_edit_columns: false, attendants: [] },
+        });
+      }
+      if (targetUserId) {
+        const allowed = await canAccessUser(userId, targetUserId);
+        if (!allowed || !teamIds.includes(targetUserId)) {
+          return errorResponse('Sem permissão para ver o kanban deste captador.', 403);
+        }
+        leadsQuery = leadsQuery.eq('user_id', targetUserId);
+      } else {
+        leadsQuery = leadsQuery.in('user_id', teamIds);
+      }
+    } else if (!viewer.canViewAll) {
       leadsQuery = leadsQuery.eq('user_id', userId);
     } else if (viewer.status === 'admin') {
       if (viewer.tenantId) {
@@ -80,7 +115,7 @@ export async function GET(req: NextRequest) {
           return successResponse({
             columns: columns ?? [],
             clients: [],
-            meta: { can_view_all: true, attendants: [] },
+            meta: { can_view_all: true, can_edit_columns: true, attendants: [] },
           });
         }
         leadsQuery = leadsQuery.in('user_id', tenantUserIds);
@@ -165,6 +200,7 @@ export async function GET(req: NextRequest) {
       clients,
       meta: {
         can_view_all: viewer.canViewAll,
+        can_edit_columns: viewer.canEditColumns,
         attendants,
       },
     });
@@ -239,8 +275,11 @@ export async function PATCH(req: NextRequest) {
 
     const ownerUserId = typeof body.owner_user_id === 'string' && body.owner_user_id ? body.owner_user_id : userId;
 
-    if (!viewer.canViewAll && ownerUserId !== userId) {
-      return errorResponse('Sem permissão para alterar clientes de outro atendente.', 403);
+    if (ownerUserId !== userId) {
+      const allowed = await canAccessUser(userId, ownerUserId);
+      if (!allowed) {
+        return errorResponse('Sem permissão para alterar clientes de outro atendente.', 403);
+      }
     }
 
     if (viewer.canViewAll && viewer.status === 'admin' && viewer.tenantId) {

@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadsManagementAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,8 +37,11 @@ async function scanLeads(params: {
   gerenteId?: string;
   captadorId?: string;
   fromIso?: string;
+  /** Quando definido, restringe a leads do gerente (pool + equipe). */
+  scopeGerenteId?: string;
+  scopeTeamIds?: string[];
 }) {
-  const { tenantUserIds, zaplotoId, q, captureStatus, gerenteId, captadorId, fromIso } = params;
+  const { tenantUserIds, zaplotoId, q, captureStatus, gerenteId, captadorId, fromIso, scopeGerenteId, scopeTeamIds } = params;
   const rows: any[] = [];
   let from = 0;
   while (rows.length < SCAN_MAX) {
@@ -49,9 +53,18 @@ async function scanLeads(params: {
 
     // Escopo: leads de usuários do tenant OU pendentes (sem dono) do tenant/legado
     const idsList = tenantUserIds.join(',');
-    query = query.or(
-      `user_id.in.(${idsList}),and(user_id.is.null,zaploto_id.eq.${zaplotoId}),and(user_id.is.null,zaploto_id.is.null)`
-    );
+    if (scopeGerenteId) {
+      const teamIds = (scopeTeamIds ?? []).filter(Boolean);
+      if (teamIds.length > 0) {
+        query = query.or(`gerente_id.eq.${scopeGerenteId},user_id.in.(${teamIds.join(',')})`);
+      } else {
+        query = query.eq('gerente_id', scopeGerenteId);
+      }
+    } else {
+      query = query.or(
+        `user_id.in.(${idsList}),and(user_id.is.null,zaploto_id.eq.${zaplotoId}),and(user_id.is.null,zaploto_id.is.null)`
+      );
+    }
 
     if (captureStatus && CAPTURE_STATUSES.includes(captureStatus as any)) {
       query = query.eq('capture_status', captureStatus);
@@ -83,11 +96,15 @@ async function scanLeads(params: {
  */
 export async function GET(req: NextRequest) {
   try {
-    const { profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadsManagementAccess(req);
+    const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const profiles = await getTenantProfiles(zaplotoId);
     const tenantUserIds = profiles.map((p: any) => p.id);
     const profileById = new Map<string, any>(profiles.map((p: any) => [p.id, p]));
+
+    const teamCaptadores = isGerente ? await getConsultorsByManager(userId) : [];
+    const teamCaptadorIds = new Set(teamCaptadores.map((c) => c.id));
 
     const sp = req.nextUrl.searchParams;
     const period = sp.get('period') || 'todos';
@@ -102,14 +119,20 @@ export async function GET(req: NextRequest) {
       fromIso = new Date(Date.now() - 30 * 86400000).toISOString();
     }
 
+    const captadorFilter = isGerente
+      ? (sp.get('captador_id') && teamCaptadorIds.has(sp.get('captador_id')!) ? sp.get('captador_id')! : undefined)
+      : sp.get('captador_id') || undefined;
+
     const rows = await scanLeads({
       tenantUserIds,
       zaplotoId,
       q: sp.get('q') || undefined,
       captureStatus: sp.get('capture_status') || undefined,
-      gerenteId: sp.get('gerente_id') || undefined,
-      captadorId: sp.get('captador_id') || undefined,
+      gerenteId: isGerente ? undefined : sp.get('gerente_id') || undefined,
+      captadorId: captadorFilter,
       fromIso,
+      scopeGerenteId: isGerente ? userId : undefined,
+      scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
     });
 
     // Nº de ocorrência por telefone (1ª, 2ª, 3ª vez...) — mais antigo = 1ª vez
@@ -169,12 +192,18 @@ export async function GET(req: NextRequest) {
       total,
       page,
       page_size: pageSize,
-      gerentes: profiles
-        .filter((p: any) => p.status === 'gerente')
-        .map((p: any) => ({ id: p.id, name: p.full_name || p.email })),
-      captadores: profiles
-        .filter((p: any) => p.status === 'captador')
-        .map((p: any) => ({ id: p.id, name: p.full_name || p.email, enroller: p.enroller })),
+      gerentes: isGerente
+        ? [{ id: userId, name: profile.full_name || profile.email || 'Gerente' }]
+        : profiles
+            .filter((p: any) => p.status === 'gerente')
+            .map((p: any) => ({ id: p.id, name: p.full_name || p.email })),
+      captadores: (isGerente ? teamCaptadores : profiles.filter((p: any) => p.status === 'captador')).map(
+        (p: any) => ({
+          id: p.id,
+          name: p.full_name || p.email,
+          enroller: p.enroller,
+        })
+      ),
     });
   } catch (err: any) {
     return serverErrorResponse(err);
@@ -188,15 +217,26 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadsManagementAccess(req);
+    const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
 
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const phone = normalizePhone(body.phone);
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : null;
-    const gerenteId = body.gerente_id || null;
-    const captadorId = body.captador_id || null;
+    let gerenteId = body.gerente_id || null;
+    let captadorId = body.captador_id || null;
+
+    if (isGerente) {
+      gerenteId = userId;
+      if (captadorId) {
+        const team = await getConsultorsByManager(userId);
+        if (!team.some((c) => c.id === captadorId)) {
+          return errorResponse('Captador fora da sua equipe.', 403);
+        }
+      }
+    }
 
     if (!name && !phone) {
       return errorResponse('Informe pelo menos nome ou WhatsApp.', 400);
@@ -254,7 +294,8 @@ export async function POST(req: NextRequest) {
  */
 export async function PATCH(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadsManagementAccess(req);
+    const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
 
@@ -280,14 +321,24 @@ export async function PATCH(req: NextRequest) {
 
     const { data: leads, error: leadsErr } = await supabaseServiceRole
       .from('crm_leads')
-      .select('id, external_id, user_id')
+      .select('id, external_id, user_id, gerente_id')
       .in('id', ids);
     if (leadsErr) return errorResponse(leadsErr.message, 400);
+
+    if (isGerente) {
+      for (const lead of leads || []) {
+        if ((lead as { gerente_id?: string | null }).gerente_id !== userId) {
+          return errorResponse('Lead fora do seu escopo.', 403);
+        }
+      }
+      if (hasGerente && body.gerente_id && body.gerente_id !== userId) {
+        return errorResponse('Gerente não pode reatribuir leads a outro gerente.', 403);
+      }
+    }
 
     const nowIso = new Date().toISOString();
     const captadorId = hasCaptador ? (body.captador_id || null) : undefined;
 
-    // Validações de cargo
     if (hasGerente && body.gerente_id) {
       const { data: g } = await supabaseServiceRole.from('profiles').select('id, status').eq('id', body.gerente_id).single();
       if (!g || g.status !== 'gerente') return errorResponse('Gerente inválido.', 400);
@@ -296,13 +347,16 @@ export async function PATCH(req: NextRequest) {
     if (hasCaptador && captadorId) {
       const { data: c } = await supabaseServiceRole.from('profiles').select('id, status, enroller').eq('id', captadorId).single();
       if (!c || c.status !== 'captador') return errorResponse('Captador inválido.', 400);
+      if (isGerente && c.enroller !== userId) {
+        return errorResponse('Só é possível atribuir leads aos seus captadores.', 403);
+      }
       captadorEnroller = c.enroller || null;
     }
 
     for (const lead of leads || []) {
       const update: any = { updated_at: nowIso, zaploto_id: zaplotoId };
       if (hasStatus) update.capture_status = body.capture_status;
-      if (hasGerente) update.gerente_id = body.gerente_id || null;
+      if (hasGerente) update.gerente_id = isGerente ? userId : (body.gerente_id || null);
       // Nome inteiro vai para `name`; zera `last_name` para não duplicar o sobrenome
       // antigo por trás de um nome completo novo (GET concatena name + last_name).
       if (hasName) { update.name = body.name.trim(); update.last_name = null; }
@@ -369,7 +423,10 @@ export async function PATCH(req: NextRequest) {
  */
 export async function DELETE(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const { userId, profile } = await requireLeadsManagementAccess(req);
+    if (profile.status === 'gerente') {
+      return errorResponse('Gerente não pode excluir leads.', 403);
+    }
     const body = await req.json().catch(() => ({}));
     const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: any) => typeof x === 'string') : [];
     if (ids.length === 0) return errorResponse('ids é obrigatório.', 400);

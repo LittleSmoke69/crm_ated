@@ -1,7 +1,18 @@
 import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
+import { getUserProfile } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+
+async function requireColumnEditor(req: NextRequest): Promise<string> {
+  const { userId } = await requireAuth(req);
+  const profile = await getUserProfile(userId);
+  const s = profile?.status;
+  if (s !== 'super_admin' && s !== 'admin') {
+    throw new Error('Apenas administradores podem editar colunas do CRM.');
+  }
+  return userId;
+}
 
 /** Tenant do usuário (fallback: tenant central 'zaploto'). */
 async function resolveTenantId(userId: string): Promise<string | null> {
@@ -26,7 +37,7 @@ function slugify(s: string): string {
 // POST /api/crm/columns — cria uma coluna (estágio) no funil
 export async function POST(req: NextRequest) {
   try {
-    const { userId } = await requireAuth(req);
+    await requireColumnEditor(req);
     const body = await req.json().catch(() => ({}));
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     if (!title) return errorResponse('Título é obrigatório.', 400);

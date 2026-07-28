@@ -39,6 +39,7 @@ import {
   UserPlus,
   Package,
   Globe,
+  Trophy,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -150,6 +151,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     routePath?.startsWith('/admin/') ||
     routePath?.startsWith('/gerente/zaplink') ||
     routePath?.startsWith('/gerente/crm/lead-stock') ||
+    routePath?.startsWith('/gerente/captadores-vendas') ||
     routePath?.startsWith('/gestor-trafego/zaplink') ||
     onSignOut !== undefined;
 
@@ -447,6 +449,17 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
   const itemZaplink: MenuItem = { href: '/admin/zaplink', icon: Link2, label: 'Zaplink' };
   const itemZaplinkGerente: MenuItem = { href: '/gerente/zaplink', icon: Link2, label: 'Zaplink' };
   const itemLeadStockGerente: MenuItem = { href: '/gerente/crm/lead-stock-transfer', icon: Package, label: 'Estoque de leads' };
+  const itemTaxaVendasGerente: MenuItem = { href: '/gerente/captadores-vendas', icon: Trophy, label: 'Taxa de vendas' };
+  const itemCRMGerente: MenuItem = {
+    label: 'CRM',
+    icon: Layout,
+    submenu: [
+      { href: '/admin/leads', icon: UserPlus, label: 'Leads' },
+      { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
+      { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
+      { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
+    ],
+  };
   const itemLeadTransfer: MenuItem = { href: '/admin/crm/lead-transfer', icon: ArrowRightLeft, label: 'Transferência de Leads' };
   const itemAcademy: MenuItem = {
     href: '/admin/academy',
@@ -536,6 +549,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     if (userStatus === 'gerente') {
       return [
         itemGestaoConsultores,
+        itemTaxaVendasGerente,
         itemMeuDesempenho,
         itemDesempenhoDetalhado,
         itemLeadTransfer,
@@ -548,7 +562,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemGestaoChat,
         itemAgentesIA,
         itemAcademyPublic,
-        itemCRM,
+        itemCRMGerente,
         itemCampanhas,
         itemContatosAtivos,
         itemImportarContatos,
@@ -596,18 +610,28 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         items.some((it) => it.href === '/admin/leads' || it.label === 'Leads') ||
         items.some((it) => it.submenu?.some((s) => s.href === '/admin/leads' || s.label === 'Leads'));
 
-      // Garante "Leads" para admin/super_admin mesmo se o seed dinâmico não tiver crm_leads
-      if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin')) {
+      // Garante "Leads" para admin/super_admin/gerente mesmo se o seed dinâmico não tiver crm_leads
+      if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'gerente')) {
         const crmIdx = items.findIndex((it) => it.label === 'CRM');
         const leadsSub = { href: '/admin/leads', icon: UserPlus, label: 'Leads' };
         if (crmIdx >= 0) {
           const crm = items[crmIdx];
           items[crmIdx] = {
             ...crm,
-            submenu: [leadsSub, ...(crm.submenu || [])],
+            submenu: [leadsSub, ...(crm.submenu || []).filter((s) => s.href !== '/admin/leads')],
           };
         } else {
           items.splice(0, 0, itemLeads);
+        }
+      }
+
+      if (userStatus === 'gerente' && !items.some((it) => it.href === '/gerente/captadores-vendas')) {
+        const gestaoIdx = items.findIndex((it) => it.href === '/gerente');
+        const taxaItem = { href: '/gerente/captadores-vendas', icon: Trophy, label: 'Taxa de vendas' };
+        if (gestaoIdx >= 0) {
+          items.splice(gestaoIdx + 1, 0, taxaItem);
+        } else {
+          items.unshift(taxaItem);
         }
       }
 

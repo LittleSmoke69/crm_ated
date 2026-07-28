@@ -193,6 +193,32 @@ export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: str
 }
 
 /**
+ * APIs de gestão de leads capturados: super_admin, admin e gerente (escopo próprio).
+ */
+export async function requireLeadsManagementAccess(
+  req: NextRequest
+): Promise<{ userId: string; profile: UserProfile }> {
+  const { userId } = await requireAuth(req);
+  let profile = await getUserProfile(userId);
+  if (!profile) {
+    await new Promise((r) => setTimeout(r, 400));
+    profile = await getUserProfile(userId);
+  }
+  if (!profile) {
+    throw new Error('Perfil não encontrado');
+  }
+  const s = profile.status;
+  if (s === 'super_admin' || s === 'admin' || s === 'gerente') {
+    return { userId, profile };
+  }
+  const hasLeads = await hasSidebarPermission(profile, 'crm_leads');
+  if (hasLeads) {
+    return { userId, profile };
+  }
+  throw new Error('Acesso negado.');
+}
+
+/**
  * APIs da página Transferência de leads (histórico/métricas): super_admin, admin e gerente (escopo por bancas).
  */
 export async function requireLeadTransferApiAccess(

@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
-import { requireAdmin } from '@/lib/middleware/permissions';
+import { requireLeadsManagementAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
+import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -77,7 +78,8 @@ const STATUS_MAP: Record<string, { captureStatus: string; columnKey: string }> =
  */
 export async function POST(req: NextRequest) {
   try {
-    const { userId, profile } = await requireAdmin(req);
+    const { userId, profile } = await requireLeadsManagementAccess(req);
+    const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
 
@@ -87,7 +89,7 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Máximo de ${MAX_IMPORT} leads por importação. Divida o arquivo.`, 400);
     }
 
-    const gerenteId = body.gerente_id || null;
+    const gerenteId = isGerente ? userId : (body.gerente_id || null);
     const captadorId = body.captador_id || null;
 
     if (gerenteId) {
@@ -98,6 +100,9 @@ export async function POST(req: NextRequest) {
     if (captadorId) {
       const { data: c } = await supabaseServiceRole.from('profiles').select('id, status, enroller').eq('id', captadorId).single();
       if (!c || c.status !== 'captador') return errorResponse('Captador inválido.', 400);
+      if (isGerente && c.enroller !== userId) {
+        return errorResponse('Só é possível importar para captadores da sua equipe.', 403);
+      }
       captadorEnroller = c.enroller || null;
     }
 
@@ -152,6 +157,17 @@ export async function POST(req: NextRequest) {
       return { ...r, rowGerente, rowCaptador, mappedStatus };
     });
 
+    if (isGerente) {
+      for (const row of prepared) {
+        if (row.rowGerente?.id && row.rowGerente.id !== userId) {
+          return errorResponse('Gerente só pode importar leads para o próprio escopo.', 403);
+        }
+        if (row.rowCaptador?.enroller && row.rowCaptador.enroller !== userId) {
+          return errorResponse('Gerente só pode importar leads para captadores da própria equipe.', 403);
+        }
+      }
+    }
+
     if (unresolvedGerentes.size || unresolvedCaptadores.size || unresolvedStatuses.size) {
       const details = [
         unresolvedGerentes.size ? `gerentes: ${[...unresolvedGerentes].join(', ')}` : '',
@@ -161,11 +177,38 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Importação cancelada. Corrija os valores não reconhecidos (${details}). Nenhum lead foi inserido.`, 400);
     }
 
+    const managersFromRows = new Set<string>();
+    for (const row of prepared) {
+      if (row.rowGerente?.id) managersFromRows.add(row.rowGerente.id);
+      else if (row.rowCaptador?.enroller) managersFromRows.add(row.rowCaptador.enroller);
+    }
+    if (gerenteId) managersFromRows.add(gerenteId);
+    if (isGerente) managersFromRows.add(userId);
+
+    const managerTeams = new Map<string, string[]>();
+    await Promise.all(
+      [...managersFromRows].map(async (managerId) => {
+        const team = await getConsultorsByManager(managerId);
+        managerTeams.set(managerId, team.map((captador) => captador.id));
+      })
+    );
+    const roundRobinByManager = new Map<string, number>();
+
     const rows = prepared.map((r) => {
-      const resolvedCaptadorId = r.rowCaptador?.id ?? captadorId;
-      const resolvedGerenteId = r.rowGerente?.id
+      const inferredGerenteId = r.rowGerente?.id
         ?? r.rowCaptador?.enroller
         ?? gerenteId
+        ?? (isGerente ? userId : null);
+      let resolvedCaptadorId = r.rowCaptador?.id ?? captadorId ?? null;
+      if (!resolvedCaptadorId && inferredGerenteId) {
+        const team = managerTeams.get(inferredGerenteId) ?? [];
+        if (team.length > 0) {
+          const idx = roundRobinByManager.get(inferredGerenteId) ?? 0;
+          resolvedCaptadorId = team[idx % team.length];
+          roundRobinByManager.set(inferredGerenteId, idx + 1);
+        }
+      }
+      const resolvedGerenteId = inferredGerenteId
         ?? (resolvedCaptadorId ? captadorEnroller : null);
       return {
         external_id: base + r.idx,
