@@ -89,12 +89,13 @@ const SMTP_CONNECTION_TIMEOUT_MS = Math.max(
 
 function smtpTransportOptions(acc: Pick<SmtpAccount, 'host' | 'port' | 'username' | 'password'>) {
   const port = Number(acc.port) || 465;
+  // 465 = TLS implícito; 587/2525 = STARTTLS (2525 costuma passar quando 465/587 estão filtradas na VPS)
+  const starttls = port === 587 || port === 2525;
   return {
     host: acc.host,
     port,
-    // 465 = TLS implícito; 587 = STARTTLS (comum em VPS onde 465 é filtrado)
     secure: port === 465,
-    requireTLS: port === 587,
+    requireTLS: starttls,
     auth: { user: acc.username, pass: acc.password },
     connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
     greetingTimeout: SMTP_CONNECTION_TIMEOUT_MS,
@@ -124,11 +125,17 @@ function isSmtpConnectivityError(err: unknown): boolean {
   );
 }
 
-/** Porta alternativa quando a configurada não abre (ex.: 465 bloqueada na VPS → 587). */
-function alternateSmtpPort(port: number): number | null {
-  if (port === 465) return 587;
-  if (port === 587) return 465;
-  return null;
+/** Portas candidatas quando a configurada não abre (ordem: atual → demais). */
+function smtpPortFallbacks(preferred: number): number[] {
+  const chain = [preferred, 2525, 587, 465];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const p of chain) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
 }
 
 let cachedEnvTransporter: Transporter | null = null;
@@ -248,21 +255,34 @@ async function deliver(
     text: options.text,
   };
   try {
-    try {
-      await transporter.sendMail(payload);
-    } catch (err) {
-      // Em várias VPS a porta 465 (ou 587) é filtrada; tenta a porta alternativa uma vez.
-      const alt = account ? alternateSmtpPort(account.port) : null;
-      if (!account || !alt || !isSmtpConnectivityError(err)) throw err;
-      console.warn(
-        `[mailer] ${account.host}:${account.port} falhou (${err instanceof Error ? err.message : err}); tentando porta ${alt}`
-      );
-      await getAccountTransporter(account, alt).sendMail(payload);
+    let lastErr: unknown = null;
+    const ports = account ? smtpPortFallbacks(account.port) : [null];
+    for (let i = 0; i < ports.length; i++) {
+      const port = ports[i];
+      const tx =
+        account && port != null
+          ? getAccountTransporter(account, port)
+          : transporter;
+      try {
+        if (i > 0 && account && port != null) {
+          console.warn(
+            `[mailer] ${account.host}:${ports[i - 1]} falhou; tentando porta ${port}`
+          );
+        }
+        await tx.sendMail(payload);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const hasNext = i < ports.length - 1;
+        if (!account || !hasNext || !isSmtpConnectivityError(err)) break;
+      }
     }
+    if (lastErr) throw lastErr;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = isSmtpConnectivityError(err)
-      ? `${msg} — a VPS provavelmente não alcança o SMTP (firewall/provedor bloqueando saída 465/587). Teste na VPS: nc -vz ${account?.host || 'smtp.hostinger.com'} 465 && nc -vz ${account?.host || 'smtp.hostinger.com'} 587`
+      ? `${msg} — saída SMTP bloqueada na VPS (465/587). Use porta 2525 (Hostinger) ou liberar SMTP no provedor.`
       : msg;
     if (account) await registerAccountError(account.id, hint);
     await logEmailSend(logId, options, meta, 'failed', hint.slice(0, 500), account?.id ?? null);
@@ -302,22 +322,21 @@ export async function verifySmtpConnection(
     await transporter.verify();
     return { ok: true };
   } catch (err) {
-    const alt = alternateSmtpPort(acc.port);
-    if (alt && isSmtpConnectivityError(err)) {
-      const altTransport = nodemailer.createTransport(
-        smtpTransportOptions({ ...acc, port: alt })
-      );
-      try {
-        await altTransport.verify();
-        console.warn(`[mailer] verify: porta ${acc.port} falhou; ${alt} OK`);
-        return { ok: true };
-      } catch (altErr) {
-        return {
-          ok: false,
-          error: `${err instanceof Error ? err.message : String(err)} (também falhou em ${alt}: ${altErr instanceof Error ? altErr.message : String(altErr)})`,
-        };
-      } finally {
-        altTransport.close();
+    const ports = smtpPortFallbacks(acc.port).filter((p) => p !== acc.port);
+    if (isSmtpConnectivityError(err)) {
+      for (const alt of ports) {
+        const altTransport = nodemailer.createTransport(
+          smtpTransportOptions({ ...acc, port: alt })
+        );
+        try {
+          await altTransport.verify();
+          console.warn(`[mailer] verify: porta ${acc.port} falhou; ${alt} OK`);
+          return { ok: true };
+        } catch {
+          // tenta próxima
+        } finally {
+          altTransport.close();
+        }
       }
     }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
