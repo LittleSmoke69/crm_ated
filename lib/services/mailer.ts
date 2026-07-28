@@ -82,18 +82,53 @@ export async function isMailerConfigured(): Promise<boolean> {
 // Cache de transporters por conta (recriado se host/porta/credenciais mudarem)
 const transporterCache = new Map<string, { key: string; transporter: Transporter }>();
 
-function getAccountTransporter(acc: SmtpAccount): Transporter {
-  const key = `${acc.host}|${acc.port}|${acc.username}|${acc.password}`;
-  const cached = transporterCache.get(acc.id);
-  if (cached && cached.key === key) return cached.transporter;
-  const transporter = nodemailer.createTransport({
+const SMTP_CONNECTION_TIMEOUT_MS = Math.max(
+  5_000,
+  Number(process.env.SMTP_CONNECTION_TIMEOUT_MS) || 20_000
+);
+
+function smtpTransportOptions(acc: Pick<SmtpAccount, 'host' | 'port' | 'username' | 'password'>) {
+  const port = Number(acc.port) || 465;
+  return {
     host: acc.host,
-    port: acc.port,
-    secure: acc.port === 465,
+    port,
+    // 465 = TLS implícito; 587 = STARTTLS (comum em VPS onde 465 é filtrado)
+    secure: port === 465,
+    requireTLS: port === 587,
     auth: { user: acc.username, pass: acc.password },
-  });
-  transporterCache.set(acc.id, { key, transporter });
+    connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+    socketTimeout: Math.max(30_000, SMTP_CONNECTION_TIMEOUT_MS * 2),
+  };
+}
+
+function getAccountTransporter(acc: SmtpAccount, portOverride?: number): Transporter {
+  const port = portOverride ?? acc.port;
+  const key = `${acc.host}|${port}|${acc.username}|${acc.password}`;
+  const cacheKey = portOverride ? `${acc.id}:${port}` : acc.id;
+  const cached = transporterCache.get(cacheKey);
+  if (cached && cached.key === key) return cached.transporter;
+  const transporter = nodemailer.createTransport(
+    smtpTransportOptions({ ...acc, port })
+  );
+  transporterCache.set(cacheKey, { key, transporter });
   return transporter;
+}
+
+function isSmtpConnectivityError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code || '') : '';
+  return (
+    /connection timeout|etimedout|econnrefused|econnreset|enotfound|socket hang up|network/i.test(msg) ||
+    /ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|ESOCKET|ETLS/.test(code)
+  );
+}
+
+/** Porta alternativa quando a configurada não abre (ex.: 465 bloqueada na VPS → 587). */
+function alternateSmtpPort(port: number): number | null {
+  if (port === 465) return 587;
+  if (port === 587) return 465;
+  return null;
 }
 
 let cachedEnvTransporter: Transporter | null = null;
@@ -107,12 +142,14 @@ function getEnvTransporter(): Transporter {
     throw new Error('SMTP não configurado: cadastre uma conta em Admin > E-mails ou defina SMTP_HOST, SMTP_USER e SMTP_PASS no .env');
   }
   const port = Number(process.env.SMTP_PORT || 465);
-  cachedEnvTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
+  cachedEnvTransporter = nodemailer.createTransport(
+    smtpTransportOptions({
+      host,
+      port,
+      username: user,
+      password: pass,
+    })
+  );
   return cachedEnvTransporter;
 }
 
@@ -203,18 +240,32 @@ async function deliver(
   // O id do log é gerado antes do envio para que pixel e links rastreados apontem para ele
   const logId = randomUUID();
   const html = meta?.track === false ? options.html : injectTracking(options.html, logId);
+  const payload = {
+    from,
+    to: options.to,
+    subject: options.subject,
+    html,
+    text: options.text,
+  };
   try {
-    await transporter.sendMail({
-      from,
-      to: options.to,
-      subject: options.subject,
-      html,
-      text: options.text,
-    });
+    try {
+      await transporter.sendMail(payload);
+    } catch (err) {
+      // Em várias VPS a porta 465 (ou 587) é filtrada; tenta a porta alternativa uma vez.
+      const alt = account ? alternateSmtpPort(account.port) : null;
+      if (!account || !alt || !isSmtpConnectivityError(err)) throw err;
+      console.warn(
+        `[mailer] ${account.host}:${account.port} falhou (${err instanceof Error ? err.message : err}); tentando porta ${alt}`
+      );
+      await getAccountTransporter(account, alt).sendMail(payload);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (account) await registerAccountError(account.id, msg);
-    await logEmailSend(logId, options, meta, 'failed', msg, account?.id ?? null);
+    const hint = isSmtpConnectivityError(err)
+      ? `${msg} — a VPS provavelmente não alcança o SMTP (firewall/provedor bloqueando saída 465/587). Teste na VPS: nc -vz ${account?.host || 'smtp.hostinger.com'} 465 && nc -vz ${account?.host || 'smtp.hostinger.com'} 587`
+      : msg;
+    if (account) await registerAccountError(account.id, hint);
+    await logEmailSend(logId, options, meta, 'failed', hint.slice(0, 500), account?.id ?? null);
     throw err;
   }
   if (account) await registerAccountSend(account.id);
@@ -246,17 +297,29 @@ export async function sendMail(options: SendMailOptions, meta?: SendMailMeta): P
 export async function verifySmtpConnection(
   acc: Pick<SmtpAccount, 'host' | 'port' | 'username' | 'password'>
 ): Promise<{ ok: boolean; error?: string }> {
-  const transporter = nodemailer.createTransport({
-    host: acc.host,
-    port: acc.port,
-    secure: acc.port === 465,
-    auth: { user: acc.username, pass: acc.password },
-    connectionTimeout: 10_000,
-  });
+  const transporter = nodemailer.createTransport(smtpTransportOptions(acc));
   try {
     await transporter.verify();
     return { ok: true };
   } catch (err) {
+    const alt = alternateSmtpPort(acc.port);
+    if (alt && isSmtpConnectivityError(err)) {
+      const altTransport = nodemailer.createTransport(
+        smtpTransportOptions({ ...acc, port: alt })
+      );
+      try {
+        await altTransport.verify();
+        console.warn(`[mailer] verify: porta ${acc.port} falhou; ${alt} OK`);
+        return { ok: true };
+      } catch (altErr) {
+        return {
+          ok: false,
+          error: `${err instanceof Error ? err.message : String(err)} (também falhou em ${alt}: ${altErr instanceof Error ? altErr.message : String(altErr)})`,
+        };
+      } finally {
+        altTransport.close();
+      }
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
     transporter.close();
