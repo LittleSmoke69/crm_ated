@@ -1,7 +1,9 @@
 /**
  * PATCH /api/admin/newsletters/[id]
- * body: { action: 'pause' | 'resume' }
- * Pausa uma campanha em envio ou retoma uma pausada (continua de onde parou).
+ * body: { action: 'pause' | 'resume' | 'retry' }
+ * - pause: pausa campanha em envio
+ * - resume: retoma campanha pausada (continua de onde parou)
+ * - retry: reenvia campanha com falha (ou só os destinatários que falharam)
  * Apenas admin e super_admin (via requireAdmin).
  */
 import { NextRequest } from 'next/server';
@@ -24,8 +26,8 @@ export async function PATCH(
 
     const body = await req.json().catch(() => ({}));
     const action = body?.action;
-    if (action !== 'pause' && action !== 'resume') {
-      return errorResponse('action deve ser "pause" ou "resume"', 400);
+    if (action !== 'pause' && action !== 'resume' && action !== 'retry') {
+      return errorResponse('action deve ser "pause", "resume" ou "retry"', 400);
     }
 
     const { data: newsletter, error } = await supabaseServiceRole
@@ -49,24 +51,51 @@ export async function PATCH(
       return successResponse({ status: 'paused' }, 'Campanha pausada. O envio para no próximo destinatário.');
     }
 
-    // resume
-    if (newsletter.status !== 'paused') {
-      return errorResponse('Só é possível retomar campanhas pausadas.', 400);
-    }
     if (!(await isMailerConfigured())) {
       return errorResponse('SMTP não configurado: cadastre uma conta de envio ou configure o .env.', 503);
     }
 
+    // resume: só pausadas | retry: falhou OU enviada com falhas parciais
+    if (action === 'resume') {
+      if (newsletter.status !== 'paused') {
+        return errorResponse('Só é possível retomar campanhas pausadas.', 400);
+      }
+    } else {
+      const canRetryFailed = newsletter.status === 'failed';
+      const canRetryPartial =
+        newsletter.status === 'sent' && Number(newsletter.failed_count || 0) > 0;
+      if (!canRetryFailed && !canRetryPartial) {
+        return errorResponse(
+          'Só é possível repetir campanhas com status Falhou ou Enviada com falhas.',
+          400
+        );
+      }
+    }
+
+    const fromStatus = newsletter.status;
     const { data: claimed, error: claimErr } = await supabaseServiceRole
       .from('email_newsletters')
-      .update({ status: 'sending' })
+      .update({
+        status: 'sending',
+        scheduled_at: null,
+        // Mantém contadores: runNewsletterSend recalcula a partir de email_logs (não reenvia sucesso).
+      })
       .eq('id', id)
-      .eq('status', 'paused')
+      .eq('status', fromStatus)
       .select('id, subject, body, audience, custom_emails, smtp_account_ids')
       .maybeSingle();
 
-    if (claimErr) return errorResponse('Erro ao retomar campanha', 500);
-    if (!claimed) return errorResponse('Campanha já foi retomada ou não está mais pausada.', 409);
+    if (claimErr) {
+      return errorResponse(action === 'resume' ? 'Erro ao retomar campanha' : 'Erro ao repetir campanha', 500);
+    }
+    if (!claimed) {
+      return errorResponse(
+        action === 'resume'
+          ? 'Campanha já foi retomada ou não está mais pausada.'
+          : 'Campanha já foi reprocessada ou mudou de status.',
+        409
+      );
+    }
 
     const recipients = await resolveNewsletterRecipients(claimed.audience, claimed.custom_emails);
     if (recipients.length === 0) {
@@ -74,7 +103,7 @@ export async function PATCH(
         .from('email_newsletters')
         .update({ status: 'failed', sent_at: new Date().toISOString() })
         .eq('id', id);
-      return errorResponse('Nenhum destinatário encontrado para retomar o envio.', 400);
+      return errorResponse('Nenhum destinatário encontrado para o envio.', 400);
     }
 
     await supabaseServiceRole
@@ -86,7 +115,9 @@ export async function PATCH(
 
     return successResponse(
       { status: 'sending', total_recipients: recipients.length },
-      'Envio retomado — continua de onde parou.'
+      action === 'resume'
+        ? 'Envio retomado — continua de onde parou.'
+        : 'Campanha reiniciada — reenvia apenas quem ainda não recebeu com sucesso.'
     );
   } catch (err: unknown) {
     return serverErrorResponse(err);

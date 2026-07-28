@@ -4,11 +4,25 @@ import { canAccessUser } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getConsultorsByManager } from '@/lib/utils/hierarchy';
+import { fetchAllSupabasePages } from '@/lib/supabase/fetch-all-pages';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 120;
 
 /**
  * Kanban de gestão de clientes (sem loteria).
  * Fonte: crm_columns (estágios) + crm_leads (clientes) + crm_lead_stage (posição).
  */
+
+const PAGE_SIZE = 1000;
+const IN_CHUNK = 500;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
 
 type LeadRow = {
   external_id: number;
@@ -82,11 +96,10 @@ export async function GET(req: NextRequest) {
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
-    let leadsQuery = supabaseServiceRole
-      .from('crm_leads')
-      .select('external_id, user_id, name, last_name, phone, email')
-      .order('created_at', { ascending: false })
-      .limit(2000);
+    let leadsFilter: {
+      mode: 'eq' | 'in' | 'not_in' | 'none';
+      values?: string[];
+    } = { mode: 'none' };
 
     if (viewer.status === 'gerente') {
       const teamIds = viewer.teamUserIds ?? [];
@@ -94,7 +107,7 @@ export async function GET(req: NextRequest) {
         return successResponse({
           columns: columns ?? [],
           clients: [],
-          meta: { can_view_all: true, can_edit_columns: false, attendants: [] },
+          meta: { can_view_all: true, can_edit_columns: false, attendants: [], total_clients: 0 },
         });
       }
       if (targetUserId) {
@@ -102,12 +115,12 @@ export async function GET(req: NextRequest) {
         if (!allowed || !teamIds.includes(targetUserId)) {
           return errorResponse('Sem permissão para ver o kanban deste captador.', 403);
         }
-        leadsQuery = leadsQuery.eq('user_id', targetUserId);
+        leadsFilter = { mode: 'eq', values: [targetUserId] };
       } else {
-        leadsQuery = leadsQuery.in('user_id', teamIds);
+        leadsFilter = { mode: 'in', values: teamIds };
       }
     } else if (!viewer.canViewAll) {
-      leadsQuery = leadsQuery.eq('user_id', userId);
+      leadsFilter = { mode: 'eq', values: [userId] };
     } else if (viewer.status === 'admin') {
       if (viewer.tenantId) {
         const tenantUserIds = await getTenantUserIds(viewer.tenantId, { excludeSuperAdmin: true });
@@ -115,58 +128,108 @@ export async function GET(req: NextRequest) {
           return successResponse({
             columns: columns ?? [],
             clients: [],
-            meta: { can_view_all: true, can_edit_columns: true, attendants: [] },
+            meta: { can_view_all: true, can_edit_columns: true, attendants: [], total_clients: 0 },
           });
         }
-        leadsQuery = leadsQuery.in('user_id', tenantUserIds);
+        leadsFilter = { mode: 'in', values: tenantUserIds };
       } else {
         const superAdminIds = await getSuperAdminUserIds();
         if (superAdminIds.length > 0) {
-          leadsQuery = leadsQuery.not('user_id', 'in', `(${superAdminIds.join(',')})`);
+          leadsFilter = { mode: 'not_in', values: superAdminIds };
         }
       }
     }
 
-    const { data: leads } = await leadsQuery;
+    const { data: leads, error: leadsError } = await fetchAllSupabasePages<LeadRow>(
+      async (from, to) => {
+        let query = supabaseServiceRole
+          .from('crm_leads')
+          .select('external_id, user_id, name, last_name, phone, email')
+          .order('created_at', { ascending: false })
+          .order('external_id', { ascending: false })
+          .range(from, to);
 
-    const leadRows = (leads ?? []) as LeadRow[];
+        if (leadsFilter.mode === 'eq' && leadsFilter.values?.[0]) {
+          query = query.eq('user_id', leadsFilter.values[0]);
+        } else if (leadsFilter.mode === 'in' && leadsFilter.values?.length) {
+          query = query.in('user_id', leadsFilter.values);
+        } else if (leadsFilter.mode === 'not_in' && leadsFilter.values?.length) {
+          query = query.not('user_id', 'in', `(${leadsFilter.values.join(',')})`);
+        }
+
+        const { data, error } = await query;
+        return { data: (data as LeadRow[] | null) ?? null, error };
+      },
+      PAGE_SIZE
+    );
+    if (leadsError) return errorResponse(`Erro ao carregar clientes: ${leadsError.message}`, 500);
+
+    const leadRows = leads ?? [];
     const externalIds = leadRows.map((l) => String(l.external_id));
 
     const stageMap = new Map<string, { column_key: string; position: number }>();
-    if (externalIds.length) {
-      const { data: stages } = await supabaseServiceRole
-        .from('crm_lead_stage')
-        .select('lead_external_id, user_id, column_key, position')
-        .in('lead_external_id', externalIds);
+    for (const ids of chunkArray(externalIds, IN_CHUNK)) {
+      const { data: stages, error: stagesError } = await fetchAllSupabasePages<{
+        lead_external_id: string;
+        user_id: string;
+        column_key: string;
+        position: number;
+      }>(
+        async (from, to) => {
+          const { data, error } = await supabaseServiceRole
+            .from('crm_lead_stage')
+            .select('lead_external_id, user_id, column_key, position')
+            .in('lead_external_id', ids)
+            .order('lead_external_id', { ascending: true })
+            .range(from, to);
+          return { data, error };
+        },
+        PAGE_SIZE
+      );
+      if (stagesError) return errorResponse(`Erro ao carregar estágios: ${stagesError.message}`, 500);
       for (const s of stages ?? []) {
-        const row = s as { lead_external_id: string; user_id: string; column_key: string; position: number };
-        stageMap.set(`${row.lead_external_id}:${row.user_id}`, { column_key: row.column_key, position: row.position });
+        stageMap.set(`${s.lead_external_id}:${s.user_id}`, {
+          column_key: s.column_key,
+          position: s.position,
+        });
       }
     }
 
     const tagMap = new Map<string, { id: string; label: string; color: string }[]>();
-    if (externalIds.length) {
-      const { data: lt } = await supabaseServiceRole
-        .from('crm_lead_tags')
-        .select('lead_external_id, user_id, crm_tags(id, label, color)')
-        .in('lead_external_id', externalIds);
+    for (const ids of chunkArray(externalIds, IN_CHUNK)) {
+      const { data: lt, error: tagsError } = await fetchAllSupabasePages<{
+        lead_external_id: string;
+        user_id: string;
+        crm_tags: { id: string; label: string; color: string } | null;
+      }>(
+        async (from, to) => {
+          const { data, error } = await supabaseServiceRole
+            .from('crm_lead_tags')
+            .select('lead_external_id, user_id, crm_tags(id, label, color)')
+            .in('lead_external_id', ids)
+            .order('lead_external_id', { ascending: true })
+            .range(from, to);
+          return { data: data as any, error };
+        },
+        PAGE_SIZE
+      );
+      if (tagsError) return errorResponse(`Erro ao carregar etiquetas: ${tagsError.message}`, 500);
       for (const row of lt ?? []) {
-        const r = row as { lead_external_id: string; user_id: string; crm_tags: { id: string; label: string; color: string } | null };
-        if (!r.crm_tags) continue;
-        const key = `${r.lead_external_id}:${r.user_id}`;
+        if (!row.crm_tags) continue;
+        const key = `${row.lead_external_id}:${row.user_id}`;
         const arr = tagMap.get(key) ?? [];
-        arr.push({ id: r.crm_tags.id, label: r.crm_tags.label, color: r.crm_tags.color });
+        arr.push({ id: row.crm_tags.id, label: row.crm_tags.label, color: row.crm_tags.color });
         tagMap.set(key, arr);
       }
     }
 
     const ownerIds = [...new Set(leadRows.map((l) => l.user_id).filter(Boolean))] as string[];
     const ownerNameById = new Map<string, string>();
-    if (ownerIds.length > 0) {
+    for (const ids of chunkArray(ownerIds, IN_CHUNK)) {
       const { data: owners } = await supabaseServiceRole
         .from('profiles')
         .select('id, full_name, email')
-        .in('id', ownerIds);
+        .in('id', ids);
       for (const o of owners ?? []) {
         const row = o as { id: string; full_name?: string | null; email?: string | null };
         ownerNameById.set(row.id, row.full_name?.trim() || row.email?.trim() || row.id);
@@ -202,6 +265,7 @@ export async function GET(req: NextRequest) {
         can_view_all: viewer.canViewAll,
         can_edit_columns: viewer.canEditColumns,
         attendants,
+        total_clients: clients.length,
       },
     });
   } catch (err) {

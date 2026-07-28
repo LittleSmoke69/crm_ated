@@ -59,6 +59,28 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Último erro SMTP por campanha (útil para status "failed")
+    const lastErrors: Record<string, string> = {};
+    const failedIds = newsletters
+      .filter((n) => n.status === 'failed' || Number(n.failed_count || 0) > 0)
+      .map((n) => n.id as string);
+    if (failedIds.length > 0) {
+      const { data: errLogs } = await supabaseServiceRole
+        .from('email_logs')
+        .select('newsletter_id, error, created_at')
+        .in('newsletter_id', failedIds)
+        .eq('status', 'failed')
+        .not('error', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      for (const row of errLogs || []) {
+        const nid = row.newsletter_id as string;
+        if (!nid || lastErrors[nid]) continue;
+        const err = String(row.error || '').trim();
+        if (err) lastErrors[nid] = err.slice(0, 280);
+      }
+    }
+
     // Campanhas com logs de tracking (qualquer página): fonte dos seletores de público segmentado
     let segmentSources: { id: string; subject: string; created_at: string }[] = [];
     const { data: withLogs } = await supabaseServiceRole
@@ -79,6 +101,7 @@ export async function GET(req: NextRequest) {
     return successResponse({
       newsletters,
       tracking,
+      last_errors: lastErrors,
       total: newslettersRes.count ?? newsletters.length,
       limit,
       offset,

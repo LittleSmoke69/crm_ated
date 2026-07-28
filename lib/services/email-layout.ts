@@ -17,8 +17,16 @@ const APP_URL = () =>
 
 const BRAND_NAME = () => process.env.EMAIL_BRAND_NAME || 'CRM';
 
-/** Envolve o corpo editável no layout da marca (header + card branco + rodapé). */
+/** Envolve o corpo editável no layout da marca (header + card branco + rodapé).
+ *  Se o HTML já for um e-mail completo (table 600px / shell Cap do Sucesso), devolve sem reembrulhar.
+ */
 export function wrapEmailLayout(bodyHtml: string): string {
+  const lower = bodyHtml.toLowerCase();
+  const alreadyComplete =
+    (lower.includes('role="presentation"') || lower.includes("role='presentation'")) &&
+    (lower.includes('max-width:600px') || lower.includes('width="600"'));
+  if (alreadyComplete) return bodyHtml;
+
   return `
 <div style="background-color:${BRAND.background};padding:32px 16px;font-family:Arial,Helvetica,sans-serif;">
   <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:14px;border:1px solid ${BRAND.cardBorder};overflow:hidden;">

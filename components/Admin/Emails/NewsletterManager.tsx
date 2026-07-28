@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Loader2, Send, Calendar, Eye, Pause, Play, X, Upload, Users, ChevronDown, ChevronUp,
+  Loader2, Send, Calendar, Eye, Pause, Play, X, Upload, Users, ChevronDown, ChevronUp, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui';
+import {
+  DEFAULT_NEWSLETTER_SUBJECT,
+  autocorrectNewsletterHtml,
+  getDefaultNewsletterBody,
+  getNewsletterImagePublicUrl,
+} from '@/lib/email/newsletter-html';
 
 interface SmtpAccountOption {
   id: string;
@@ -40,7 +46,14 @@ const STATUS_LABEL: Record<Newsletter['status'], { label: string; cls: string }>
   failed: { label: 'Falhou', cls: 'border-red-500/60 text-red-600 dark:text-red-400 bg-red-500/10' },
 };
 
-const emptyDraft = { id: null as string | null, subject: '', body: '', audience: 'all' as 'all' | 'custom', custom_emails: '', smtp_account_ids: [] as string[] };
+const emptyDraft = {
+  id: null as string | null,
+  subject: DEFAULT_NEWSLETTER_SUBJECT,
+  body: getDefaultNewsletterBody(),
+  audience: 'all' as 'all' | 'custom',
+  custom_emails: '',
+  smtp_account_ids: [] as string[],
+};
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -55,6 +68,7 @@ function formatDateTime(iso: string | null): string {
 export default function NewsletterManager({ userId }: { userId: string }) {
   const [newsletters, setNewsletters] = useState<Newsletter[]>([]);
   const [tracking, setTracking] = useState<Record<string, { opened: number; clicked: number; logged: number }>>({});
+  const [lastErrors, setLastErrors] = useState<Record<string, string>>({});
   const [allUsersCount, setAllUsersCount] = useState(0);
   const [accounts, setAccounts] = useState<SmtpAccountOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,6 +83,8 @@ export default function NewsletterManager({ userId }: { userId: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [hasSending, setHasSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [imageUrl, setImageUrl] = useState(getNewsletterImagePublicUrl());
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ msg, type });
@@ -92,6 +108,7 @@ export default function NewsletterManager({ userId }: { userId: string }) {
       const list: Newsletter[] = nlJson.data.newsletters || [];
       setNewsletters(list);
       setTracking(nlJson.data.tracking || {});
+      setLastErrors(nlJson.data.last_errors || {});
       setAllUsersCount(nlJson.data.all_users_count || 0);
       setHasSending(list.some((n) => n.status === 'sending'));
       if (accRes.ok && accJson.success) {
@@ -293,6 +310,30 @@ export default function NewsletterManager({ userId }: { userId: string }) {
     }
   };
 
+  const retryCampaign = async (n: Newsletter) => {
+    const msg =
+      n.status === 'failed'
+        ? 'Repetir esta campanha agora? Quem já recebeu com sucesso não será reenviado.'
+        : `Repetir os ${n.failed_count} envio(s) que falharam? Quem já recebeu com sucesso não será reenviado.`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/newsletters/${n.id}`, {
+        method: 'PATCH',
+        headers: headers(),
+        body: JSON.stringify({ action: 'retry' }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || json.message || 'Erro ao repetir campanha');
+      showToast(json.message || 'Campanha reiniciada.', 'success');
+      load();
+    } catch (e: any) {
+      showToast(e?.message || 'Erro ao repetir campanha', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleImportFile = async (file: File) => {
     try {
       const text = await file.text();
@@ -327,7 +368,7 @@ export default function NewsletterManager({ userId }: { userId: string }) {
         showToast('Nenhum e-mail encontrado nesse segmento.', 'error');
         return;
       }
-      setDraft({ id: null, subject: '', body: '', audience: 'custom', custom_emails: emails.join('\n'), smtp_account_ids: [] });
+      setDraft({ id: null, subject: DEFAULT_NEWSLETTER_SUBJECT, body: getDefaultNewsletterBody(), audience: 'custom', custom_emails: emails.join('\n'), smtp_account_ids: [] });
       showToast(`${emails.length} e-mail(s) carregado(s) no rascunho — edite assunto/corpo e envie.`, 'success');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (e: any) {
@@ -341,6 +382,47 @@ export default function NewsletterManager({ userId }: { userId: string }) {
     if (!draft.custom_emails) return 0;
     return draft.custom_emails.split(/[\s,;]+/).filter((e) => e.includes('@')).length;
   }, [draft.custom_emails]);
+
+  const uploadNewsletterImage = async (file: File) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/admin/email-assets/newsletter-image', {
+        method: 'POST',
+        headers: { 'X-User-Id': userId },
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Erro ao publicar imagem');
+      const url = json.data.public_url as string;
+      setImageUrl(url);
+      setDraft((d) => ({ ...d, body: getDefaultNewsletterBody(url) }));
+      showToast('Imagem publicada no Storage e aplicada no HTML.', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Erro ao publicar imagem', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyBodyAutocorrect = (raw: string, notify = true) => {
+    const result = autocorrectNewsletterHtml(raw);
+    setDraft((d) => ({ ...d, body: result.html }));
+    if (notify && result.corrected && result.reason) {
+      showToast(result.reason, 'success');
+    }
+  };
+
+  const onBodyPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = e.clipboardData.getData('text');
+    if (!pasted.trim()) return;
+    // Deixa o paste ocorrer e corrige no próximo tick (usa o valor já colado)
+    window.setTimeout(() => {
+      const el = e.target as HTMLTextAreaElement;
+      applyBodyAutocorrect(el.value);
+    }, 0);
+  };
 
   const canSend = draft.subject.trim() && draft.body.trim() && !busy;
 
@@ -367,15 +449,66 @@ export default function NewsletterManager({ userId }: { userId: string }) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Corpo (HTML)</label>
+          <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Corpo (HTML)</label>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={busy}
+                className="text-xs font-medium text-[#E86A24] hover:underline"
+              >
+                Publicar imagem no Storage
+              </button>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadNewsletterImage(f);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => applyBodyAutocorrect(draft.body)}
+                className="text-xs font-medium text-[#E86A24] hover:underline"
+              >
+                Corrigir HTML automaticamente
+              </button>
+            </div>
+          </div>
+          {imageUrl && (
+            <div className="mb-2 flex items-center gap-3 rounded-xl border border-gray-200 dark:border-gray-600 p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={imageUrl} alt="Newsletter" className="h-14 w-auto rounded-md object-cover" />
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 break-all">
+                Storage: <a href={imageUrl} target="_blank" rel="noreferrer" className="text-[#E86A24] hover:underline">{imageUrl}</a>
+              </p>
+            </div>
+          )}
           <textarea
             value={draft.body}
             onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-            rows={10}
+            onPaste={onBodyPaste}
+            onBlur={() => {
+              if (!draft.body.trim()) return;
+              const result = autocorrectNewsletterHtml(draft.body);
+              if (result.corrected) {
+                setDraft((d) => ({ ...d, body: result.html }));
+                if (result.reason) showToast(result.reason, 'success');
+              }
+            }}
+            rows={14}
             className={`${inputClass} font-mono text-xs leading-relaxed`}
-            placeholder={'<p>Olá {{Nome}},</p>\n<p>Sua mensagem aqui...</p>'}
+            placeholder={'Cole HTML ou texto. Estruturas incompletas são corrigidas automaticamente.'}
           />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Variáveis disponíveis: <code>{'{{Nome}}'}</code>, <code>{'{{Email}}'}</code>, <code>{'{{Url}}'}</code>.</p>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Variáveis: <code>{'{{Nome}}'}</code>, <code>{'{{Email}}'}</code>, <code>{'{{Url}}'}</code>.
+            Ao colar HTML incompleto, o sistema envolve no layout padrão (WhatsApp + tabela 600px).
+          </p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -501,6 +634,16 @@ export default function NewsletterManager({ userId }: { userId: string }) {
                           <Play className="w-3.5 h-3.5" /> Retomar
                         </button>
                       )}
+                      {(n.status === 'failed' || (n.status === 'sent' && n.failed_count > 0)) && (
+                        <button
+                          onClick={() => retryCampaign(n)}
+                          disabled={busy}
+                          className="px-3 py-1.5 rounded-lg text-xs font-bold border border-[#E86A24]/60 text-[#E86A24] hover:bg-[#E86A24]/10 flex items-center gap-1.5"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          {n.status === 'failed' ? 'Repetir campanha' : 'Repetir falhas'}
+                        </button>
+                      )}
                       <button onClick={() => setExpanded(isExpanded ? null : n.id)} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10">
                         {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </button>
@@ -523,6 +666,19 @@ export default function NewsletterManager({ userId }: { userId: string }) {
                           </>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {(n.status === 'failed' || n.failed_count > 0) && lastErrors[n.id] && (
+                    <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
+                      <span className="font-semibold">Último erro SMTP: </span>
+                      {lastErrors[n.id]}
+                    </div>
+                  )}
+
+                  {n.status === 'failed' && n.total_recipients === 0 && (
+                    <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                      Campanha falhou sem destinatários. Confira o público (usuários com e-mail ou lista personalizada) e tente novamente.
                     </div>
                   )}
 
