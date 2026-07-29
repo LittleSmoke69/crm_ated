@@ -1,22 +1,33 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, after } from 'next/server';
 import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { assertEvolutionWebhookAuthorized } from '@/lib/server/evolution-webhook-auth';
 import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
-import { publishWebhookEvent } from '@/lib/queue/rabbitmq';
+import { isRabbitMqConfigured, publishWebhookEvent } from '@/lib/queue/rabbitmq';
+import { processWebhookEvent } from '@/lib/services/webhook-processor';
 
 /** Evita payloads enormes (memória + parse) sem tocar o banco. */
 const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
 
 export const runtime = 'nodejs';
-export const maxDuration = 10;
+/** Sync (sem RabbitMQ) precisa de margem; com fila o work é nos workers. */
+export const maxDuration = 60;
+
+function scheduleSyncProcess(payload: unknown, zaplotoId: string | null): void {
+  after(() =>
+    processWebhookEvent(payload, { zaplotoId }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[WEBHOOK PROD] Falha no processamento sync:', msg);
+    }),
+  );
+}
 
 /**
  * POST /api/webhooks/evolution/prod
  *
- * Retorna 200 em < 5ms: apenas enfileira o payload no RabbitMQ.
- * Workers RabbitMQ (zaplotov3-worker1..3) consomem com prefetch controlado e
- * chamam processWebhookEvent. Falha de publish degrada para fallback: a request
- * ainda retorna 200 (evita retry-storm da Evolution) mas loga o evento para audit.
+ * - Com `RABBITMQ_URL`: enfileira no RabbitMQ (workers processam).
+ * - Sem RabbitMQ (stack leve): agenda `processWebhookEvent` via `after()` —
+ *   grava `evolution_webhook_events` + chat, igual ao fluxo validado em /test.
+ * - Se o publish na fila falhar: fallback sync para não perder o evento.
  */
 export async function POST(req: NextRequest) {
   const authFail = assertEvolutionWebhookAuthorized(req, 'prod');
@@ -34,7 +45,7 @@ export async function POST(req: NextRequest) {
   try {
     zaplotoId = await resolveZaplotoIdFromWebhookRequest(req);
 
-    let payload: any;
+    let payload: unknown;
     try {
       const buf = await req.arrayBuffer();
       payloadSize = buf.byteLength;
@@ -51,20 +62,41 @@ export async function POST(req: NextRequest) {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    await publishWebhookEvent(payload, zaplotoId);
+    if (isRabbitMqConfigured()) {
+      try {
+        await publishWebhookEvent(payload, zaplotoId);
+        return new Response(JSON.stringify({ ok: true, mode: 'rabbitmq' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[WEBHOOK PROD] Erro ao enfileirar — fallback sync:', {
+          message,
+          zaplotoId,
+          payloadSize,
+        });
+        scheduleSyncProcess(payload, zaplotoId);
+        return new Response(JSON.stringify({ ok: true, mode: 'sync_fallback' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
 
-    return new Response(JSON.stringify({ ok: true }), {
+    scheduleSyncProcess(payload, zaplotoId);
+    return new Response(JSON.stringify({ ok: true, mode: 'sync' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (err: any) {
-    console.error('[WEBHOOK PROD] Erro ao enfileirar:', {
-      message: err?.message,
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[WEBHOOK PROD] Erro inesperado:', {
+      message,
       zaplotoId,
       payloadSize,
     });
-    // Retorna 200 para evitar retry-storm da Evolution API (mensagem é perdida,
-    // mas o log acima permite auditoria; alternativa pior seria explodir os apps).
+    // 200 evita retry-storm da Evolution
     return new Response(JSON.stringify({ ok: true, queued: false }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -77,13 +109,17 @@ export async function POST(req: NextRequest) {
  * Healthcheck
  */
 export async function GET() {
+  const mode = isRabbitMqConfigured() ? 'rabbitmq' : 'sync';
   return new Response(
     JSON.stringify({
       ok: true,
       env: 'prod',
-      mode: 'rabbitmq',
+      mode,
       now: new Date().toISOString(),
-      message: 'Webhook Evolution PROD (modo fila) está ativo',
+      message:
+        mode === 'rabbitmq'
+          ? 'Webhook Evolution PROD (modo fila) está ativo'
+          : 'Webhook Evolution PROD (modo sync, sem RabbitMQ) está ativo',
     }),
     {
       status: 200,

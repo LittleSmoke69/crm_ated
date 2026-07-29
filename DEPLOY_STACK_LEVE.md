@@ -97,10 +97,11 @@ URL=https://crm.seudominio.com
 NEXT_PUBLIC_SITE_URL=https://crm.seudominio.com
 SESSION_SECRET=segredo_aleatorio
 ENCRYPTION_PEPPER=outro_segredo_aleatorio
-NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=modelagem
-ZAPLOTO_APP_SCOPE=modelagem
-NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK=true
-ZAPLOTO_DISABLE_EVOLUTION_STACK=true
+# Com Evolution (Cap): use full + vars da seção 10. Sem Evolution: modelagem + disable true.
+NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=full
+ZAPLOTO_APP_SCOPE=full
+NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK=false
+ZAPLOTO_DISABLE_EVOLUTION_STACK=false
 
 # E-mail na SuperBitHost: SMTP outbound é bloqueado — use o relay na Contabo
 # (veja email-relay/README.md). Sem isso, campanhas falham com Connection timeout.
@@ -148,8 +149,7 @@ docker exec supabase-db psql -U postgres -d postgres \
 
 ## 5. Build e usuário inicial
 
-O build recebe explicitamente o escopo `modelagem`, evitando que módulos da
-stack completa sejam incorporados ao bundle do navegador.
+O build recebe o escopo via `.env` / build-args (`full` ou `modelagem`).
 
 ```bash
 cd /opt/crm-ated
@@ -249,15 +249,95 @@ docker compose logs --tail=100 app1 app2
 Para rollback do aplicativo, use o hash do commit anterior e reconstrua a
 imagem. Não execute `docker compose down -v`, pois isso pode apagar volumes.
 
-## 9. O que não roda nesta edição
+## 9. O que não roda nesta edição (sem containers extras)
 
-- RabbitMQ e consumidores de webhook Evolution;
-- anti-spam em tempo real ou scanner periódico;
-- maturação;
-- campanhas, broadcasts e envios em massa em background;
-- cron Linux dedicado;
-- Scheduled Functions do Netlify.
+- RabbitMQ e workers dedicados (opcional: defina `RABBITMQ_URL` se subir o broker);
+- anti-spam em tempo real ou scanner periódico (workers);
+- maturação / campanhas em background / cron Netlify.
 
-As rotas legadas continuam no código para compatibilidade, mas não possuem
-processador automático. A visibilidade da aplicação é definida pelas tabelas
-`zaploto_sidebar_items` e `zaploto_role_sidebar` semeadas pelas migrations.
+Com `NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=full`, o chat Evolution funciona: o endpoint
+`/api/webhooks/evolution/prod` processa em **sync** (grava `evolution_webhook_events`
++ conversas) quando `RABBITMQ_URL` não está definido.
+
+A visibilidade da sidebar continua em `zaploto_sidebar_items` / `zaploto_role_sidebar`.
+
+## 10. Evolution em produção (Cap do Sucesso)
+
+### DNS / URL pública
+
+O CRM Cap já responde em `https://capdosucesso.co.uk`. Use essa URL (ou
+`https://crm.capdosucesso.co.uk` se criar CNAME/A + TLS apontando para o mesmo
+upstream Nginx dos `app1`/`app2`).
+
+```text
+# Opcional — subdomain dedicado
+crm.capdosucesso.co.uk  CNAME  →  capdosucesso.co.uk
+# ou A → IP do VPS (mesmo proxy reverso da seção 7)
+```
+
+### .env no VPS (`/opt/crm-ated/.env`)
+
+Além do bloco Supabase/sessão:
+
+```dotenv
+NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=full
+ZAPLOTO_APP_SCOPE=full
+NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK=false
+ZAPLOTO_DISABLE_EVOLUTION_STACK=false
+
+SITE_URL=https://capdosucesso.co.uk
+URL=https://capdosucesso.co.uk
+NEXT_PUBLIC_SITE_URL=https://capdosucesso.co.uk
+NEXT_PUBLIC_APP_URL=https://capdosucesso.co.uk
+NEXT_PUBLIC_WEBHOOK_BASE_URL=https://capdosucesso.co.uk
+
+EVOLUTION_BASE_URL=https://evolution.capdosucesso.co.uk
+EVOLUTION_API_KEY=sua_api_key_global
+EVOLUTION_WEBHOOK_SECRET_PROD=$(openssl rand -hex 32)
+EVOLUTION_WEBHOOK_SECRET_TEST=$(openssl rand -hex 32)
+EVOLUTION_WEBHOOK_SKIP_MASTER=false
+```
+
+Não defina `EVOLUTION_WEBHOOK_ALLOW_NO_TOKEN`, `EVOLUTION_WEBHOOK_ALLOW_LOCALHOST`
+nem `RABBITMQ_URL` neste stack.
+
+### Migrations Evolution
+
+```bash
+cd /opt/crm-ated
+for f in migrations/modelagem/23_evolution_stack.sql migrations/modelagem/24_evolution_webhook_events.sql; do
+  echo "Aplicando: $f"
+  docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$f"
+done
+docker exec supabase-db psql -U postgres -d postgres -c "NOTIFY pgrst, 'reload schema';"
+```
+
+### Deploy e cutover do webhook
+
+```bash
+cd /opt/crm-ated
+git pull --ff-only origin main
+docker compose up -d --build --remove-orphans
+curl -fsS https://capdosucesso.co.uk/api/webhooks/evolution/prod
+# Esperado: "mode":"sync"
+```
+
+Com o `.env` de produção no diretório do repo (ou no VPS):
+
+```bash
+node scripts/cutover-evolution-webhook-prod.cjs Teste
+```
+
+Isso registra na Evolution:
+
+- URL: `https://capdosucesso.co.uk/api/webhooks/evolution/prod`
+- Header: `x-zaploto-token: <EVOLUTION_WEBHOOK_SECRET_PROD>`
+- Eventos: `MESSAGES_UPSERT`, `SEND_MESSAGE`
+
+Teste: envie uma mensagem WhatsApp para a instância e confira `/chat`.
+
+### Segurança
+
+- Rotacione `EVOLUTION_API_KEY` no Manager se a chave vazou em chat/logs.
+- Nunca commite `.env`. Use `.env.example` como referência.
+

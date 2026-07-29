@@ -914,6 +914,8 @@ export default function ChatPage() {
   const [atendimentoGateNotice, setAtendimentoGateNotice] = useState<string | null>(null);
   const [pendingAtendimentoChannel, setPendingAtendimentoChannel] = useState<Channel | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  /** Admin only: separa o atendimento entre WhatsApp Oficial (Meta) e Evolution API antes de listar os canais. */
+  const [adminChannelTypeChoice, setAdminChannelTypeChoice] = useState<'oficial' | 'evolution' | null>(null);
   /** Gate: gerente — vínculos instância ↔ consultor (atendimento_chat_assignments) */
   const [gerenteGateAssignmentByInstance, setGerenteGateAssignmentByInstance] = useState<
     Record<
@@ -1609,6 +1611,7 @@ export default function ChatPage() {
   const reopenAtendimentoInstancePicker = () => {
     setAtendimentoGateNotice(null);
     setPendingAtendimentoChannel((prev) => selectedChannel ?? prev);
+    setAdminChannelTypeChoice(selectedChannel ? (selectedChannel.type === 'evolution' ? 'evolution' : 'oficial') : null);
     setAtendimentoGatePassed(false);
     setSelectedChannel(null);
     setSelectedConversationId('');
@@ -1619,6 +1622,7 @@ export default function ChatPage() {
   /** Volta ao seletor mantendo aviso (ex.: instância desconectada). */
   const reopenAtendimentoInstancePickerWithNotice = (notice: string) => {
     setPendingAtendimentoChannel((prev) => selectedChannel ?? prev);
+    setAdminChannelTypeChoice(selectedChannel ? (selectedChannel.type === 'evolution' ? 'evolution' : 'oficial') : null);
     setAtendimentoGatePassed(false);
     setSelectedChannel(null);
     setSelectedConversationId('');
@@ -4259,7 +4263,6 @@ export default function ChatPage() {
 
   // Tela inicial: escolher / confirmar instância (Evolution) ou canal WhatsApp Oficial antes de abrir o chat
   if (!atendimentoGatePassed) {
-    const totalCanais = channels.evolution.length + channels.whatsapp_official.length;
     const statusConfig = (status: string) => {
       const s = (status || '').toLowerCase();
       if (s === 'open' || s === 'connected' || s === 'ok') return { dot: 'bg-emerald-400', label: 'Conectado', text: 'text-emerald-600 dark:text-emerald-400' };
@@ -4267,13 +4270,91 @@ export default function ChatPage() {
       return { dot: 'bg-red-400', label: 'Desconectado', text: 'text-red-500 dark:text-red-400' };
     };
 
+    // Admin/super_admin: primeiro escolhe entre WhatsApp Oficial (Meta) e Evolution API antes de ver a lista de canais.
+    if (isAdminOrSuperAdmin && adminChannelTypeChoice === null) {
+      return (
+        <Layout onSignOut={handleSignOut}>
+          <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto bg-gray-50 dark:bg-[#1a1a1a]">
+            <div className="w-full max-w-2xl">
+              <div className="text-center mb-8">
+                <div
+                  className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg"
+                  style={{ backgroundColor: '#E86A24' }}
+                >
+                  <Headphones className="w-8 h-8 text-white" />
+                </div>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat de Atendimento</h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Escolha qual canal de atendimento você quer usar
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminChannelTypeChoice('oficial');
+                    setPendingAtendimentoChannel(channels.whatsapp_official[0] ?? null);
+                  }}
+                  className="zap-panel text-left border-2 border-gray-200 dark:border-[#404040] hover:border-emerald-400 rounded-2xl p-5 transition-all"
+                >
+                  <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 mb-3">
+                    WhatsApp Oficial
+                  </span>
+                  <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">API Oficial (Meta)</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {channels.whatsapp_official.length} {channels.whatsapp_official.length === 1 ? 'número conectado' : 'números conectados'}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminChannelTypeChoice('evolution');
+                    setPendingAtendimentoChannel(channels.evolution[0] ?? null);
+                  }}
+                  className="zap-panel text-left border-2 border-gray-200 dark:border-[#404040] hover:border-blue-400 rounded-2xl p-5 transition-all"
+                >
+                  <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 mb-3">
+                    Evolution API
+                  </span>
+                  <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">Evolution API</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {channels.evolution.length} {channels.evolution.length === 1 ? 'instância conectada' : 'instâncias conectadas'}
+                  </p>
+                </button>
+              </div>
+            </div>
+          </div>
+        </Layout>
+      );
+    }
+
+    const totalCanais = isAdminOrSuperAdmin
+      ? adminChannelTypeChoice === 'evolution'
+        ? channels.evolution.length
+        : channels.whatsapp_official.length
+      : channels.evolution.length + channels.whatsapp_official.length;
+
     return (
       <Layout onSignOut={handleSignOut}>
         <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto bg-gray-50 dark:bg-[#1a1a1a]">
           <div className="w-full max-w-2xl">
 
             {/* Header */}
-            <div className="text-center mb-8">
+            <div className="text-center mb-8 relative">
+              {isAdminOrSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminChannelTypeChoice(null);
+                    setPendingAtendimentoChannel(null);
+                  }}
+                  className="absolute left-0 top-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-[#E86A24] flex items-center gap-1"
+                >
+                  ← Voltar
+                </button>
+              )}
               <div
                 className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg"
                 style={{ backgroundColor: '#E86A24' }}
@@ -4286,6 +4367,10 @@ export default function ChatPage() {
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 {userStatus === 'gerente'
                   ? 'Suas instâncias aparecem abaixo. Vincule a banca e um ou mais captadores para eles acessarem esta instância no atendimento.'
+                  : isAdminOrSuperAdmin && adminChannelTypeChoice === 'evolution'
+                  ? 'Selecione a instância Evolution para iniciar o atendimento'
+                  : isAdminOrSuperAdmin && adminChannelTypeChoice === 'oficial'
+                  ? 'Selecione o número WhatsApp Oficial para iniciar o atendimento'
                   : 'Selecione a instância WhatsApp para iniciar o atendimento'}
               </p>
             </div>
@@ -4323,7 +4408,11 @@ export default function ChatPage() {
                     <MessageSquare className="w-7 h-7 text-gray-400" />
                   </div>
                   <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Nenhuma instância disponível
+                    {isAdminOrSuperAdmin && adminChannelTypeChoice === 'evolution'
+                      ? 'Nenhuma instância Evolution conectada'
+                      : isAdminOrSuperAdmin && adminChannelTypeChoice === 'oficial'
+                      ? 'Nenhum número WhatsApp Oficial configurado'
+                      : 'Nenhuma instância disponível'}
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400 max-w-xs">
                     {userStatus === 'gerente' ? (
@@ -4333,6 +4422,22 @@ export default function ChatPage() {
                           Instâncias WhatsApp
                         </Link>
                         ; ao conectar, ela aparecerá aqui para você vincular um captador.
+                      </>
+                    ) : isAdminOrSuperAdmin && adminChannelTypeChoice === 'evolution' ? (
+                      <>
+                        Conecte uma instância (QR code) em{' '}
+                        <Link href="/instances" className="underline" style={{ color: '#E86A24' }}>
+                          Instâncias WhatsApp
+                        </Link>
+                        . Depois de conectada, volte aqui e clique em "Atualizar" para liberar o atendimento por ela.
+                      </>
+                    ) : isAdminOrSuperAdmin && adminChannelTypeChoice === 'oficial' ? (
+                      <>
+                        Configure um número em{' '}
+                        <Link href="/admin/whatsapp-official" className="underline" style={{ color: '#E86A24' }}>
+                          WhatsApp Oficial
+                        </Link>
+                        {' '}para liberar o atendimento por ele.
                       </>
                     ) : (
                       <>
@@ -4345,6 +4450,15 @@ export default function ChatPage() {
                       </>
                     )}
                   </p>
+                  {isAdminOrSuperAdmin && adminChannelTypeChoice === 'evolution' && (
+                    <button
+                      type="button"
+                      onClick={() => void loadEvolutionChannels()}
+                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-300 dark:border-[#404040] hover:bg-gray-50 dark:hover:bg-[#333]"
+                    >
+                      Atualizar
+                    </button>
+                  )}
                 </div>
 
               ) : (
@@ -4358,7 +4472,7 @@ export default function ChatPage() {
 
                   {/* Instance grid */}
                   <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[min(55vh,400px)] overflow-y-auto">
-                    {channels.evolution.map((ch) => {
+                    {(!isAdminOrSuperAdmin || adminChannelTypeChoice === 'evolution') && channels.evolution.map((ch) => {
                       const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
                       const sc = statusConfig(ch.status);
                       const gRow = userStatus === 'gerente' ? gerenteGateAssignmentByInstance[ch.id] : undefined;
@@ -4520,6 +4634,7 @@ export default function ChatPage() {
                       );
                     })}
                     {userStatus !== 'gerente' &&
+                      (!isAdminOrSuperAdmin || adminChannelTypeChoice === 'oficial') &&
                       channels.whatsapp_official.map((ch) => {
                         const selected = pendingAtendimentoChannel && channelPickerKey(pendingAtendimentoChannel) === channelPickerKey(ch);
                         return (

@@ -11,7 +11,16 @@
  */
 import amqp, { type ChannelModel, type ConfirmChannel } from 'amqplib';
 
-export const RABBITMQ_URL = process.env.RABBITMQ_URL ?? 'amqp://guest:guest@rabbitmq:5672';
+/**
+ * URL efetiva para conectar. Só use fila quando `RABBITMQ_URL` estiver definido no ambiente.
+ * Stack leve (modelagem/Cap) não sobe RabbitMQ — o webhook /prod processa em sync.
+ */
+export function isRabbitMqConfigured(): boolean {
+  return Boolean(process.env.RABBITMQ_URL?.trim());
+}
+
+export const RABBITMQ_URL =
+  process.env.RABBITMQ_URL?.trim() || 'amqp://guest:guest@rabbitmq:5672';
 
 export const EXCHANGE = 'webhook.evolution';
 export const QUEUE = 'webhook.evolution.jobs';

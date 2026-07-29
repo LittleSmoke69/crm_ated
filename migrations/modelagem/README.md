@@ -20,8 +20,10 @@ a sua função, **sem recriar o banco**. Rode individualmente no **SQL Editor do
 | 13 | `13_seed_usuarios_captadores.sql` | **Importação de usuários** | Perfis da planilha, senha inicial, status e vínculos gerente/captador |
 | 14 | `14_profiles_theme_preference.sql` | **Preferência de tema** | Coluna usada por `/api/user/profile`, com valores `light` ou `dark` |
 | 15 | `15_branding_cap_do_sucesso.sql` | **Branding de produção** | Nome, domínio e paleta principal do Cap do Sucesso |
+| 23 | `23_evolution_stack.sql` | **Evolution API** (mínimo) | `evolution_apis`, `evolution_instances`, `user_evolution_apis` |
+| 24 | `24_evolution_webhook_events.sql` | **Webhooks Evolution** (chat) | `evolution_webhook_events`, waiters, `is_chat_instance` em mestres |
 
-**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11` → `12` → `13` → `14` → `15`.
+**Ordem:** `00` → `01` → `02` → `03` → `04` → `05` → `06` → `07` → `09` → `11` → `12` → `13` → `14` → `15` → `23` → `24`.
 - O **00 roda primeiro**: provisiona os pré-requisitos (inclusive `profiles`, espelhando
   `0000_foundation_supabase_core.sql`). Em banco já existente é **no-op total** (tudo `IF NOT EXISTS`).
 - Sem o 00, 02/03/04 podem falhar com "relation/column does not exist" num ambiente que não

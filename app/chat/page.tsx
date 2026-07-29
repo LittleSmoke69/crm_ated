@@ -57,6 +57,8 @@ import {
   Radio,
   Pencil as PencilIcon,
   LayoutTemplate,
+  Plus,
+  Star,
 } from 'lucide-react';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -806,6 +808,25 @@ export default function ChatPage() {
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   /** Aviso global quando a instância Evolution cai no envio (ex.: Connection Closed). */
   const [evolutionInstanceNotice, setEvolutionInstanceNotice] = useState<string | null>(null);
+  /** Admin only: separa o atendimento entre WhatsApp Oficial (Meta) e Evolution API antes de liberar o chat. */
+  const [adminChannelTypeChoice, setAdminChannelTypeChoice] = useState<'oficial' | 'evolution' | null>(null);
+  /** Admin only: Evolution API > lista de conexões > Nova Conexão > formulário > QR > liberar chat. */
+  const [evolutionListConfirmed, setEvolutionListConfirmed] = useState(false);
+  const [pendingEvolutionChannel, setPendingEvolutionChannel] = useState<ChannelEvolution | null>(null);
+  const [showCreateInstanceModal, setShowCreateInstanceModal] = useState(false);
+  const [newInstanceName, setNewInstanceName] = useState('');
+  const [newInstanceIsMaster, setNewInstanceIsMaster] = useState(true);
+  const [newInstanceMaturationType, setNewInstanceMaturationType] = useState<'maturado' | 'virgem'>('maturado');
+  const [creatingInstance, setCreatingInstance] = useState(false);
+  const [createInstanceError, setCreateInstanceError] = useState<string | null>(null);
+  const [pendingInstanceQr, setPendingInstanceQr] = useState<{ instanceName: string; qrCode: string } | null>(null);
+  /** Admin only: editar/apagar instâncias Evolution direto na lista de conexões. */
+  const [editingChannel, setEditingChannel] = useState<ChannelEvolution | null>(null);
+  const [editPhoneNumber, setEditPhoneNumber] = useState('');
+  const [editMaturationType, setEditMaturationType] = useState<'maturado' | 'virgem'>('maturado');
+  const [savingEditInstance, setSavingEditInstance] = useState(false);
+  const [editInstanceError, setEditInstanceError] = useState<string | null>(null);
+  const [deletingInstanceId, setDeletingInstanceId] = useState<string | null>(null);
 
   // Conversas
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -1275,7 +1296,7 @@ export default function ChatPage() {
   }, [userId]);
 
   // ── Canais ─────────────────────────────────────────────────────────────────
-  useEffect(() => {
+  const loadChannels = useCallback(() => {
     if (!userId) return;
     fetch('/api/chat/channels', { headers: authHeaders() })
       .then((r) => r.json())
@@ -1321,6 +1342,147 @@ export default function ChatPage() {
       })
       .catch((e) => console.error('[Chat] canais:', e));
   }, [userId, commitConversations]);
+
+  useEffect(() => {
+    loadChannels();
+  }, [loadChannels]);
+
+  // ── Criar instância Evolution (Evolution API > listar conexões > Nova Conexão) ──
+  const handleCreateEvolutionInstance = async () => {
+    if (!userId || !newInstanceName.trim()) {
+      setCreateInstanceError('Informe o nome da instância.');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(newInstanceName.trim())) {
+      setCreateInstanceError('O nome pode conter apenas letras, números e underscore (_).');
+      return;
+    }
+    setCreatingInstance(true);
+    setCreateInstanceError(null);
+    const createdInstanceName = newInstanceName.trim();
+    try {
+      const res = await fetch('/api/instances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          instanceName: createdInstanceName,
+          isMaster: newInstanceIsMaster,
+          maturationType: newInstanceMaturationType,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.data) {
+        setCreateInstanceError(data.error || data.message || 'Erro ao criar instância.');
+        return;
+      }
+      const instanceData = data.data;
+      const qrCodeValue: string =
+        instanceData.qr_code || instanceData.qrcode?.base64 || instanceData.qrcode || '';
+      const cleanQrCode = qrCodeValue.trim().replace(/\s/g, '');
+
+      setNewInstanceName('');
+      setNewInstanceIsMaster(true);
+      setNewInstanceMaturationType('maturado');
+      setShowCreateInstanceModal(false);
+
+      if (cleanQrCode) {
+        setPendingInstanceQr({ instanceName: createdInstanceName, qrCode: cleanQrCode });
+      }
+      await loadChannels();
+    } catch {
+      setCreateInstanceError('Falha de conexão ao criar instância.');
+    } finally {
+      setCreatingInstance(false);
+    }
+  };
+
+  const openEditInstanceModal = (ch: ChannelEvolution) => {
+    setEditingChannel(ch);
+    setEditPhoneNumber('');
+    setEditMaturationType('maturado');
+    setEditInstanceError(null);
+  };
+
+  const handleSaveEditInstance = async () => {
+    if (!userId || !editingChannel) return;
+    setSavingEditInstance(true);
+    setEditInstanceError(null);
+    try {
+      const body: Record<string, unknown> = { maturationType: editMaturationType };
+      if (editPhoneNumber.trim()) body.phone_number = editPhoneNumber.trim();
+
+      const res = await fetch(`/api/instances/${editingChannel.instance_name}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setEditInstanceError(data.error || 'Erro ao salvar alterações.');
+        return;
+      }
+      setEditingChannel(null);
+      await loadChannels();
+    } catch {
+      setEditInstanceError('Falha de conexão ao salvar alterações.');
+    } finally {
+      setSavingEditInstance(false);
+    }
+  };
+
+  const handleDeleteEvolutionInstance = async (ch: ChannelEvolution) => {
+    if (!userId) return;
+    if (!confirm(`Tem certeza que deseja deletar a instância "${ch.instance_name}"? Conversas e histórico ligados a ela serão apagados junto.`)) {
+      return;
+    }
+    setDeletingInstanceId(ch.id);
+    try {
+      const res = await fetch(`/api/instances/${ch.instance_name}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Erro ao deletar instância.');
+        return;
+      }
+      if (pendingEvolutionChannel?.id === ch.id) setPendingEvolutionChannel(null);
+      await loadChannels();
+    } catch {
+      alert('Falha de conexão ao deletar instância.');
+    } finally {
+      setDeletingInstanceId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingInstanceQr || !userId) return;
+    const instanceName = pendingInstanceQr.instanceName;
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/instances/${instanceName}/status`, { headers: authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (data.success && data.data) {
+          const st = String(data.data.status || '').toLowerCase();
+          const ev = String(data.data.evolutionState || data.data.state || '').toLowerCase();
+          const connected = st === 'connected' || ['connected', 'open', 'ready', 'online'].includes(ev);
+          if (connected) {
+            setPendingInstanceQr(null);
+            await loadChannels();
+            return;
+          }
+          if (data.data.qrCode) {
+            setPendingInstanceQr((prev) => (prev ? { ...prev, qrCode: data.data.qrCode } : prev));
+          }
+        }
+      } catch {
+        /* keep polling */
+      }
+    };
+    check();
+    const interval = setInterval(check, 3000);
+    return () => clearInterval(interval);
+  }, [pendingInstanceQr?.instanceName, userId, loadChannels]);
 
   // ── Carregar Conversas ─────────────────────────────────────────────────────
   const loadConversationsFromApi = useCallback(
@@ -3036,6 +3198,470 @@ export default function ChatPage() {
     );
   }
 
+  // Admin/super_admin: escolhe entre WhatsApp Oficial (Meta) e Evolution API antes de liberar o chat de atendimento.
+  if (canSelectChannel && adminChannelTypeChoice === null) {
+    return (
+      <Layout onSignOut={handleSignOut}>
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto bg-gray-50 dark:bg-[#1a1a1a]">
+          <div className="w-full max-w-2xl">
+            <div className="text-center mb-8">
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg"
+                style={{ backgroundColor: '#E86A24' }}
+              >
+                <MessageSquare className="w-8 h-8 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat de Atendimento</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Escolha qual canal de atendimento você quer usar
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminChannelTypeChoice('oficial');
+                  setSelectedChannel(channels.whatsapp_official[0] ?? null);
+                }}
+                className="zap-panel text-left border-2 border-gray-200 dark:border-[#404040] hover:border-emerald-400 rounded-2xl p-5 transition-all"
+              >
+                <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 mb-3">
+                  WhatsApp Oficial
+                </span>
+                <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">API Oficial (Meta)</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {channels.whatsapp_official.length} {channels.whatsapp_official.length === 1 ? 'número conectado' : 'números conectados'}
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminChannelTypeChoice('evolution');
+                  setEvolutionListConfirmed(false);
+                  setPendingEvolutionChannel(null);
+                }}
+                className="zap-panel text-left border-2 border-gray-200 dark:border-[#404040] hover:border-blue-400 rounded-2xl p-5 transition-all"
+              >
+                <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 mb-3">
+                  Evolution API
+                </span>
+                <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">Evolution API</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {channels.evolution.length} {channels.evolution.length === 1 ? 'instância conectada' : 'instâncias conectadas'}
+                </p>
+              </button>
+            </div>
+
+            {adminChannelTypeChoice === null && (channels.evolution.length + channels.whatsapp_official.length === 0) && (
+              <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-4">Carregando canais disponíveis...</p>
+            )}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Admin: Evolution API > listar conexões > Nova Conexão > formulário > QR Code > selecionar instância para o chat.
+  if (canSelectChannel && adminChannelTypeChoice === 'evolution' && !evolutionListConfirmed) {
+    const statusConfig = (status: string) => {
+      const s = (status || '').toLowerCase();
+      if (s === 'open' || s === 'connected' || s === 'ok') return { dot: 'bg-emerald-400', label: 'Conectado', text: 'text-emerald-600 dark:text-emerald-400' };
+      if (s === 'connecting') return { dot: 'bg-amber-400 animate-pulse', label: 'Conectando', text: 'text-amber-600 dark:text-amber-400' };
+      return { dot: 'bg-red-400', label: 'Desconectado', text: 'text-red-500 dark:text-red-400' };
+    };
+
+    return (
+      <Layout onSignOut={handleSignOut}>
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto bg-gray-50 dark:bg-[#1a1a1a]">
+          <div className="w-full max-w-2xl">
+            <div className="text-center mb-8 relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminChannelTypeChoice(null);
+                  setPendingEvolutionChannel(null);
+                }}
+                className="absolute left-0 top-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-[#E86A24]"
+              >
+                ← Voltar
+              </button>
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg"
+                style={{ backgroundColor: '#E86A24' }}
+              >
+                <MessageSquare className="w-8 h-8 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat de Atendimento</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Selecione a instância Evolution para iniciar o atendimento
+              </p>
+            </div>
+
+            <div className="zap-panel border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-5 pt-5 pb-3 border-b border-gray-100 dark:border-[#3a3a3a]">
+                <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
+                  {channels.evolution.length} {channels.evolution.length === 1 ? 'instância disponível' : 'instâncias disponíveis'}
+                </p>
+              </div>
+
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[min(55vh,400px)] overflow-y-auto">
+                {channels.evolution.map((ch) => {
+                  const selected = pendingEvolutionChannel?.id === ch.id;
+                  const sc = statusConfig(ch.status);
+                  return (
+                    <div
+                      key={ch.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setPendingEvolutionChannel(ch)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') setPendingEvolutionChannel(ch);
+                      }}
+                      className={`relative text-left rounded-xl border-2 overflow-hidden transition-all duration-150 p-4 cursor-pointer ${
+                        selected
+                          ? 'border-[#E86A24] bg-[#E86A24]/8 dark:bg-[#E86A24]/12 shadow-sm'
+                          : 'border-gray-200 dark:border-[#3a3a3a] hover:border-[#E86A24]/50 hover:bg-gray-50 dark:hover:bg-[#333]'
+                      }`}
+                    >
+                      <div className="absolute top-2 right-2 flex items-center gap-0.5 z-[2]">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditInstanceModal(ch);
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#3a3a3a] text-gray-400 dark:text-gray-500 hover:text-[#E86A24]"
+                          title="Editar instância"
+                        >
+                          <PencilIcon className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingInstanceId === ch.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteEvolutionInstance(ch);
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+                          title="Deletar instância"
+                        >
+                          {deletingInstanceId === ch.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="relative flex-shrink-0">
+                          <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-[#444] flex items-center justify-center">
+                            <MessageCircle className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                          </div>
+                          <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white dark:border-[#2a2a2a] ${sc.dot}`} />
+                        </div>
+                        <div className="min-w-0 flex-1 pr-14">
+                          <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">{ch.instance_name}</p>
+                          <p className={`text-xs font-medium ${sc.text}`}>{sc.label}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50">
+                          Evolution
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateInstanceError(null);
+                    setShowCreateInstanceModal(true);
+                  }}
+                  className="rounded-xl border-2 border-dashed border-gray-300 dark:border-[#404040] p-4 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400 hover:border-[#E86A24] hover:text-[#E86A24] transition-colors min-h-[104px]"
+                >
+                  <Plus className="w-5 h-5" />
+                  <span className="text-sm font-semibold">Nova Conexão</span>
+                </button>
+              </div>
+
+              <div className="px-4 pb-4 pt-2 border-t border-gray-100 dark:border-[#3a3a3a]">
+                <button
+                  type="button"
+                  disabled={!pendingEvolutionChannel}
+                  onClick={() => {
+                    if (!pendingEvolutionChannel) return;
+                    setSelectedChannel(pendingEvolutionChannel);
+                    setEvolutionListConfirmed(true);
+                    setSelectedConversationId('');
+                  }}
+                  className="w-full py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#E86A24' }}
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  {pendingEvolutionChannel ? `Entrar com ${pendingEvolutionChannel.instance_name}` : 'Selecione uma instância'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {showCreateInstanceModal && (
+          <div
+            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4"
+            onClick={() => !creatingInstance && setShowCreateInstanceModal(false)}
+          >
+            <div
+              className="bg-white dark:bg-[#2a2a2a] w-full max-w-lg rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl max-h-[85vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <Plus className="w-4 h-4" /> Nova Conexão
+                </h3>
+                <button
+                  onClick={() => !creatingInstance && setShowCreateInstanceModal(false)}
+                  className="p-1 text-gray-400"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Tipo de conexão
+                  </label>
+                  <div className="flex items-center gap-3 rounded-lg border-2 border-[#E86A24]/40 bg-[#E86A24]/5 p-3">
+                    <div className="w-9 h-9 rounded-lg bg-[#E86A24] flex items-center justify-center shrink-0">
+                      <MessageSquare className="w-4 h-4 text-white" />
+                    </div>
+                    <span className="text-sm font-semibold text-gray-800 dark:text-white">API WhatsApp (Não Oficial)</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Nome da instância *
+                  </label>
+                  <input
+                    type="text"
+                    value={newInstanceName}
+                    onChange={(e) => setNewInstanceName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                    placeholder="Ex: vendas, suporte, comercial_sp"
+                    disabled={creatingInstance}
+                    className={`w-full px-3 py-2.5 text-sm ${zapInput}`}
+                  />
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                    Nome único, sem espaços. Use letras, números e underscore (_).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Tipo de instância *
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={creatingInstance}
+                      onClick={() => setNewInstanceIsMaster(true)}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        newInstanceIsMaster
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" /> Mestre
+                      </span>
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Controla disparos, webhooks e sub-instâncias.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={creatingInstance}
+                      onClick={() => setNewInstanceIsMaster(false)}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        !newInstanceIsMaster
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <Zap className="w-3.5 h-3.5 text-blue-500" /> Normal
+                      </span>
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Instância padrão para conexão e envio.
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Tipo de maturação *
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={creatingInstance}
+                      onClick={() => setNewInstanceMaturationType('maturado')}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        newInstanceMaturationType === 'maturado'
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 block">Maturado</span>
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">Número já aquecido, pronto para uso.</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={creatingInstance}
+                      onClick={() => setNewInstanceMaturationType('virgem')}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        newInstanceMaturationType === 'virgem'
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 block">Virgem</span>
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">Número novo — maturar antes de massivos.</span>
+                    </button>
+                  </div>
+                </div>
+
+                {createInstanceError && <p className="text-xs text-red-500">{createInstanceError}</p>}
+
+                <button
+                  type="button"
+                  onClick={() => void handleCreateEvolutionInstance()}
+                  disabled={creatingInstance || !newInstanceName.trim()}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+                  style={{ backgroundColor: '#E86A24' }}
+                >
+                  {creatingInstance ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Criar instância
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editingChannel && (
+          <div
+            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4"
+            onClick={() => !savingEditInstance && setEditingChannel(null)}
+          >
+            <div
+              className="bg-white dark:bg-[#2a2a2a] w-full max-w-md rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <PencilIcon className="w-4 h-4" /> Editar {editingChannel.instance_name}
+                </h3>
+                <button onClick={() => !savingEditInstance && setEditingChannel(null)} className="p-1 text-gray-400">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Número de telefone (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={editPhoneNumber}
+                    onChange={(e) => setEditPhoneNumber(e.target.value)}
+                    placeholder="Ex: 5511999999999"
+                    disabled={savingEditInstance}
+                    className={`w-full px-3 py-2.5 text-sm ${zapInput}`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">
+                    Tipo de maturação
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={savingEditInstance}
+                      onClick={() => setEditMaturationType('maturado')}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        editMaturationType === 'maturado'
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 block">Maturado</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingEditInstance}
+                      onClick={() => setEditMaturationType('virgem')}
+                      className={`text-left rounded-lg border-2 p-3 transition ${
+                        editMaturationType === 'virgem'
+                          ? 'border-[#E86A24] bg-[#E86A24]/8'
+                          : 'border-gray-200 dark:border-[#404040] hover:border-[#E86A24]/40'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 block">Virgem</span>
+                    </button>
+                  </div>
+                </div>
+
+                {editInstanceError && <p className="text-xs text-red-500">{editInstanceError}</p>}
+
+                <button
+                  type="button"
+                  onClick={() => void handleSaveEditInstance()}
+                  disabled={savingEditInstance}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+                  style={{ backgroundColor: '#E86A24' }}
+                >
+                  {savingEditInstance ? <Loader2 className="w-4 h-4 animate-spin" /> : <PencilIcon className="w-4 h-4" />}
+                  Salvar alterações
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pendingInstanceQr && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4">
+            <div className="bg-white dark:bg-[#2a2a2a] w-full max-w-sm rounded-xl border border-gray-200 dark:border-gray-600 p-5 shadow-2xl text-center">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Escaneie o QR Code</h3>
+              <img
+                src={`data:image/png;base64,${pendingInstanceQr.qrCode}`}
+                alt="QR Code"
+                className="w-56 h-56 mx-auto rounded-lg border border-gray-200 dark:border-[#404040]"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 flex items-center justify-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Aguardando conexão ({pendingInstanceQr.instanceName})...
+              </p>
+              <button
+                type="button"
+                onClick={() => setPendingInstanceQr(null)}
+                className="mt-3 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-[#E86A24] underline"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+      </Layout>
+    );
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Layout onSignOut={handleSignOut}>
@@ -3340,9 +3966,22 @@ export default function ChatPage() {
             {/* Seletor de Canal */}
             {canSelectChannel ? (
               <div className="p-4 border-b border-[#E86A24]/10">
-                <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-gray-500">
-                  Canal
-                </label>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500">
+                    Canal {adminChannelTypeChoice === 'evolution' ? '(Evolution API)' : '(WhatsApp Oficial)'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdminChannelTypeChoice(null);
+                      setSelectedChannel(null);
+                      setSelectedConversationId('');
+                    }}
+                    className="text-[11px] font-medium text-gray-500 dark:text-gray-400 hover:text-[#E86A24]"
+                  >
+                    ← Voltar
+                  </button>
+                </div>
                 <select
                   value={selectedChannel ? `${selectedChannel.type}:${selectedChannel.id}` : ''}
                   onChange={(e) => {
@@ -3362,7 +4001,7 @@ export default function ChatPage() {
                   className={`w-full px-3 py-2 text-sm ${zapInput} border-[#E86A24]/50`}
                 >
                   <option value="">Selecione um canal</option>
-                  {channels.evolution.length > 0 && (
+                  {adminChannelTypeChoice === 'evolution' && channels.evolution.length > 0 && (
                     <optgroup label="Evolution">
                       {channels.evolution.map((ch) => (
                         <option key={ch.id} value={`evolution:${ch.id}`}>
@@ -3371,7 +4010,7 @@ export default function ChatPage() {
                       ))}
                     </optgroup>
                   )}
-                  {channels.whatsapp_official.length > 0 && (
+                  {adminChannelTypeChoice === 'oficial' && channels.whatsapp_official.length > 0 && (
                     <optgroup label="WhatsApp Oficial">
                       {channels.whatsapp_official.map((ch) => (
                         <option key={ch.id} value={`whatsapp_official:${ch.id}`}>
@@ -3381,6 +4020,32 @@ export default function ChatPage() {
                     </optgroup>
                   )}
                 </select>
+                {adminChannelTypeChoice === 'evolution' && channels.evolution.length === 0 && (
+                  <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Nenhuma instância Evolution conectada.{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEvolutionListConfirmed(false);
+                        setSelectedChannel(null);
+                      }}
+                      className="underline"
+                      style={{ color: '#E86A24' }}
+                    >
+                      Voltar e criar uma nova conexão
+                    </button>
+                    .
+                  </div>
+                )}
+                {adminChannelTypeChoice === 'oficial' && channels.whatsapp_official.length === 0 && (
+                  <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Nenhum número WhatsApp Oficial configurado. Configure em{' '}
+                    <Link href="/admin/whatsapp-official" className="underline" style={{ color: '#E86A24' }}>
+                      WhatsApp Oficial
+                    </Link>
+                    {' '}para liberar o atendimento por ele.
+                  </div>
+                )}
               </div>
             ) : selectedChannel ? (
               <div className="p-4 border-b border-[#E86A24]/10">
