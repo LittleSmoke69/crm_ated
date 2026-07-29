@@ -101,9 +101,20 @@ NEXT_PUBLIC_ZAPLOTO_APP_SCOPE=modelagem
 ZAPLOTO_APP_SCOPE=modelagem
 NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK=true
 ZAPLOTO_DISABLE_EVOLUTION_STACK=true
+
+# E-mail na SuperBitHost: SMTP outbound é bloqueado — use o relay na Contabo
+# (veja email-relay/README.md). Sem isso, campanhas falham com Connection timeout.
+EMAIL_RELAY_URL=https://mail-relay.seudominio.com
+EMAIL_RELAY_SECRET=mesmo_secret_do_container_email-relay
 ```
 
 Nunca use a `SERVICE_ROLE_KEY` em `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+
+### Relay de e-mail (Contabo)
+
+Na SuperBitHost as portas 465/587 estão filtradas. Suba `email-relay/` na Contabo
+(onde o SMTP Hostinger abre) e aponte `EMAIL_RELAY_URL` / `EMAIL_RELAY_SECRET` no
+`.env` do CRM. Detalhes e checklist: `email-relay/README.md`.
 
 ## 4. Migrations
 

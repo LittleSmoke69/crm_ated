@@ -1,0 +1,13 @@
+services:
+  email-relay:
+    build: .
+    container_name: crm-email-relay
+    restart: unless-stopped
+    ports:
+      # Exponha só na Contabo; na frente use Caddy/Nginx com TLS na 443
+      - "127.0.0.1:8787:8787"
+    environment:
+      EMAIL_RELAY_SECRET: ${EMAIL_RELAY_SECRET}
+      PORT: "8787"
+      SMTP_TIMEOUT_MS: ${SMTP_TIMEOUT_MS:-20000}
+    # Opcional: restringir origem no firewall do host (UFW) ao IP da SuperBitHost

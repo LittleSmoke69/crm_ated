@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+email-relay/node_modules
+email-relay/.env
 /.pnp
 .pnp.*
 .yarn/*
