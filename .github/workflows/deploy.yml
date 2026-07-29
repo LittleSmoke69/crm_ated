@@ -34,7 +34,16 @@ jobs:
 
             echo "Atualizando código..."
             test -d .git
-            test -f .env
+            if [ ! -f .env ]; then
+              echo "Arquivo .env ausente em $DEPLOY_DIR"
+              exit 1
+            fi
+            if [ ! -r .env ]; then
+              echo "Arquivo .env existe, mas o usuário $(whoami) não consegue ler."
+              echo "Na VPS rode: sudo chown $(whoami):$(whoami) $DEPLOY_DIR/.env && sudo chmod 600 $DEPLOY_DIR/.env"
+              ls -la .env || true
+              exit 1
+            fi
             deploy_marker="$DEPLOY_DIR/.git/last-successful-deploy"
             git fetch origin main
             git checkout main
