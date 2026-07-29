@@ -97,27 +97,22 @@ export async function GET(req: NextRequest) {
       .order('sort_order', { ascending: true });
 
     let leadsFilter: {
-      mode: 'eq' | 'in' | 'not_in' | 'none';
+      mode: 'eq' | 'in' | 'not_in' | 'gerente_scope' | 'none';
       values?: string[];
+      gerenteId?: string;
     } = { mode: 'none' };
 
     if (viewer.status === 'gerente') {
       const teamIds = viewer.teamUserIds ?? [];
-      if (teamIds.length === 0) {
-        return successResponse({
-          columns: columns ?? [],
-          clients: [],
-          meta: { can_view_all: true, can_edit_columns: false, attendants: [], total_clients: 0 },
-        });
-      }
       if (targetUserId) {
         const allowed = await canAccessUser(userId, targetUserId);
-        if (!allowed || !teamIds.includes(targetUserId)) {
+        if (!allowed || (teamIds.length > 0 && !teamIds.includes(targetUserId))) {
           return errorResponse('Sem permissão para ver o kanban deste captador.', 403);
         }
         leadsFilter = { mode: 'eq', values: [targetUserId] };
       } else {
-        leadsFilter = { mode: 'in', values: teamIds };
+        // Paridade com /api/admin/crm/leads: pool do gerente (gerente_id) + leads dos captadores.
+        leadsFilter = { mode: 'gerente_scope', values: teamIds, gerenteId: userId };
       }
     } else if (!viewer.canViewAll) {
       leadsFilter = { mode: 'eq', values: [userId] };
@@ -151,6 +146,15 @@ export async function GET(req: NextRequest) {
 
         if (leadsFilter.mode === 'eq' && leadsFilter.values?.[0]) {
           query = query.eq('user_id', leadsFilter.values[0]);
+        } else if (leadsFilter.mode === 'gerente_scope' && leadsFilter.gerenteId) {
+          const teamIds = (leadsFilter.values ?? []).filter(Boolean);
+          if (teamIds.length > 0) {
+            query = query.or(
+              `gerente_id.eq.${leadsFilter.gerenteId},user_id.in.(${teamIds.join(',')})`
+            );
+          } else {
+            query = query.eq('gerente_id', leadsFilter.gerenteId);
+          }
         } else if (leadsFilter.mode === 'in' && leadsFilter.values?.length) {
           query = query.in('user_id', leadsFilter.values);
         } else if (leadsFilter.mode === 'not_in' && leadsFilter.values?.length) {

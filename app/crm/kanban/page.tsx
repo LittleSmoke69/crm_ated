@@ -27,6 +27,8 @@ type Client = {
 type Attendant = { id: string; name: string };
 
 const WON_COLUMN_KEY = 'ganho';
+/** Evita travar o browser ao renderizar milhares de cards de uma vez. */
+const CARDS_PER_COLUMN_STEP = 40;
 
 const COLOR_HEX: Record<string, string> = {
   gray: '#6b7280', blue: '#3b82f6', indigo: '#6366f1', amber: '#f59e0b', orange: '#E86A24',
@@ -83,32 +85,56 @@ function KanbanBoard() {
   const [canEditColumns, setCanEditColumns] = useState(false);
   const [attendants, setAttendants] = useState<Attendant[]>([]);
   const [attendantFilter, setAttendantFilter] = useState('all');
+  const [visibleByColumn, setVisibleByColumn] = useState<Record<string, number>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const headers = useMemo(() => ({ 'Content-Type': 'application/json', 'X-User-Id': userId ?? '' }), [userId]);
 
   const load = useCallback(async () => {
     if (!userId) return;
+    setLoadError(null);
     try {
       const [boardRes, tagsRes] = await Promise.all([
         fetch('/api/crm/board', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
         fetch('/api/crm/tags', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
       ]);
-      const board = await boardRes.json();
-      const tags = await tagsRes.json();
+      const board = await boardRes.json().catch(() => null);
+      const tags = await tagsRes.json().catch(() => null);
       if (board?.success) {
         setColumns(board.data.columns ?? []);
         setClients(board.data.clients ?? []);
         setCanViewAll(!!board.data.meta?.can_view_all);
         setCanEditColumns(!!board.data.meta?.can_edit_columns);
-        setAttendants(board.data.meta?.attendants ?? []);
+        const nextAttendants: Attendant[] = board.data.meta?.attendants ?? [];
+        setAttendants(nextAttendants);
+        // Com muitos leads, "Todos" trava o DOM — inicia no 1º captador quando há filtro.
+        setAttendantFilter((prev) => {
+          if (prev !== 'all') return prev;
+          const total = Number(board.data.meta?.total_clients ?? board.data.clients?.length ?? 0);
+          if (total > 400 && nextAttendants.length > 0) return nextAttendants[0].id;
+          return 'all';
+        });
+        setVisibleByColumn({});
+      } else {
+        setColumns([]);
+        setClients([]);
+        setLoadError(board?.error || `Falha ao carregar o Kanban (HTTP ${boardRes.status}).`);
+        toast.error(board?.error || 'Não foi possível carregar o Kanban.');
       }
       if (tags?.success) setAllTags((tags.data ?? []).map((t: Tag) => ({ id: t.id, label: t.label, color: t.color, move_to_column_key: t.move_to_column_key ?? null })));
+    } catch {
+      setLoadError('Erro de rede ao carregar o Kanban.');
+      toast.error('Erro de rede ao carregar o Kanban.');
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setVisibleByColumn({});
+  }, [attendantFilter]);
 
   const visibleClients = useMemo(() => {
     if (!canViewAll || attendantFilter === 'all') return clients;
@@ -353,10 +379,28 @@ function KanbanBoard() {
 
         {loading ? (
           <div className="flex flex-1 items-center justify-center text-gray-400"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : loadError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+            <p className="max-w-md text-sm text-rose-300">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => { setLoading(true); load(); }}
+              className="rounded-xl bg-[#E86A24] px-4 py-2 text-sm font-bold text-white"
+            >
+              Tentar de novo
+            </button>
+          </div>
+        ) : columns.length === 0 ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
+            Nenhuma coluna ativa no Kanban. Peça ao admin para criar estágios.
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 snap-x snap-mandatory items-stretch gap-4 overflow-x-auto pb-4">
             {columns.map((col) => {
               const list = byColumn.get(col.key) ?? [];
+              const limit = visibleByColumn[col.key] ?? CARDS_PER_COLUMN_STEP;
+              const visible = list.slice(0, limit);
+              const remaining = Math.max(0, list.length - visible.length);
               const accent = hexFor(col.color);
               return (
                 <div key={col.id}
@@ -401,8 +445,8 @@ function KanbanBoard() {
                   )}
 
                   <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                    {list.map((c) => (
-                      <div key={c.external_id} draggable
+                    {visible.map((c) => (
+                      <div key={`${c.external_id}:${c.owner_user_id ?? 'none'}`} draggable
                         onDragStart={() => setDragId(c.external_id)}
                         onDragEnd={() => setDragId(null)}
                         className="cursor-grab rounded-xl border border-white/10 bg-[#2a2a2a] p-3 shadow-sm transition hover:shadow-md active:cursor-grabbing"
@@ -480,6 +524,20 @@ function KanbanBoard() {
                     ))}
                     {list.length === 0 && (
                       <div className="rounded-xl border border-dashed border-white/15 py-6 text-center text-xs text-gray-500">Sem clientes</div>
+                    )}
+                    {remaining > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVisibleByColumn((prev) => ({
+                            ...prev,
+                            [col.key]: (prev[col.key] ?? CARDS_PER_COLUMN_STEP) + CARDS_PER_COLUMN_STEP,
+                          }))
+                        }
+                        className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:border-[#E86A24]/40 hover:text-[#E86A24]"
+                      >
+                        Ver mais ({remaining})
+                      </button>
                     )}
                   </div>
                 </div>
