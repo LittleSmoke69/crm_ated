@@ -39,16 +39,29 @@ type CapturedLead = {
 type PersonOption = { id: string; name: string; enroller?: string | null };
 
 const STATUS_OPTIONS = [
-  { value: 'pendente', label: 'Pendente', cls: 'border-amber-500/60 text-amber-500 bg-amber-500/10' },
-  { value: 'em_contato', label: 'Em contato', cls: 'border-blue-500/60 text-blue-500 bg-blue-500/10' },
-  { value: 'convertido', label: 'Convertido', cls: 'border-emerald-500/60 text-emerald-500 bg-emerald-500/10' },
-  { value: 'descartado', label: 'Descartado', cls: 'border-red-500/60 text-red-500 bg-red-500/10' },
+  { value: 'pendente', label: 'Pendente', cls: 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10' },
+  { value: 'em_contato', label: 'Em contato', cls: 'border-sky-500/40 text-sky-700 dark:text-sky-300 bg-sky-500/10' },
+  { value: 'convertido', label: 'Convertido', cls: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10' },
+  { value: 'descartado', label: 'Descartado', cls: 'border-stone-400/50 text-stone-600 dark:text-stone-300 bg-stone-500/10' },
 ];
 
 const statusCls = (v: string) => STATUS_OPTIONS.find((s) => s.value === v)?.cls || STATUS_OPTIONS[0].cls;
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+const SELECT_ALL_PAGE_SIZE = 200;
+const SELECT_ALL_MAX = 5000;
+const PAGE_SIZE_MAX = 200;
+
 const inputClass =
-  'w-full px-3 py-2 min-h-[44px] border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-[#333] placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:border-[#E86A24] transition-colors';
+  'w-full px-3 py-2 min-h-[44px] border border-stone-200 dark:border-white/10 rounded-xl text-sm text-stone-900 dark:text-stone-100 bg-white dark:bg-[#2a221c] placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-[#E86A24]/30 focus:border-[#E86A24] transition-colors';
+
+const surfaceClass =
+  'rounded-2xl border border-stone-200/80 dark:border-white/10 bg-white dark:bg-[#241e19] shadow-sm';
+
+const badgeGerente =
+  'px-2 py-1 rounded-md text-xs font-semibold border border-[#E86A24]/35 text-[#C45A1A] dark:text-[#EF9057] bg-[#E86A24]/10';
+const badgeCaptador =
+  'px-2 py-1 rounded-md text-xs font-semibold border border-stone-300/80 dark:border-white/15 text-stone-700 dark:text-stone-200 bg-stone-100 dark:bg-white/5';
 
 function formatDateTime(iso: string): string {
   try {
@@ -146,9 +159,13 @@ export default function LeadsSection({
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const pageSize = 25;
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [pageSizeMode, setPageSizeMode] = useState<'preset' | 'custom'>('preset');
+  const [customPageSizeInput, setCustomPageSizeInput] = useState('50');
+  const [customSelectInput, setCustomSelectInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
   // Filtros
@@ -159,8 +176,8 @@ export default function LeadsSection({
   const [fPeriod, setFPeriod] = useState('todos');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
-  // Seleção
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Seleção persistente entre páginas (Map id → lead)
+  const [selectedMap, setSelectedMap] = useState<Map<string, CapturedLead>>(new Map());
 
   // Modais
   const [showCreate, setShowCreate] = useState(false);
@@ -200,50 +217,146 @@ export default function LeadsSection({
     return sp.toString();
   }, [q, fStatus, fGerente, fCaptador, fPeriod, onlyDuplicates]);
 
-  const loadLeads = useCallback(async (targetPage = 1) => {
+  const loadLeads = useCallback(async (targetPage = 1, opts?: { preserveSelection?: boolean; size?: number }) => {
     setLoading(true);
+    const size = opts?.size ?? pageSize;
     try {
-      const res = await fetch(`/api/admin/crm/leads?${buildQuery({ page: String(targetPage), page_size: String(pageSize) })}`, { headers: headers() });
+      const res = await fetch(
+        `/api/admin/crm/leads?${buildQuery({ page: String(targetPage), page_size: String(size) })}`,
+        { headers: headers() }
+      );
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao carregar leads');
-      setLeads(json.data.leads || []);
+      const nextLeads: CapturedLead[] = json.data.leads || [];
+      setLeads(nextLeads);
       setTotal(json.data.total || 0);
       setPage(json.data.page || targetPage);
       setGerentes(json.data.gerentes || []);
       setCaptadores(json.data.captadores || []);
-      setSelected(new Set());
+      if (!opts?.preserveSelection) {
+        setSelectedMap(new Map());
+      } else {
+        // Atualiza objetos já selecionados com dados frescos da página
+        setSelectedMap((prev) => {
+          if (prev.size === 0) return prev;
+          const next = new Map(prev);
+          for (const l of nextLeads) {
+            if (next.has(l.id)) next.set(l.id, l);
+          }
+          return next;
+        });
+      }
     } catch (e: any) {
       showToast(e?.message || 'Erro ao carregar leads', 'error');
     } finally {
       setLoading(false);
     }
-  }, [buildQuery, headers]);
+  }, [buildQuery, headers, pageSize]);
 
   useEffect(() => {
-    loadLeads(1);
+    setSelectedMap(new Map());
+    loadLeads(1, { preserveSelection: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyDuplicates, fStatus, fGerente, fCaptador, fPeriod]);
+  }, [onlyDuplicates, fStatus, fGerente, fCaptador, fPeriod, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const selected = useMemo(() => new Set(selectedMap.keys()), [selectedMap]);
+  const selectedLeadObjs = useMemo(() => Array.from(selectedMap.values()), [selectedMap]);
 
-  const toggleSelect = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  const toggleSelect = (lead: CapturedLead) => {
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(lead.id)) next.delete(lead.id);
+      else next.set(lead.id, lead);
       return next;
     });
   };
 
-  const allPageSelected = leads.length > 0 && leads.every((l) => selected.has(l.id));
-  const toggleSelectAll = () => {
-    setSelected((prev) => {
-      const next = new Set(prev);
+  const allPageSelected = leads.length > 0 && leads.every((l) => selectedMap.has(l.id));
+  const somePageSelected = leads.some((l) => selectedMap.has(l.id));
+  const selectAllPageRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (selectAllPageRef.current) {
+      selectAllPageRef.current.indeterminate = somePageSelected && !allPageSelected;
+    }
+  }, [somePageSelected, allPageSelected]);
+
+  const toggleSelectAllPage = () => {
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
       if (allPageSelected) leads.forEach((l) => next.delete(l.id));
-      else leads.forEach((l) => next.add(l.id));
+      else leads.forEach((l) => next.set(l.id, l));
       return next;
     });
   };
+
+  const selectFirstN = async (count: number) => {
+    if (total <= 0) {
+      showToast('Nenhum lead no filtro atual.', 'error');
+      return;
+    }
+    const n = Math.floor(count);
+    if (!Number.isFinite(n) || n < 1) {
+      showToast('Informe um número válido (mínimo 1).', 'error');
+      return;
+    }
+    const target = Math.min(n, SELECT_ALL_MAX, total);
+    if (n > SELECT_ALL_MAX) {
+      showToast(`Limite de ${SELECT_ALL_MAX} leads por seleção. Selecionando ${target}.`, 'error');
+    }
+    setSelectingAll(true);
+    try {
+      const next = new Map<string, CapturedLead>();
+      let p = 1;
+      const maxPages = Math.ceil(target / SELECT_ALL_PAGE_SIZE);
+      while (next.size < target && p <= maxPages) {
+        const res = await fetch(
+          `/api/admin/crm/leads?${buildQuery({ page: String(p), page_size: String(SELECT_ALL_PAGE_SIZE) })}`,
+          { headers: headers() }
+        );
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao selecionar leads');
+        for (const l of (json.data.leads || []) as CapturedLead[]) {
+          next.set(l.id, l);
+          if (next.size >= target) break;
+        }
+        if ((json.data.leads || []).length === 0) break;
+        p += 1;
+      }
+      setSelectedMap(next);
+      showToast(`${next.size} lead(s) selecionado(s).`, 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Erro ao selecionar leads', 'error');
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+
+  const selectAllFiltered = async () => {
+    await selectFirstN(total);
+  };
+
+  const applyCustomSelect = () => {
+    const n = parseInt(customSelectInput.replace(/\D/g, ''), 10);
+    void selectFirstN(n);
+  };
+
+  const applyCustomPageSize = () => {
+    const n = parseInt(customPageSizeInput.replace(/\D/g, ''), 10);
+    if (!Number.isFinite(n) || n < 1) {
+      showToast('Informe um valor válido para por página (mín. 1).', 'error');
+      return;
+    }
+    const size = Math.min(PAGE_SIZE_MAX, n);
+    if (n > PAGE_SIZE_MAX) {
+      showToast(`Máximo ${PAGE_SIZE_MAX} por página. Usando ${PAGE_SIZE_MAX}.`, 'error');
+    }
+    setCustomPageSizeInput(String(size));
+    setPageSize(size);
+  };
+
+  const clearSelection = () => setSelectedMap(new Map());
 
   // ----- Mutations -----
 
@@ -258,7 +371,7 @@ export default function LeadsSection({
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao salvar');
       showToast(successMsg, 'success');
-      loadLeads(page);
+      await loadLeads(page, { preserveSelection: true });
       return true;
     } catch (e: any) {
       showToast(e?.message || 'Erro ao salvar', 'error');
@@ -389,6 +502,12 @@ export default function LeadsSection({
         : 'Gerente atribuído.'
     );
     if (ok) {
+      const assignedIds = new Set(assignLeads.map((l) => l.id));
+      setSelectedMap((prev) => {
+        const next = new Map(prev);
+        assignedIds.forEach((id) => next.delete(id));
+        return next;
+      });
       setAssignLeads(null);
       setAssignForm({ gerente_id: '', captador_id: '' });
     }
@@ -406,8 +525,14 @@ export default function LeadsSection({
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao excluir');
       showToast('Lead(s) excluído(s).', 'success');
+      const deletedIds = new Set(deleteLeads.map((l) => l.id));
+      setSelectedMap((prev) => {
+        const next = new Map(prev);
+        deletedIds.forEach((id) => next.delete(id));
+        return next;
+      });
       setDeleteLeads(null);
-      loadLeads(page);
+      await loadLeads(page, { preserveSelection: true });
     } catch (e: any) {
       showToast(e?.message || 'Erro ao excluir', 'error');
     } finally {
@@ -466,14 +591,12 @@ export default function LeadsSection({
     return team.length > 0 ? team : captadores;
   }, [captadores, assignForm.gerente_id, isGerente, teamCaptadores]);
 
-  const selectedLeadObjs = leads.filter((l) => selected.has(l.id));
-
   const modalShell = (title: string, onClose: () => void, children: React.ReactNode, wide = false) => (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className={`bg-white dark:bg-[#2a2a2a] rounded-2xl shadow-2xl w-full ${wide ? 'max-w-lg' : 'max-w-md'} overflow-hidden border border-gray-200 dark:border-gray-600 max-h-[90vh] flex flex-col`}>
-        <div className="p-5 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between flex-shrink-0">
-          <h2 className="text-lg font-bold text-gray-900 dark:text-white">{title}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors" aria-label="Fechar">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className={`bg-white dark:bg-[#2a221c] rounded-2xl shadow-2xl w-full ${wide ? 'max-w-lg' : 'max-w-md'} overflow-hidden border border-stone-200 dark:border-white/10 max-h-[90vh] flex flex-col`}>
+        <div className="p-5 border-b border-stone-200 dark:border-white/10 flex items-center justify-between flex-shrink-0">
+          <h2 className="text-lg font-bold text-stone-900 dark:text-stone-50">{title}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-white/10 transition-colors" aria-label="Fechar">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -518,8 +641,8 @@ export default function LeadsSection({
       {/* Cabeçalho */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Leads</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Gerenciamento de leads capturados</p>
+          <h1 className="text-3xl font-bold text-stone-900 dark:text-stone-50">Leads</h1>
+          <p className="text-stone-600 dark:text-stone-400 mt-1">Gerenciamento de leads capturados</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Button onClick={() => setShowCreate(true)} icon={<UserPlus className="w-4 h-4" />}>
@@ -539,12 +662,12 @@ export default function LeadsSection({
       </div>
 
       {/* Filtros */}
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] p-4 sm:p-5 space-y-4">
+      <div className={`${surfaceClass} p-4 sm:p-5 space-y-4`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Buscar</label>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Buscar</label>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
               <input
                 type="text"
                 value={q}
@@ -556,7 +679,7 @@ export default function LeadsSection({
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Status</label>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Status</label>
             <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className={inputClass}>
               <option value="">Todos</option>
               {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -564,7 +687,7 @@ export default function LeadsSection({
           </div>
           {!isGerente && (
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Gerente</label>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Gerente</label>
             <select value={fGerente} onChange={(e) => setFGerente(e.target.value)} className={inputClass}>
               <option value="">Todos</option>
               {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
@@ -572,14 +695,14 @@ export default function LeadsSection({
           </div>
           )}
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Captador</label>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Captador</label>
             <select value={fCaptador} onChange={(e) => setFCaptador(e.target.value)} className={inputClass}>
               <option value="">Todos</option>
               {(isGerente ? teamCaptadores : captadores).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">Período</label>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Período</label>
             <select value={fPeriod} onChange={(e) => setFPeriod(e.target.value)} className={inputClass}>
               <option value="todos">Todos</option>
               <option value="hoje">Hoje</option>
@@ -588,7 +711,7 @@ export default function LeadsSection({
             </select>
           </div>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => loadLeads(1)}
             disabled={loading}
@@ -600,44 +723,142 @@ export default function LeadsSection({
             onClick={() => setOnlyDuplicates((v) => !v)}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border transition-colors ${
               onlyDuplicates
-                ? 'border-amber-500/70 text-amber-600 dark:text-amber-300 bg-amber-500/10'
-                : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/5'
+                ? 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10'
+                : 'border-stone-300 dark:border-white/15 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-white/5'
             }`}
           >
             <Copy className="w-4 h-4" /> Duplicados
           </button>
+          <div className="flex flex-wrap items-center gap-3 ml-auto">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-stone-500 dark:text-stone-400 whitespace-nowrap">Selecionar</label>
+              <input
+                type="number"
+                min={1}
+                max={SELECT_ALL_MAX}
+                value={customSelectInput}
+                onChange={(e) => setCustomSelectInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') applyCustomSelect(); }}
+                placeholder="Ex: 80"
+                className="w-[5.5rem] px-2.5 py-2 min-h-[40px] rounded-xl text-sm border border-stone-200 dark:border-white/10 bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100"
+              />
+              <button
+                type="button"
+                onClick={applyCustomSelect}
+                disabled={selectingAll || busy || total === 0 || !customSelectInput.trim()}
+                className="px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold text-white bg-[#E86A24] hover:bg-[#D95E1B] disabled:opacity-50"
+              >
+                {selectingAll ? '…' : 'OK'}
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-stone-500 dark:text-stone-400 whitespace-nowrap">Por página</label>
+              <select
+                value={pageSizeMode === 'custom' ? 'custom' : String(pageSize)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === 'custom') {
+                    setPageSizeMode('custom');
+                    setCustomPageSizeInput(String(pageSize));
+                    return;
+                  }
+                  setPageSizeMode('preset');
+                  setPageSize(Number(v));
+                }}
+                className="px-2.5 py-2 min-h-[40px] rounded-xl text-sm border border-stone-200 dark:border-white/10 bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+                <option value="custom">Personalizado</option>
+              </select>
+              {pageSizeMode === 'custom' && (
+                <>
+                  <input
+                    type="number"
+                    min={1}
+                    max={PAGE_SIZE_MAX}
+                    value={customPageSizeInput}
+                    onChange={(e) => setCustomPageSizeInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') applyCustomPageSize(); }}
+                    className="w-[4.5rem] px-2.5 py-2 min-h-[40px] rounded-xl text-sm border border-stone-200 dark:border-white/10 bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyCustomPageSize}
+                    className="px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold border border-stone-300 dark:border-white/15 text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-white/5"
+                  >
+                    Aplicar
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Barra de ações em massa */}
-      {selected.size > 0 && (
-        <div className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 flex flex-wrap items-center gap-3">
-          <span className="text-sm font-bold text-blue-700 dark:text-blue-300">{selected.size} selecionado(s)</span>
-          <button
-            onClick={() => { setAssignLeads(selectedLeadObjs); setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' }); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-500/60 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-500/10"
-          >
-            <UserPlus className="w-3.5 h-3.5" /> Atribuir
-          </button>
-          {!isGerente && (
-          <button
-            onClick={() => setDeleteLeads(selectedLeadObjs)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-500/60 text-red-600 dark:text-red-400 hover:bg-red-500/10"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> Excluir
-          </button>
+      {(selected.size > 0 || (total > leads.length && !loading)) && (
+        <div className="rounded-xl border border-[#E86A24]/30 bg-[#E86A24]/10 px-4 py-3 flex flex-wrap items-center gap-3">
+          {selected.size > 0 ? (
+            <>
+              <span className="text-sm font-bold text-[#C45A1A] dark:text-[#EF9057]">{selected.size} selecionado(s)</span>
+              {selected.size < total && (
+                <button
+                  type="button"
+                  onClick={selectAllFiltered}
+                  disabled={selectingAll || busy}
+                  className="text-xs font-semibold text-[#E86A24] hover:underline disabled:opacity-60"
+                >
+                  {selectingAll ? 'Selecionando…' : `Selecionar todos os ${total} resultados`}
+                </button>
+              )}
+              <button type="button" onClick={clearSelection} className="text-xs font-medium text-stone-500 dark:text-stone-400 hover:underline">
+                Limpar
+              </button>
+              <button
+                onClick={() => { setAssignLeads(selectedLeadObjs); setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' }); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#E86A24]/45 text-[#C45A1A] dark:text-[#EF9057] hover:bg-[#E86A24]/15"
+              >
+                <UserPlus className="w-3.5 h-3.5" /> Atribuir
+              </button>
+              {!isGerente && (
+              <button
+                onClick={() => setDeleteLeads(selectedLeadObjs)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Excluir
+              </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={selectAllFiltered}
+              disabled={selectingAll || busy || total === 0}
+              className="text-sm font-semibold text-[#C45A1A] dark:text-[#EF9057] hover:underline disabled:opacity-60"
+            >
+              {selectingAll ? 'Selecionando…' : `Selecionar todos os ${total} resultados do filtro`}
+            </button>
           )}
         </div>
       )}
 
       {/* Tabela */}
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] overflow-hidden">
+      <div className={`${surfaceClass} overflow-hidden`}>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-600 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              <tr className="border-b border-stone-200 dark:border-white/10 text-left text-xs uppercase tracking-wider text-stone-500 dark:text-stone-400 bg-stone-50/80 dark:bg-black/20">
                 <th className="px-4 py-3.5 w-10">
-                  <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAll} className="w-4 h-4 rounded accent-[#E86A24]" />
+                  <input
+                    ref={selectAllPageRef}
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={toggleSelectAllPage}
+                    className="w-4 h-4 rounded accent-[#E86A24]"
+                    title="Selecionar página"
+                  />
                 </th>
                 <th className="px-4 py-3.5">Status</th>
                 <th className="px-4 py-3.5">Nome</th>
@@ -648,7 +869,7 @@ export default function LeadsSection({
                 <th className="px-4 py-3.5 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            <tbody className="divide-y divide-stone-100 dark:divide-white/5">
               {loading ? (
                 <TableSkeletonRows rows={6} cols={8} />
               ) : leads.length === 0 ? (
@@ -668,9 +889,9 @@ export default function LeadsSection({
                 </tr>
               ) : (
                 leads.map((l) => (
-                  <tr key={l.id} className="hover:bg-gray-50 dark:hover:bg-white/[0.03]">
+                  <tr key={l.id} className={`hover:bg-stone-50 dark:hover:bg-white/[0.04] ${selected.has(l.id) ? 'bg-[#E86A24]/5 dark:bg-[#E86A24]/10' : ''}`}>
                     <td className="px-4 py-3">
-                      <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l.id)} className="w-4 h-4 rounded accent-[#E86A24]" />
+                      <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l)} className="w-4 h-4 rounded accent-[#E86A24]" />
                     </td>
                     <td className="px-4 py-3">
                       <select
@@ -679,30 +900,28 @@ export default function LeadsSection({
                         disabled={busy}
                         className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-transparent cursor-pointer ${statusCls(l.capture_status)}`}
                       >
-                        {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value} className="bg-white dark:bg-[#333] text-gray-800 dark:text-white">{s.label}</option>)}
+                        {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value} className="bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100">{s.label}</option>)}
                       </select>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-gray-900 dark:text-white">{l.name || '—'}</span>
-                        <span className="text-[11px] text-gray-400">(#{l.external_id.slice(-6)})</span>
+                        <span className="font-semibold text-stone-900 dark:text-stone-50">{l.name || '—'}</span>
+                        <span className="text-[11px] text-stone-400">(#{l.external_id.slice(-6)})</span>
                         {l.occurrence > 1 && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/40">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#E86A24]/15 text-[#E86A24] border border-[#E86A24]/35">
                             {l.occurrence}ª vez
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-medium text-gray-800 dark:text-gray-200">{l.phone || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-stone-800 dark:text-stone-200">{l.phone || '—'}</td>
                     <td className="px-4 py-3">
                       {l.gerente_name ? (
-                        <span className="px-2 py-1 rounded-md text-xs font-semibold border border-emerald-500/50 text-emerald-600 dark:text-emerald-300 bg-emerald-500/10">
-                          {l.gerente_name}
-                        </span>
+                        <span className={badgeGerente}>{l.gerente_name}</span>
                       ) : (
                         <button
                           onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: '', captador_id: '' }); }}
-                          className="px-3 py-1 rounded-md text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5"
+                          className="px-3 py-1 rounded-md text-xs font-medium border border-stone-300 dark:border-white/15 text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-white/5"
                         >
                           Atribuir
                         </button>
@@ -710,14 +929,12 @@ export default function LeadsSection({
                     </td>
                     <td className="px-4 py-3">
                       {l.captador_name ? (
-                        <span className="px-2 py-1 rounded-md text-xs font-semibold border border-violet-500/50 text-violet-600 dark:text-violet-300 bg-violet-500/10">
-                          {l.captador_name}
-                        </span>
+                        <span className={badgeCaptador}>{l.captador_name}</span>
                       ) : (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-stone-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">{formatDateTime(l.created_at)}</td>
+                    <td className="px-4 py-3 text-stone-600 dark:text-stone-300 whitespace-nowrap">{formatDateTime(l.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
                         {l.phone && (
@@ -725,7 +942,7 @@ export default function LeadsSection({
                             href={`https://wa.me/${l.phone.startsWith('55') ? l.phone : `55${l.phone}`}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10"
+                            className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
                             title="Abrir WhatsApp"
                           >
                             <MessageCircle className="w-4 h-4" />
@@ -733,12 +950,12 @@ export default function LeadsSection({
                         )}
                         <button
                           onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: isGerente ? userId : (l.gerente_id || ''), captador_id: '' }); }}
-                          className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-blue-500 hover:bg-blue-500/10"
+                          className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#E86A24] hover:bg-[#E86A24]/10"
                           title="Atribuir gerente/captador"
                         >
                           <UserPlus className="w-4 h-4" />
                         </button>
-                        <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-sky-500 hover:bg-sky-500/10" title="Ver detalhes">
+                        <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-stone-500 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-white/5" title="Ver detalhes">
                           <Eye className="w-4 h-4" />
                         </button>
                         {!isGerente && (
@@ -755,25 +972,30 @@ export default function LeadsSection({
           </table>
         </div>
         {/* Paginação */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-600 text-sm">
-            <span className="text-gray-500 dark:text-gray-400">{total} lead(s) — página {page} de {totalPages}</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => loadLeads(page - 1)}
-                disabled={page <= 1 || loading}
-                className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-white/5"
-              >
-                Anterior
-              </button>
-              <button
-                onClick={() => loadLeads(page + 1)}
-                disabled={page >= totalPages || loading}
-                className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-white/5"
-              >
-                Próxima
-              </button>
-            </div>
+        {(totalPages > 1 || total > 0) && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-t border-stone-200 dark:border-white/10 text-sm">
+            <span className="text-stone-500 dark:text-stone-400">
+              {total} lead(s){totalPages > 1 ? ` — página ${page} de ${totalPages}` : ''}
+              {selected.size > 0 ? ` · ${selected.size} selecionado(s)` : ''}
+            </span>
+            {totalPages > 1 && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => loadLeads(page - 1, { preserveSelection: true })}
+                  disabled={page <= 1 || loading}
+                  className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-white/15 text-stone-700 dark:text-stone-300 disabled:opacity-40 hover:bg-stone-100 dark:hover:bg-white/5"
+                >
+                  Anterior
+                </button>
+                <button
+                  onClick={() => loadLeads(page + 1, { preserveSelection: true })}
+                  disabled={page >= totalPages || loading}
+                  className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-white/15 text-stone-700 dark:text-stone-300 disabled:opacity-40 hover:bg-stone-100 dark:hover:bg-white/5"
+                >
+                  Próxima
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

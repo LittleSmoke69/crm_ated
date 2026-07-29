@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
 
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
-      .select('status')
+      .select('status, zaploto_id')
       .eq('id', userId)
       .single();
 
@@ -83,6 +83,12 @@ export async function POST(req: NextRequest) {
       return errorResponse('phone_number_id, waba_id, access_token e verify_token são obrigatórios', 400);
     }
 
+    // Sem zaploto_id a config não aparece no seletor de canais do chat (filtro por tenant).
+    const resolvedZaplotoId =
+      (typeof zaploto_id === 'string' && zaploto_id.trim()) ||
+      (profile as { zaploto_id?: string | null } | null)?.zaploto_id ||
+      null;
+
     const insert: Record<string, unknown> = {
       name: name ?? 'WhatsApp Oficial',
       is_active: is_active !== false,
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
       access_token: String(access_token).trim(),
       verify_token: String(verify_token).trim(),
       webhook_secret: webhook_secret ? String(webhook_secret).trim() : null,
-      zaploto_id: zaploto_id || null,
+      zaploto_id: resolvedZaplotoId,
     };
 
     const { data, error } = await supabaseServiceRole

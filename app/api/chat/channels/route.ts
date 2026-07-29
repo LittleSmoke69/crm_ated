@@ -165,8 +165,8 @@ async function buildWhatsAppOfficialChannels(
   userId: string,
   userStatus: string,
 ): Promise<WhatsAppOfficialConfigRow[]> {
-  // Super admins e suporte sem tenant veem todas as configs ativas
-  const isGlobalAdmin = userStatus === 'super_admin' || (userStatus === 'suporte');
+  // Super admins e suporte veem todas as configs ativas
+  const isGlobalAdmin = userStatus === 'super_admin' || userStatus === 'suporte';
 
   if (isGlobalAdmin) {
     const { data: rows } = await supabaseServiceRole
@@ -177,7 +177,6 @@ async function buildWhatsAppOfficialChannels(
     return (rows || []) as WhatsAppOfficialConfigRow[];
   }
 
-  // Busca o zaploto_id do perfil do usuário
   const { data: profile } = await supabaseServiceRole
     .from('profiles')
     .select('zaploto_id')
@@ -185,6 +184,23 @@ async function buildWhatsAppOfficialChannels(
     .single();
 
   const zaplotoId = (profile as { zaploto_id?: string | null } | null)?.zaploto_id;
+
+  // Admin do tenant também vê configs órfãs (cadastro sem zaploto_id).
+  if (userStatus === 'admin') {
+    let query = supabaseServiceRole
+      .from('whatsapp_official_configs')
+      .select('id, name, phone_number_id, is_active, created_at')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    query = zaplotoId
+      ? query.or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+      : query.is('zaploto_id', null);
+
+    const { data: rows } = await query;
+    return (rows || []) as WhatsAppOfficialConfigRow[];
+  }
+
   if (!zaplotoId) return [];
 
   const { data: rows } = await supabaseServiceRole

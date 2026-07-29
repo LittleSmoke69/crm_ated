@@ -380,8 +380,11 @@ async function handleInboundMessages(value: WaValue): Promise<{ tokenAlert: bool
     return { tokenAlert: false, errors: [errorMessage] };
   }
   if (!config) {
-    console.warn('[Zaploto Chat] Config não encontrada para phone_number_id:', phoneNumberIdStr);
-    return { tokenAlert: false, errors: [`Config não encontrada para phone_number_id: ${phoneNumberIdStr}`] };
+    // Outras WABAs / teste da Meta no mesmo webhook: ignora sem falhar a fila.
+    console.info(
+      `[Zaploto Chat] Evento ignorado — nenhuma config ativa para phone_number_id=${phoneNumberIdStr}`
+    );
+    return { tokenAlert: false, errors: [] };
   }
 
   const contactsMap = new Map<string, string>();
