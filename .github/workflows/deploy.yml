@@ -68,7 +68,35 @@ jobs:
             test -n "$(sed -n 's/^NEXT_PUBLIC_SUPABASE_URL=//p' .env)"
             test -n "$(sed -n 's/^NEXT_PUBLIC_SUPABASE_ANON_KEY=//p' .env)"
             test -n "$(sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' .env)"
-            test "$(sed -n 's/^ZAPLOTO_APP_SCOPE=//p' .env)" = "modelagem"
+
+            # Cap do Sucesso: Evolution no chat exige escopo full (modelagem zera /api/chat/channels).
+            upsert_env() {
+              local key="$1"
+              local val="$2"
+              if grep -qE "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${val}|" .env
+              else
+                printf '\n%s=%s\n' "$key" "$val" >> .env
+              fi
+            }
+            echo "Garantindo escopo full (Evolution) no .env..."
+            upsert_env ZAPLOTO_APP_SCOPE full
+            upsert_env NEXT_PUBLIC_ZAPLOTO_APP_SCOPE full
+            upsert_env ZAPLOTO_DISABLE_EVOLUTION_STACK false
+            upsert_env NEXT_PUBLIC_ZAPLOTO_DISABLE_EVOLUTION_STACK false
+            upsert_env SITE_URL https://capdosucesso.co.uk
+            upsert_env URL https://capdosucesso.co.uk
+            upsert_env NEXT_PUBLIC_SITE_URL https://capdosucesso.co.uk
+            upsert_env NEXT_PUBLIC_APP_URL https://capdosucesso.co.uk
+            upsert_env NEXT_PUBLIC_WEBHOOK_BASE_URL https://capdosucesso.co.uk
+            upsert_env EVOLUTION_BASE_URL https://evolution.capdosucesso.co.uk
+            upsert_env EVOLUTION_WEBHOOK_SKIP_MASTER false
+            # Remove flags de localhost se existirem
+            sed -i '/^EVOLUTION_WEBHOOK_ALLOW_NO_TOKEN=/d' .env || true
+            sed -i '/^EVOLUTION_WEBHOOK_ALLOW_LOCALHOST=/d' .env || true
+
+            SCOPE="$(sed -n 's/^ZAPLOTO_APP_SCOPE=//p' .env | tr -d '\r')"
+            test "$SCOPE" = "full"
             docker compose config --quiet
 
             echo "Aplicando migrations modelagem..."
@@ -89,6 +117,11 @@ jobs:
               printf "INSERT INTO public.app_migration_history (filename) VALUES ('%s');\n" "$migration_name" | \
                 docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
             done
+
+            # Garante flag de chat nas instâncias mestres (gate do /chat)
+            docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
+              "UPDATE public.evolution_instances SET is_chat_instance = true WHERE is_master = true AND COALESCE(is_chat_instance, false) = false;" \
+              || echo "Aviso: não foi possível atualizar is_chat_instance (tabela ausente?)"
 
             if [ "$application_changed" = "0" ]; then
               echo "Somente migrations/documentação: build e restart dispensados."
