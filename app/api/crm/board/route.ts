@@ -15,7 +15,8 @@ export const maxDuration = 120;
  */
 
 const PAGE_SIZE = 1000;
-const IN_CHUNK = 500;
+/** PostgREST coloca o .in() na querystring; chunks grandes geram 414 no nginx. */
+const IN_CHUNK = 80;
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (items.length === 0) return [];
