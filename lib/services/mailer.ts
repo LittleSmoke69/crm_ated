@@ -333,8 +333,9 @@ async function deliverViaRelay(
     });
     if (result.ok) return;
     lastErr = result.error || lastErr;
+    // Não tenta outra porta em rate-limit/AUTH (piora "too many AUTH")
+    if (/too many AUTH|Invalid login|535|450 4\.7\.1|421/i.test(lastErr)) break;
     if (!isSmtpConnectivityError(new Error(lastErr)) && i === 0) {
-      // erro de auth etc. — não fica tentando todas as portas
       if (!/timeout|econn|reset|unreachable|indisponível|fetch failed/i.test(lastErr)) break;
     }
   }

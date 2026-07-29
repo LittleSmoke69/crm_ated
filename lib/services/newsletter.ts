@@ -8,8 +8,13 @@ import { sendMail, SmtpQuotaError, todaySaoPaulo } from '@/lib/services/mailer';
 import { applyVars, htmlToText, wrapEmailLayout } from '@/lib/services/email-layout';
 
 const LOG = '[newsletter]';
-// Pausa entre cada e-mail do lote (protege a reputação do SMTP); ajustável via .env
-const DELAY_BETWEEN_SENDS_MS = Math.max(0, Number(process.env.NEWSLETTER_DELAY_BETWEEN_SENDS_MS) || 200);
+// Pausa entre cada e-mail do lote (protege a reputação do SMTP / evita too many AUTH).
+// Com EMAIL_RELAY_URL o padrão sobe para 800ms (Hostinger rate-limit no IP da Contabo).
+const DELAY_BETWEEN_SENDS_MS = Math.max(
+  0,
+  Number(process.env.NEWSLETTER_DELAY_BETWEEN_SENDS_MS) ||
+    (process.env.EMAIL_RELAY_URL ? 800 : 200)
+);
 const PROGRESS_UPDATE_EVERY = 10;
 
 export interface NewsletterRecipient {

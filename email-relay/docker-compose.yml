@@ -10,4 +10,7 @@ services:
       EMAIL_RELAY_SECRET: ${EMAIL_RELAY_SECRET}
       PORT: "8787"
       SMTP_TIMEOUT_MS: ${SMTP_TIMEOUT_MS:-20000}
+      SMTP_MAX_CONNECTIONS: ${SMTP_MAX_CONNECTIONS:-1}
+      SMTP_RATE_DELTA_MS: ${SMTP_RATE_DELTA_MS:-2000}
+      SMTP_RATE_LIMIT: ${SMTP_RATE_LIMIT:-3}
     # Opcional: restringir origem no firewall do host (UFW) ao IP da SuperBitHost

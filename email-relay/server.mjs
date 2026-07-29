@@ -7,6 +7,9 @@
  *   EMAIL_RELAY_SECRET  — Bearer obrigatório
  *   PORT                — padrão 8787
  *   SMTP_TIMEOUT_MS     — padrão 20000
+ *   SMTP_MAX_CONNECTIONS — pool por conta (padrão 1) — evita "too many AUTH"
+ *   SMTP_RATE_DELTA_MS  — janela de rate limit (padrão 2000)
+ *   SMTP_RATE_LIMIT     — máx. mensagens por janela (padrão 3)
  */
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
@@ -15,12 +18,18 @@ import nodemailer from 'nodemailer';
 const PORT = Number(process.env.PORT) || 8787;
 const SECRET = process.env.EMAIL_RELAY_SECRET || '';
 const SMTP_TIMEOUT_MS = Math.max(5_000, Number(process.env.SMTP_TIMEOUT_MS) || 20_000);
+const SMTP_MAX_CONNECTIONS = Math.max(1, Number(process.env.SMTP_MAX_CONNECTIONS) || 1);
+const SMTP_RATE_DELTA_MS = Math.max(500, Number(process.env.SMTP_RATE_DELTA_MS) || 2_000);
+const SMTP_RATE_LIMIT = Math.max(1, Number(process.env.SMTP_RATE_LIMIT) || 3);
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MB
 
 if (!SECRET || SECRET.length < 16) {
   console.error('[email-relay] Defina EMAIL_RELAY_SECRET com pelo menos 16 caracteres');
   process.exit(1);
 }
+
+/** Reusa AUTH/conexão por conta — Hostinger bloqueia "too many AUTH" do mesmo IP. */
+const transporterCache = new Map();
 
 function safeEqual(a, b) {
   const ba = Buffer.from(String(a));
@@ -85,11 +94,30 @@ function smtpOptions(smtp) {
       user: String(smtp.username),
       pass: String(smtp.password),
     },
+    pool: true,
+    maxConnections: SMTP_MAX_CONNECTIONS,
+    maxMessages: 200,
+    rateDelta: SMTP_RATE_DELTA_MS,
+    rateLimit: SMTP_RATE_LIMIT,
     connectionTimeout: SMTP_TIMEOUT_MS,
     greetingTimeout: SMTP_TIMEOUT_MS,
-    socketTimeout: Math.max(30_000, SMTP_TIMEOUT_MS * 2),
+    socketTimeout: Math.max(60_000, SMTP_TIMEOUT_MS * 3),
     tls: { servername: String(smtp.host) },
   };
+}
+
+function cacheKey(smtp) {
+  const port = Number(smtp.port) || 465;
+  return `${smtp.host}|${port}|${smtp.username}|${smtp.password}`;
+}
+
+function getTransporter(smtp) {
+  const key = cacheKey(smtp);
+  let entry = transporterCache.get(key);
+  if (entry) return entry.transporter;
+  const transporter = nodemailer.createTransport(smtpOptions(smtp));
+  transporterCache.set(key, { transporter, lastUsed: Date.now() });
+  return transporter;
 }
 
 function validateSmtp(smtp) {
@@ -109,7 +137,10 @@ async function handleSend(body) {
     }
   }
 
-  const transporter = nodemailer.createTransport(smtpOptions(body.smtp));
+  const transporter = getTransporter(body.smtp);
+  const entry = transporterCache.get(cacheKey(body.smtp));
+  if (entry) entry.lastUsed = Date.now();
+
   try {
     const info = await transporter.sendMail({
       from: body.from,
@@ -125,9 +156,20 @@ async function handleSend(body) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[email-relay] send FAIL', body.smtp?.host, body.smtp?.port, msg);
+    // Descarta pool se AUTH/rate-limit — próxima tentativa reabre conexão limpa
+    if (/too many AUTH|Invalid login|421|450|454|535/i.test(msg)) {
+      const key = cacheKey(body.smtp);
+      const cached = transporterCache.get(key);
+      if (cached) {
+        try {
+          cached.transporter.close();
+        } catch {
+          /* ignore */
+        }
+        transporterCache.delete(key);
+      }
+    }
     return { status: 502, body: { ok: false, error: msg } };
-  } finally {
-    transporter.close();
   }
 }
 
@@ -135,7 +177,11 @@ async function handleVerify(body) {
   const errSmtp = validateSmtp(body.smtp);
   if (errSmtp) return { status: 400, body: { ok: false, error: errSmtp } };
 
-  const transporter = nodemailer.createTransport(smtpOptions(body.smtp));
+  // verify usa transporter descartável para não poluir o pool de envio
+  const transporter = nodemailer.createTransport({
+    ...smtpOptions(body.smtp),
+    pool: false,
+  });
   try {
     await transporter.verify();
     return { status: 200, body: { ok: true } };
@@ -152,7 +198,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    sendJson(res, 200, { ok: true, service: 'email-relay' });
+    sendJson(res, 200, {
+      ok: true,
+      service: 'email-relay',
+      pools: transporterCache.size,
+    });
     return;
   }
 
@@ -183,5 +233,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[email-relay] listening on :${PORT}`);
+  console.log(
+    `[email-relay] listening on :${PORT} (pool maxConnections=${SMTP_MAX_CONNECTIONS} rate=${SMTP_RATE_LIMIT}/${SMTP_RATE_DELTA_MS}ms)`
+  );
 });
