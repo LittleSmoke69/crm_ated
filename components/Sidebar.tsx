@@ -417,13 +417,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
   };
-  // Admin/Super Admin: CRM com gestão de leads capturados (Admin > Leads)
+  // Admin/Super Admin: Leads + transferido/avulsos (sem Kanban — quadro é do captador)
   const itemCRMAdmin: MenuItem = {
     label: 'CRM',
     icon: Layout,
     submenu: [
       { href: '/admin/leads', icon: UserPlus, label: 'Leads' },
-      { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
       { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
       { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
@@ -468,7 +467,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     icon: Layout,
     submenu: [
       { href: '/admin/leads', icon: UserPlus, label: 'Leads' },
-      { href: '/crm/kanban', icon: Kanban, label: 'Kanban' },
       { href: '/crm/transferido', icon: ArrowRightLeft, label: 'Transferido' },
       { href: '/crm/avulsos', icon: UserPlus, label: 'Avulsos' },
     ],
@@ -619,10 +617,28 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         return legacy;
       }
 
-      const items = dynamicSidebar.items.map((item) => ({ ...item, submenu: item.submenu ? [...item.submenu] : undefined }));
+      const items: MenuItem[] = dynamicSidebar.items.map((item) => ({
+        ...item,
+        submenu: item.submenu ? [...item.submenu] : undefined,
+      }));
       const hasLeads =
         items.some((it) => it.href === '/admin/leads' || it.label === 'Leads') ||
         items.some((it) => it.submenu?.some((s) => s.href === '/admin/leads' || s.label === 'Leads'));
+
+      // Admin/gerente: Kanban é só do captador — remove do menu dinâmico
+      if (userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'gerente') {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          if (it.submenu?.some((s) => s.href === '/crm/kanban')) {
+            items[i] = {
+              ...it,
+              submenu: (it.submenu || []).filter((s) => s.href !== '/crm/kanban'),
+            };
+          }
+        }
+        const kanbanRoot = items.findIndex((it) => it.href === '/crm/kanban');
+        if (kanbanRoot >= 0) items.splice(kanbanRoot, 1);
+      }
 
       // Garante "Leads" para admin/super_admin/gerente mesmo se o seed dinâmico não tiver crm_leads
       if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'gerente')) {

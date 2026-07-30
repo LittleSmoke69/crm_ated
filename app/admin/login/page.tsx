@@ -5,7 +5,7 @@ import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Link from '@/components/WhitelabelLink';
 import { Mail, Lock, AlertCircle, Shield, Sun, Moon, Eye, EyeOff } from 'lucide-react';
 import Logo from '@/components/Logo';
-import { useTheme } from '@/contexts/ThemeContext';
+import { useTheme, notifyThemeSessionReady } from '@/contexts/ThemeContext';
 import Button from '@/components/ui/Button';
 
 const AdminLoginPage = () => {
@@ -82,6 +82,7 @@ const AdminLoginPage = () => {
       }
 
       setSessionArtifacts(userId, userEmail);
+      notifyThemeSessionReady();
       router.push('/admin');
     } catch (err) {
       console.error('Erro ao efetuar login:', err);

@@ -6,14 +6,113 @@ import { getEffectiveZaplotoId } from '@/lib/tenant-context';
 import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 120;
 
 const CAPTURE_STATUSES = ['pendente', 'em_contato', 'convertido', 'descartado'] as const;
 const PAGE_SIZE_DEFAULT = 25;
 const SCAN_PAGE = 1000;
 const SCAN_MAX = 20000;
+/** PostgREST .in() na querystring — chunks grandes geram 414. */
+const IN_CHUNK = 80;
+const STAGE_UPSERT_CHUNK = 200;
 
 function normalizePhone(v: string | null | undefined): string {
   return String(v || '').replace(/\D/g, '');
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+/** Coluna inicial do kanban do captador (status_pendente / novo / primeira ativa do tenant). */
+async function resolveInitialKanbanColumn(zaplotoId: string | null): Promise<{ id: string; key: string } | null> {
+  const preferredKeys = ['status_pendente', 'novo'];
+  for (const key of preferredKeys) {
+    let q = supabaseServiceRole
+      .from('crm_columns')
+      .select('id, key')
+      .eq('key', key)
+      .eq('is_active', true)
+      .limit(1);
+    if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
+    const { data } = await q.maybeSingle();
+    if (data?.id && data?.key) return { id: data.id, key: data.key };
+  }
+  let q = supabaseServiceRole
+    .from('crm_columns')
+    .select('id, key')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+    .limit(1);
+  if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
+  const { data } = await q.maybeSingle();
+  return data?.id && data?.key ? { id: data.id, key: data.key } : null;
+}
+
+async function fetchLeadsByIds(ids: string[]) {
+  const rows: { id: string; external_id: number | string; user_id: string | null; gerente_id: string | null }[] = [];
+  for (const chunk of chunkArray(ids, IN_CHUNK)) {
+    const { data, error } = await supabaseServiceRole
+      .from('crm_leads')
+      .select('id, external_id, user_id, gerente_id')
+      .in('id', chunk);
+    if (error) throw new Error(error.message);
+    rows.push(...((data as typeof rows) || []));
+  }
+  return rows;
+}
+
+/** Coloca leads no kanban do captador em lote (sem RPC por lead). */
+async function placeLeadsOnCaptadorKanban(params: {
+  leads: { id: string; external_id: number | string; user_id: string | null }[];
+  captadorId: string;
+  movedBy: string;
+  column: { id: string; key: string };
+  nowIso: string;
+}) {
+  const { leads, captadorId, movedBy, column, nowIso } = params;
+
+  // Remove estágio antigo quando troca de captador (agrupado por dono anterior)
+  const byPrevOwner = new Map<string, string[]>();
+  for (const lead of leads) {
+    if (lead.user_id && lead.user_id !== captadorId) {
+      const list = byPrevOwner.get(lead.user_id) || [];
+      list.push(String(lead.external_id));
+      byPrevOwner.set(lead.user_id, list);
+    }
+  }
+  for (const [prevOwnerId, extIds] of byPrevOwner) {
+    for (const extChunk of chunkArray(extIds, IN_CHUNK)) {
+      const { error } = await supabaseServiceRole
+        .from('crm_lead_stage')
+        .delete()
+        .eq('user_id', prevOwnerId)
+        .in('lead_external_id', extChunk);
+      if (error) throw new Error(`Erro ao limpar kanban anterior: ${error.message}`);
+    }
+  }
+
+  const stageRows = leads.map((lead, i) => ({
+    lead_external_id: String(lead.external_id),
+    user_id: captadorId,
+    column_id: column.id,
+    column_key: column.key,
+    position: i,
+    is_manual: true,
+    moved_by: movedBy,
+    moved_at: nowIso,
+    updated_at: nowIso,
+  }));
+
+  for (const chunk of chunkArray(stageRows, STAGE_UPSERT_CHUNK)) {
+    const { error } = await supabaseServiceRole
+      .from('crm_lead_stage')
+      .upsert(chunk, { onConflict: 'lead_external_id,user_id' });
+    if (error) throw new Error(`Erro ao posicionar no kanban: ${error.message}`);
+  }
 }
 
 /** Perfis do tenant (para escopo e para montar os selects de gerente/captador). */
@@ -275,15 +374,23 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Erro ao cadastrar lead: ${error?.message || 'desconhecido'}`, 400);
     }
 
-    // Já atribuído a captador: entra no kanban dele (mesma engine do board)
+    // Já atribuído a captador: entra no kanban dele (coluna inicial do tenant)
     if (captadorId) {
-      await supabaseServiceRole.rpc('crm_move_lead', {
-        p_lead_external_id: String(externalId),
-        p_user_id: captadorId,
-        p_column_key: 'novo',
-        p_position: 0,
-        p_moved_by: userId,
-      });
+      const column = await resolveInitialKanbanColumn(zaplotoId);
+      if (!column) {
+        return errorResponse('CRM sem colunas ativas para posicionar o lead no kanban.', 400);
+      }
+      try {
+        await placeLeadsOnCaptadorKanban({
+          leads: [{ id: inserted.id, external_id: inserted.external_id, user_id: null }],
+          captadorId,
+          movedBy: userId,
+          column,
+          nowIso,
+        });
+      } catch (e: any) {
+        return errorResponse(e?.message || 'Erro ao posicionar no kanban.', 500);
+      }
     }
 
     return successResponse({ id: inserted.id, external_id: String(inserted.external_id) }, 'Lead cadastrado com sucesso!');
@@ -295,7 +402,7 @@ export async function POST(req: NextRequest) {
 /**
  * PATCH /api/admin/crm/leads — atualiza/atribui leads (aceita 1 ou vários ids).
  * Body: { ids: string[], capture_status?, gerente_id?, captador_id? }
- * captador_id: '' remove o captador (lead volta ao pool); uuid atribui e envia ao kanban.
+ * captador_id: '' remove o captador (lead volta ao pool); uuid atribui e envia ao kanban do captador.
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -324,15 +431,17 @@ export async function PATCH(req: NextRequest) {
       return errorResponse('Nome é obrigatório.', 400);
     }
 
-    const { data: leads, error: leadsErr } = await supabaseServiceRole
-      .from('crm_leads')
-      .select('id, external_id, user_id, gerente_id')
-      .in('id', ids);
-    if (leadsErr) return errorResponse(leadsErr.message, 400);
+    let leads: Awaited<ReturnType<typeof fetchLeadsByIds>>;
+    try {
+      leads = await fetchLeadsByIds(ids);
+    } catch (e: any) {
+      return errorResponse(e?.message || 'Erro ao buscar leads.', 400);
+    }
+    if (leads.length === 0) return errorResponse('Nenhum lead encontrado.', 400);
 
     if (isGerente) {
-      for (const lead of leads || []) {
-        if ((lead as { gerente_id?: string | null }).gerente_id !== userId) {
+      for (const lead of leads) {
+        if (lead.gerente_id !== userId) {
           return errorResponse('Lead fora do seu escopo.', 403);
         }
       }
@@ -360,65 +469,98 @@ export async function PATCH(req: NextRequest) {
       captadorEnroller = c.enroller || null;
     }
 
-    for (const lead of leads || []) {
-      const update: any = { updated_at: nowIso, zaploto_id: zaplotoId };
-      if (hasStatus) update.capture_status = body.capture_status;
-      if (hasGerente) update.gerente_id = isGerente ? userId : (body.gerente_id || null);
-      // Nome inteiro vai para `name`; zera `last_name` para não duplicar o sobrenome
-      // antigo por trás de um nome completo novo (GET concatena name + last_name).
-      if (hasName) { update.name = body.name.trim(); update.last_name = null; }
-      if (hasPhone) update.phone = normalizePhone(body.phone) || null;
-      if (hasEmail) update.email = body.email.trim().toLowerCase() || null;
-
-      if (hasCaptador) {
-        update.user_id = captadorId;
-        update.assigned_by = userId;
-        update.assigned_at = captadorId ? nowIso : null;
-        // Atribuir captador define o gerente automaticamente (enroller), se não informado
-        if (!hasGerente && captadorId && captadorEnroller) update.gerente_id = captadorEnroller;
-        // Troca de dono: remove o stage antigo do kanban
-        if (lead.user_id && lead.user_id !== captadorId) {
-          await supabaseServiceRole
-            .from('crm_lead_stage')
-            .delete()
-            .eq('lead_external_id', String(lead.external_id))
-            .eq('user_id', lead.user_id);
-        }
+    // Edição pontual (nome/telefone/e-mail) ou status isolado — 1 a 1
+    if (hasName || hasPhone || hasEmail || (hasStatus && !hasGerente && !hasCaptador)) {
+      for (const lead of leads) {
+        const update: Record<string, unknown> = { updated_at: nowIso, zaploto_id: zaplotoId };
+        if (hasStatus) update.capture_status = body.capture_status;
+        if (hasName) { update.name = body.name.trim(); update.last_name = null; }
+        if (hasPhone) update.phone = normalizePhone(body.phone) || null;
+        if (hasEmail) update.email = body.email.trim().toLowerCase() || null;
+        const { error: upErr } = await supabaseServiceRole.from('crm_leads').update(update).eq('id', lead.id);
+        if (upErr) return errorResponse(`Erro ao atualizar lead: ${upErr.message}`, 400);
       }
+      return successResponse({ updated: leads.length }, 'Leads atualizados com sucesso!');
+    }
 
-      const { error: upErr } = await supabaseServiceRole.from('crm_leads').update(update).eq('id', lead.id);
-      if (upErr) return errorResponse(`Erro ao atualizar lead: ${upErr.message}`, 400);
+    // Atribuição em massa (gerente e/ou captador)
+    const leadUpdate: Record<string, unknown> = { updated_at: nowIso, zaploto_id: zaplotoId };
+    if (hasStatus) leadUpdate.capture_status = body.capture_status;
+    if (hasGerente) leadUpdate.gerente_id = isGerente ? userId : (body.gerente_id || null);
+    if (hasCaptador) {
+      leadUpdate.user_id = captadorId;
+      leadUpdate.assigned_by = userId;
+      leadUpdate.assigned_at = captadorId ? nowIso : null;
+      if (!hasGerente && captadorId && captadorEnroller) leadUpdate.gerente_id = captadorEnroller;
+    }
 
-      // Mantém o Chat sincronizado quando a atribuição nasce na tela de Leads.
-      if (hasCaptador || hasGerente) {
-        const chatUpdate: Record<string, unknown> = { updated_at: nowIso };
-        if (hasCaptador) {
-          chatUpdate.user_id = captadorId;
-          chatUpdate.assigned_by = userId;
-          chatUpdate.assigned_at = captadorId ? nowIso : null;
-          chatUpdate.assignment_status = captadorId ? 'atribuido' : 'pendente';
-        }
-        if (hasGerente) chatUpdate.gerente_id = body.gerente_id || null;
-        else if (hasCaptador && captadorEnroller) chatUpdate.gerente_id = captadorEnroller;
-        await supabaseServiceRole
-          .from('chat_conversations')
-          .update(chatUpdate)
-          .eq('lead_id', lead.id);
+    for (const chunk of chunkArray(leads.map((l) => l.id), IN_CHUNK)) {
+      const { error: upErr } = await supabaseServiceRole.from('crm_leads').update(leadUpdate).in('id', chunk);
+      if (upErr) return errorResponse(`Erro ao atualizar leads: ${upErr.message}`, 400);
+    }
+
+    // Kanban: só do captador (admin/gerente não têm quadro operacional)
+    if (hasCaptador && captadorId) {
+      const column = await resolveInitialKanbanColumn(zaplotoId);
+      if (!column) {
+        return errorResponse('CRM sem colunas ativas para posicionar os leads no kanban do captador.', 400);
       }
-
-      // Entra no kanban do novo captador (coluna inicial)
-      if (hasCaptador && captadorId && lead.user_id !== captadorId) {
-        await supabaseServiceRole.rpc('crm_move_lead', {
-          p_lead_external_id: String(lead.external_id),
-          p_user_id: captadorId,
-          p_column_key: 'novo',
-          p_position: 0,
-          p_moved_by: userId,
+      try {
+        await placeLeadsOnCaptadorKanban({
+          leads,
+          captadorId,
+          movedBy: userId,
+          column,
+          nowIso,
         });
+      } catch (e: any) {
+        return errorResponse(e?.message || 'Erro ao posicionar no kanban.', 500);
+      }
+    } else if (hasCaptador && captadorId === null) {
+      // Remove do kanban ao desatribuir captador
+      for (const chunk of chunkArray(leads, IN_CHUNK)) {
+        const byOwner = new Map<string, string[]>();
+        for (const lead of chunk) {
+          if (!lead.user_id) continue;
+          const list = byOwner.get(lead.user_id) || [];
+          list.push(String(lead.external_id));
+          byOwner.set(lead.user_id, list);
+        }
+        for (const [ownerId, extIds] of byOwner) {
+          for (const extChunk of chunkArray(extIds, IN_CHUNK)) {
+            await supabaseServiceRole
+              .from('crm_lead_stage')
+              .delete()
+              .eq('user_id', ownerId)
+              .in('lead_external_id', extChunk);
+          }
+        }
       }
     }
 
-    return successResponse({ updated: (leads || []).length }, 'Leads atualizados com sucesso!');
+    // Chat: sync em lote (só conversas já existentes)
+    if (hasCaptador || hasGerente) {
+      const chatUpdate: Record<string, unknown> = { updated_at: nowIso };
+      if (hasCaptador) {
+        chatUpdate.user_id = captadorId;
+        chatUpdate.assigned_by = userId;
+        chatUpdate.assigned_at = captadorId ? nowIso : null;
+        chatUpdate.assignment_status = captadorId ? 'atribuido' : 'pendente';
+      }
+      if (hasGerente) chatUpdate.gerente_id = isGerente ? userId : (body.gerente_id || null);
+      else if (hasCaptador && captadorEnroller) chatUpdate.gerente_id = captadorEnroller;
+
+      for (const chunk of chunkArray(leads.map((l) => l.id), IN_CHUNK)) {
+        await supabaseServiceRole.from('chat_conversations').update(chatUpdate).in('lead_id', chunk);
+      }
+    }
+
+    return successResponse(
+      { updated: leads.length, kanban: hasCaptador && captadorId ? leads.length : 0 },
+      hasCaptador && captadorId
+        ? `${leads.length} lead(s) no kanban do captador.`
+        : 'Leads atualizados com sucesso!'
+    );
   } catch (err: any) {
     return serverErrorResponse(err);
   }

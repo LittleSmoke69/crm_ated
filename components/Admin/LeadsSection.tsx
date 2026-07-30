@@ -393,6 +393,29 @@ export default function LeadsSection({
   const patchLeads = async (ids: string[], body: Record<string, unknown>, successMsg: string): Promise<boolean> => {
     setBusy(true);
     try {
+      const ASSIGN_CHUNK = 100;
+      // Atribuição em massa: processa em lotes para evitar timeout
+      if (ids.length > ASSIGN_CHUNK && (body.captador_id !== undefined || body.gerente_id !== undefined)) {
+        let done = 0;
+        for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
+          const chunk = ids.slice(i, i + ASSIGN_CHUNK);
+          const res = await fetch('/api/admin/crm/leads', {
+            method: 'PATCH',
+            headers: headers(),
+            body: JSON.stringify({ ids: chunk, ...body }),
+          });
+          const json = await res.json();
+          if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao salvar');
+          done += chunk.length;
+          if (ids.length > ASSIGN_CHUNK) {
+            showToast(`Atribuindo… ${done}/${ids.length}`, 'success');
+          }
+        }
+        showToast(successMsg, 'success');
+        await loadLeads(page, { preserveSelection: true });
+        return true;
+      }
+
       const res = await fetch('/api/admin/crm/leads', {
         method: 'PATCH',
         headers: headers(),
@@ -1225,16 +1248,6 @@ export default function LeadsSection({
               >
                 <Pencil className="w-4 h-4" /> Editar informações do cliente
               </button>
-              {viewLead.captador_id && (
-                <a
-                  href="/crm/kanban"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                >
-                  <Eye className="w-4 h-4" /> Ver no CRM Kanban
-                </a>
-              )}
             </div>
           </div>
         )

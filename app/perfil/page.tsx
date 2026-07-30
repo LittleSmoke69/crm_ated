@@ -682,10 +682,19 @@ const PerfilPage = () => {
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-500 dark:text-[#aaa] mb-2">Aparência</label>
+                <p className="text-xs text-gray-500 dark:text-[#888] mb-3">
+                  A escolha fica salva no seu perfil e permanece ao entrar de novo.
+                </p>
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => setTheme('light')}
+                    onClick={async () => {
+                      const ok = await setTheme('light');
+                      showToast(
+                        ok ? 'Tema claro salvo no perfil' : 'Tema aplicado, mas não foi possível salvar no perfil',
+                        ok ? 'success' : 'error'
+                      );
+                    }}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'light'
                         ? 'bg-[#E86A24] dark:bg-[#E86A24] text-white shadow-md'
@@ -697,7 +706,13 @@ const PerfilPage = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTheme('dark')}
+                    onClick={async () => {
+                      const ok = await setTheme('dark');
+                      showToast(
+                        ok ? 'Tema escuro salvo no perfil' : 'Tema aplicado, mas não foi possível salvar no perfil',
+                        ok ? 'success' : 'error'
+                      );
+                    }}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
                       theme === 'dark'
                         ? 'bg-[#E86A24] dark:bg-[#E86A24] text-white shadow-md'

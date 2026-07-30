@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, Sun, Moon, Eye, EyeOff } from 'lucide-react';
 import Logo from '@/components/Logo';
-import { useTheme } from '@/contexts/ThemeContext';
+import { useTheme, notifyThemeSessionReady } from '@/contexts/ThemeContext';
 import {
   useTenantRouter,
   useTenantHref,
@@ -106,6 +106,7 @@ const LoginPage = () => {
       const status = normalizeLegacyStatus(rawStatus);
 
       setSessionArtifacts(userId, userEmail, status);
+      notifyThemeSessionReady();
 
       // Login na crm-atendimento central: remove cookie WL antigo (evita /admin → /suarifa/admin).
       if (typeof window !== 'undefined' && isCentralZaplotoAuthPath(window.location.pathname)) {

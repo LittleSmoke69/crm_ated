@@ -38,6 +38,7 @@ type ViewerContext = {
   status: string;
   canViewAll: boolean;
   canEditColumns: boolean;
+  canReorderColumns: boolean;
   tenantId: string | null;
   teamUserIds: string[] | null;
 };
@@ -61,6 +62,7 @@ async function getViewerContext(userId: string): Promise<ViewerContext> {
     status,
     canViewAll: isAdmin || isGerente,
     canEditColumns: isAdmin,
+    canReorderColumns: isAdmin || isGerente || status === 'captador' || status === 'consultor',
     tenantId,
     teamUserIds,
   };
@@ -124,7 +126,13 @@ export async function GET(req: NextRequest) {
           return successResponse({
             columns: columns ?? [],
             clients: [],
-            meta: { can_view_all: true, can_edit_columns: true, attendants: [], total_clients: 0 },
+            meta: {
+              can_view_all: true,
+              can_edit_columns: true,
+              can_reorder_columns: viewer.canReorderColumns,
+              attendants: [],
+              total_clients: 0,
+            },
           });
         }
         leadsFilter = { mode: 'in', values: tenantUserIds };
@@ -269,6 +277,7 @@ export async function GET(req: NextRequest) {
       meta: {
         can_view_all: viewer.canViewAll,
         can_edit_columns: viewer.canEditColumns,
+        can_reorder_columns: viewer.canReorderColumns,
         attendants,
         total_clients: clients.length,
       },

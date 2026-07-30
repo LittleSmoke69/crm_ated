@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout';
 import CrmSubNav from '@/components/CRM/CrmSubNav';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3, Pencil, Trophy } from 'lucide-react';
+import { Plus, Loader2, Phone, Mail, User, Trash2, Upload, Check, MoreVertical, UserPlus, Tag as TagIcon, Columns3, Pencil, Trophy, GripVertical } from 'lucide-react';
 import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
 import Modal, { ConfirmDialog } from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
@@ -28,7 +28,7 @@ type Attendant = { id: string; name: string };
 
 const WON_COLUMN_KEY = 'ganho';
 /** Evita travar o browser ao renderizar milhares de cards de uma vez. */
-const CARDS_PER_COLUMN_STEP = 40;
+const CARDS_PER_COLUMN_STEP = 100;
 
 const COLOR_HEX: Record<string, string> = {
   gray: '#6b7280', blue: '#3b82f6', indigo: '#6366f1', amber: '#f59e0b', orange: '#E86A24',
@@ -83,6 +83,9 @@ function KanbanBoard() {
 
   const [canViewAll, setCanViewAll] = useState(false);
   const [canEditColumns, setCanEditColumns] = useState(false);
+  const [canReorderColumns, setCanReorderColumns] = useState(false);
+  const [dragColId, setDragColId] = useState<string | null>(null);
+  const [colDropTargetId, setColDropTargetId] = useState<string | null>(null);
   const [attendants, setAttendants] = useState<Attendant[]>([]);
   const [attendantFilter, setAttendantFilter] = useState('all');
   const [visibleByColumn, setVisibleByColumn] = useState<Record<string, number>>({});
@@ -105,6 +108,7 @@ function KanbanBoard() {
         setClients(board.data.clients ?? []);
         setCanViewAll(!!board.data.meta?.can_view_all);
         setCanEditColumns(!!board.data.meta?.can_edit_columns);
+        setCanReorderColumns(!!board.data.meta?.can_reorder_columns);
         const nextAttendants: Attendant[] = board.data.meta?.attendants ?? [];
         setAttendants(nextAttendants);
         // Com muitos leads, "Todos" trava o DOM — inicia no 1º captador quando há filtro.
@@ -275,6 +279,37 @@ function KanbanBoard() {
     await fetch(`/api/crm/columns/${col.id}`, { method: 'PATCH', headers, credentials: 'include', body: JSON.stringify({ title }) });
   }, [userId, editColTitle, headers]);
 
+  const reorderColumns = useCallback(async (fromId: string, toId: string) => {
+    if (!userId || !canReorderColumns || fromId === toId) return;
+
+    const fromIdx = columns.findIndex((c) => c.id === fromId);
+    const toIdx = columns.findIndex((c) => c.id === toId);
+    if (fromIdx < 0 || toIdx < 0) return;
+
+    const copy = [...columns];
+    const [moved] = copy.splice(fromIdx, 1);
+    copy.splice(toIdx, 0, moved);
+    const nextOrder = copy.map((c, i) => ({ ...c, sort_order: i }));
+    setColumns(nextOrder);
+
+    try {
+      const res = await fetch('/api/crm/columns/reorder', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ ordered_ids: nextOrder.map((c) => c.id) }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error || 'Não foi possível salvar a ordem das colunas.');
+        load();
+      }
+    } catch {
+      toast.error('Erro ao salvar a ordem das colunas.');
+      load();
+    }
+  }, [userId, canReorderColumns, columns, headers, toast, load]);
+
   const toggleTag = useCallback(async (client: Client, tag: Tag) => {
     if (!userId) return;
     const has = client.tags.some((t) => t.id === tag.id);
@@ -332,7 +367,9 @@ function KanbanBoard() {
             <p className="text-sm text-gray-400">
               {canViewAll
                 ? 'Visão dos clientes da equipe por captador. Use o filtro para focar em um captador.'
-                : 'Arraste os clientes entre os estágios do funil.'}
+                : canReorderColumns
+                  ? 'Arraste os clientes entre estágios. Segure o ícone ⋮⋮ no topo da coluna para reordenar — a ordem fica salva.'
+                  : 'Arraste os clientes entre os estágios do funil.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -402,13 +439,59 @@ function KanbanBoard() {
               const visible = list.slice(0, limit);
               const remaining = Math.max(0, list.length - visible.length);
               const accent = hexFor(col.color);
+              const isColDragOver = dragColId && colDropTargetId === col.id && dragColId !== col.id;
               return (
                 <div key={col.id}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => { if (dragId) moveTo(dragId, col.key); setDragId(null); }}
-                  className="relative flex w-72 shrink-0 snap-start flex-col rounded-2xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm">
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (dragColId && canReorderColumns) {
+                      setColDropTargetId(col.id);
+                      return;
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragColId && canReorderColumns) {
+                      void reorderColumns(dragColId, col.id);
+                      setDragColId(null);
+                      setColDropTargetId(null);
+                      return;
+                    }
+                    if (dragId) moveTo(dragId, col.key);
+                    setDragId(null);
+                  }}
+                  onDragLeave={() => {
+                    if (colDropTargetId === col.id) setColDropTargetId(null);
+                  }}
+                  className={`relative flex w-72 shrink-0 snap-start flex-col rounded-2xl border bg-black/20 p-3 backdrop-blur-sm transition ${
+                    isColDragOver
+                      ? 'border-[#E86A24] ring-2 ring-[#E86A24]/40'
+                      : 'border-white/10'
+                  }`}>
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
+                      {canReorderColumns && (
+                        <button
+                          type="button"
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            setDragColId(col.id);
+                            setDragId(null);
+                            e.dataTransfer.effectAllowed = 'move';
+                            e.dataTransfer.setData('text/plain', `col:${col.id}`);
+                          }}
+                          onDragEnd={() => {
+                            setDragColId(null);
+                            setColDropTargetId(null);
+                          }}
+                          className="flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-500 hover:bg-white/10 hover:text-[#E86A24] active:cursor-grabbing"
+                          title="Arrastar para reordenar coluna"
+                          aria-label={`Reordenar coluna ${col.title}`}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </button>
+                      )}
                       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
                       {canEditColumns && editColId === col.id ? (
                         <input autoFocus value={editColTitle}
