@@ -1,6 +1,5 @@
 import { NextRequest, after } from 'next/server';
 import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
-import { assertEvolutionWebhookAuthorized } from '@/lib/server/evolution-webhook-auth';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
 import { normalizationService } from '@/lib/services/normalization-service';
@@ -337,9 +336,8 @@ async function processEventBackground(payload: any, opts: WebhookTestOpts): Prom
  * Todo o processamento é agendado via `after()` — executado após o response.
  */
 export async function POST(req: NextRequest) {
-  const authFail = assertEvolutionWebhookAuthorized(req, 'test');
-  if (authFail) return authFail;
-  const rateLimited = checkIpRateLimit(req, 'webhook-evolution-test', 300, 60 * 1000);
+  // Sem token de env: proteção via rate limit por IP (e tamanho máximo do body).
+  const rateLimited = checkIpRateLimit(req, 'webhook-evolution-test', 120, 60 * 1000);
   if (rateLimited) {
     return new Response(JSON.stringify({ ok: false, error: rateLimited }), {
       status: 429,

@@ -98,8 +98,9 @@ const ImportContactsPage = () => {
   const handleCSVSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      showToast('Envie um arquivo .csv', 'error');
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.csv') && !lower.endsWith('.txt')) {
+      showToast('Envie um arquivo .csv ou .txt', 'error');
       return;
     }
     setCsvFileName(file.name);
@@ -116,11 +117,11 @@ const ImportContactsPage = () => {
         }
         setCsvContacts(parsed);
         showToast(`Arquivo lido: ${parsed.length} contato(s)`, 'success');
-        addLog(`CSV carregado (${file.name}) com ${parsed.length} contatos`, 'success');
+        addLog(`Arquivo carregado (${file.name}) com ${parsed.length} contatos`, 'success');
       } catch (error: any) {
-        const errorMessage = error?.message || 'Erro ao ler CSV';
+        const errorMessage = error?.message || 'Erro ao ler arquivo';
         showToast(errorMessage, 'error');
-        addLog(`Erro parse CSV: ${errorMessage}`, 'error');
+        addLog(`Erro ao ler arquivo: ${errorMessage}`, 'error');
         setCsvContacts([]);
       }
     };
@@ -242,7 +243,7 @@ const ImportContactsPage = () => {
         </div>
 
         <div className="bg-[#2a2a2a] rounded-xl shadow-md p-6 border border-[#404040]">
-          <h2 className="text-lg font-semibold text-gray-100 mb-4">Importar Contatos via CSV</h2>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">Importar Contatos via CSV / TXT</h2>
 
           {/* Regras do arquivo */}
           <div className="mb-6 p-4 bg-[#E86A2415] dark:bg-[#E86A2410] border-2 border-[#E86A2440] rounded-lg" data-tour-id="importar-regras">
@@ -253,7 +254,7 @@ const ImportContactsPage = () => {
             <ul className="space-y-2 text-sm text-gray-300">
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
-                <span><strong>Formato:</strong> .csv (sem limite de linhas)</span>
+                <span><strong>Formato:</strong> .csv ou .txt (mesmo layout, sem limite de linhas)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
@@ -287,11 +288,11 @@ const ImportContactsPage = () => {
                       Arquivo selecionado: <strong className="text-gray-300">{csvFileName}</strong>
                     </p>
                   )}
-                  <p className="text-xs text-gray-500" data-tour-id="importar-exemplo">CSV sem limite de linhas</p>
+                  <p className="text-xs text-gray-500" data-tour-id="importar-exemplo">.csv ou .txt — sem limite de linhas</p>
                 </div>
                 <input
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.txt,text/csv,text/plain"
                   onChange={handleCSVSelect}
                   className="hidden"
                 />

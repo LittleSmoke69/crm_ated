@@ -437,11 +437,17 @@ export default function LeadsSection({
 
   const handleImportFile = async (file: File) => {
     setImportError(null);
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.csv') && !lower.endsWith('.txt')) {
+      setImportError('Envie um arquivo .csv ou .txt');
+      setImportRows([]);
+      return;
+    }
     try {
       const text = await file.text();
       const rows = parseLeadsCsv(text);
       if (rows.length === 0) {
-        setImportError('Arquivo vazio ou formato não reconhecido. Use CSV com colunas nome, telefone, email.');
+        setImportError('Arquivo vazio ou formato não reconhecido. Use CSV/TXT com colunas nome, telefone, email.');
         setImportRows([]);
         return;
       }
@@ -1044,10 +1050,11 @@ export default function LeadsSection({
       ))}
 
       {/* Modal: importar base */}
-      {showImport && modalShell('Importar base de leads (CSV)', () => setShowImport(false), (
+      {showImport && modalShell('Importar base de leads (CSV / TXT)', () => setShowImport(false), (
         <div className="p-5 space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            CSV com colunas <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Nome</code>,{' '}
+            Arquivo <strong>.csv</strong> ou <strong>.txt</strong> com colunas{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Nome</code>,{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">WhatsApp</code>,{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Email</code>,{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Status</code> e{' '}
@@ -1057,7 +1064,7 @@ export default function LeadsSection({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.txt"
+            accept=".csv,.txt,text/csv,text/plain"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
             className="w-full text-sm text-gray-600 dark:text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#E86A24] file:text-white file:font-bold file:cursor-pointer"
           />

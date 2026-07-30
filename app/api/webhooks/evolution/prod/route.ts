@@ -1,6 +1,5 @@
 import { NextRequest, after } from 'next/server';
 import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
-import { assertEvolutionWebhookAuthorized } from '@/lib/server/evolution-webhook-auth';
 import { resolveZaplotoIdFromWebhookRequest } from '@/lib/server/webhook-zaploto-context';
 import { isRabbitMqConfigured, publishWebhookEvent } from '@/lib/queue/rabbitmq';
 import { processWebhookEvent } from '@/lib/services/webhook-processor';
@@ -30,9 +29,8 @@ function scheduleSyncProcess(payload: unknown, zaplotoId: string | null): void {
  * - Se o publish na fila falhar: fallback sync para não perder o evento.
  */
 export async function POST(req: NextRequest) {
-  const authFail = assertEvolutionWebhookAuthorized(req, 'prod');
-  if (authFail) return authFail;
-  const rateLimited = checkIpRateLimit(req, 'webhook-evolution-prod', 600, 60 * 1000);
+  // Sem token de env: proteção via rate limit por IP (e tamanho máximo do body).
+  const rateLimited = checkIpRateLimit(req, 'webhook-evolution-prod', 300, 60 * 1000);
   if (rateLimited) {
     return new Response(JSON.stringify({ ok: false, error: rateLimited }), {
       status: 429,
