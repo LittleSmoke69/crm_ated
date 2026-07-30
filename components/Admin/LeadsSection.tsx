@@ -16,6 +16,10 @@ import {
   X,
 } from 'lucide-react';
 import { Button, EmptyState, TableSkeletonRows } from '@/components/ui';
+import {
+  assignNamePhoneEmail,
+  parseCrmImportContacts,
+} from '@/lib/utils/crm-import-contacts';
 
 /** Tela Admin > CRM > Leads: gerenciamento de leads capturados, interligada ao kanban (atribuição via crm_move_lead). */
 
@@ -110,40 +114,66 @@ function parseCsvRows(text: string, delimiter: string): string[][] {
   return rows;
 }
 
-/** Parser CSV com aspas e campos de atribuição/estágio por linha. */
+function detectLeadsDelimiter(firstLine: string): string {
+  const tabs = (firstLine.match(/\t/g) || []).length;
+  const semis = (firstLine.match(/;/g) || []).length;
+  const commas = (firstLine.match(/,/g) || []).length;
+  if (tabs >= semis && tabs >= commas && tabs > 0) return '\t';
+  if (semis >= commas) return ';';
+  return ',';
+}
+
+/** Parser CSV/TXT: com cabeçalho ou detecção automática de nome/telefone. */
 function parseLeadsCsv(text: string): ImportLead[] {
   const firstLine = text.split(/\r?\n/, 1)[0] || '';
-  const delim = (firstLine.match(/;/g)?.length || 0) >= (firstLine.match(/,/g)?.length || 0) ? ';' : ',';
+  const delim = detectLeadsDelimiter(firstLine);
   const parsed = parseCsvRows(text, delim);
   if (parsed.length === 0) return [];
   const header = parsed[0].map((h) => h.replace(/^\uFEFF/, '').toLowerCase());
   const findIdx = (...keys: string[]) => header.findIndex((h) => keys.some((k) => h.includes(k)));
-  let nameIdx = findIdx('nome', 'name');
-  let phoneIdx = findIdx('telefone', 'phone', 'whatsapp', 'celular', 'fone');
-  let emailIdx = findIdx('email', 'e-mail');
+  const nameIdx = findIdx('nome', 'name');
+  const phoneIdx = findIdx('telefone', 'phone', 'whatsapp', 'celular', 'fone');
+  const emailIdx = findIdx('email', 'e-mail');
   const statusIdx = findIdx('status', 'situação', 'situacao');
   const gerenteIdx = findIdx('gerente', 'manager');
   const captadorIdx = findIdx('captador', 'consultor');
   const createdAtIdx = findIdx('data/hora', 'data hora', 'created_at', 'criado em');
-  let rows = parsed.slice(1);
 
-  // Sem cabeçalho reconhecível: assume nome;telefone;email
+  // Sem cabeçalho: detecta nome/telefone (tab, vírgula ou telefone formatado no fim da linha)
   if (nameIdx < 0 && phoneIdx < 0 && emailIdx < 0) {
-    nameIdx = 0;
-    phoneIdx = 1;
-    emailIdx = 2;
-    rows = parsed;
+    return parseCrmImportContacts(text).map((c) => ({
+      name: c.name,
+      phone: c.phone,
+      email: c.email,
+      status: '',
+      gerente: '',
+      captador: '',
+      created_at: '',
+    }));
   }
 
-  return rows.map((cols) => ({
-      name: nameIdx >= 0 ? cols[nameIdx] || '' : '',
-      phone: phoneIdx >= 0 ? cols[phoneIdx] || '' : '',
-      email: emailIdx >= 0 ? cols[emailIdx] || '' : '',
+  return parsed.slice(1).map((cols) => {
+    let name = nameIdx >= 0 ? cols[nameIdx] || '' : '';
+    let phone = phoneIdx >= 0 ? cols[phoneIdx] || '' : '';
+    let email = emailIdx >= 0 ? cols[emailIdx] || '' : '';
+    if (!phone && name) {
+      const fixed = assignNamePhoneEmail([name]);
+      if (fixed.phone) {
+        name = fixed.name || name;
+        phone = fixed.phone;
+        email = email || fixed.email;
+      }
+    }
+    return {
+      name,
+      phone,
+      email,
       status: statusIdx >= 0 ? cols[statusIdx] || '' : '',
       gerente: gerenteIdx >= 0 ? cols[gerenteIdx] || '' : '',
       captador: captadorIdx >= 0 ? cols[captadorIdx] || '' : '',
       created_at: createdAtIdx >= 0 ? cols[createdAtIdx] || '' : '',
-    }));
+    };
+  });
 }
 
 export default function LeadsSection({
@@ -1053,13 +1083,12 @@ export default function LeadsSection({
       {showImport && modalShell('Importar base de leads (CSV / TXT)', () => setShowImport(false), (
         <div className="p-5 space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Arquivo <strong>.csv</strong> ou <strong>.txt</strong> com colunas{' '}
+            Arquivo <strong>.csv</strong> ou <strong>.txt</strong>. Com cabeçalho:{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Nome</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">WhatsApp</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Email</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Status</code> e{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Gerente</code>. Máximo 5000 linhas por arquivo.
-            Os contatos são vinculados ao gerente; a coluna Captador fica vazia até o gerente atribuir.
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">WhatsApp</code>, e-mail, status, gerente.
+            Sem cabeçalho, detecta automaticamente nome e telefone (ex.: <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Leandro	41992074020</code> ou{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Guilherme (11) 99149-7158</code>).
+            Máximo 5000 linhas. Contatos vão para o gerente; Captador fica vazio até atribuição.
           </p>
           <input
             ref={fileInputRef}

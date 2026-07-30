@@ -31,6 +31,10 @@ function unquoteCell(value: string): string {
   return trimmed;
 }
 
+function digitsOnly(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
 /** Divide uma linha CSV respeitando campos entre aspas. */
 export function splitCsvLine(line: string, delimiter: string): string[] {
   const cells: string[] = [];
@@ -92,6 +96,100 @@ function finalizeContact(partial: { name: string; phone: string; email: string }
   };
 }
 
+/** Token parece telefone BR (8–13 dígitos), não um nome com poucas letras. */
+export function looksLikePhoneToken(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const digits = digitsOnly(trimmed);
+  if (digits.length < 8 || digits.length > 13) return false;
+  const letters = (trimmed.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+  if (letters >= 3) return false;
+  const compact = trimmed.replace(/\s/g, '');
+  return digits.length / Math.max(compact.length, 1) >= 0.55;
+}
+
+/**
+ * Identifica nome/telefone/e-mail em pedaços já separados
+ * (tab, vírgula, ponto-e-vírgula, etc.).
+ */
+export function assignNamePhoneEmail(parts: string[]): {
+  name: string;
+  phone: string;
+  email: string;
+} {
+  let name = '';
+  let phone = '';
+  let email = '';
+  const leftover: string[] = [];
+
+  for (const raw of parts) {
+    const p = raw.trim();
+    if (!p) continue;
+    if (!email && p.includes('@')) {
+      email = p;
+      continue;
+    }
+    if (!phone && looksLikePhoneToken(p)) {
+      phone = p;
+      continue;
+    }
+    leftover.push(p);
+  }
+
+  if (!name && leftover.length) {
+    name = leftover.join(' ').trim();
+  }
+
+  // Se ainda não achou telefone, procura em leftover (ex.: "Guilherme (11) 99149-7158" veio junto)
+  if (!phone && leftover.length === 1) {
+    const split = splitInlineNamePhone(leftover[0]);
+    if (split) {
+      name = split.name || name;
+      phone = split.phone;
+    }
+  }
+
+  return { name, phone, email };
+}
+
+/**
+ * Separa "Guilherme (11) 99149-7158" ou "Leandro 41992074020"
+ * em nome + telefone no final da linha.
+ */
+export function splitInlineNamePhone(line: string): { name: string; phone: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  // Telefone no final: DDD opcional entre parênteses, 9 opcional, espaços/traços
+  const tail =
+    /^(.*?)\s+((?:\+?55[\s.-]*)?(?:\(?\d{2}\)?[\s.-]*)?(?:9[\s.-]*)?\d{4,5}[\s.-]?\d{4})\s*$/u;
+  const m = trimmed.match(tail);
+  if (m) {
+    const name = m[1].trim();
+    const phone = m[2].trim();
+    if (name && looksLikePhoneToken(phone) && !looksLikePhoneToken(name)) {
+      return { name, phone };
+    }
+  }
+
+  // Fallback mais frouxo: último bloco rico em dígitos
+  const loose = /^(.*?)\s+(\+?\d[\d\s().\-]{6,}\d)\s*$/u;
+  const m2 = trimmed.match(loose);
+  if (m2) {
+    const name = m2[1].trim();
+    const phone = m2[2].trim();
+    if (name && looksLikePhoneToken(phone) && !looksLikePhoneToken(name)) {
+      return { name, phone };
+    }
+  }
+
+  if (looksLikePhoneToken(trimmed)) {
+    return { name: '', phone: trimmed };
+  }
+
+  return null;
+}
+
 function parseCsvRows(text: string): CrmImportContact[] {
   const lines = stripBom(text)
     .split(/\r?\n/)
@@ -128,25 +226,27 @@ function parsePlainLines(text: string): CrmImportContact[] {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((line) => {
-      const parts = splitCsvLine(line, line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',')
-        .map((p) => p.trim())
-        .filter(Boolean);
-      let name = '';
-      let phone = '';
-      let email = '';
-      for (const p of parts) {
-        if (!email && p.includes('@')) email = p;
-        else if (!phone && p.replace(/\D/g, '').length >= 8) phone = p;
-        else if (!name) name = p;
+      let parts: string[] = [];
+      if (line.includes('\t')) {
+        parts = splitCsvLine(line, '\t').map((p) => p.trim()).filter(Boolean);
+      } else if (line.includes(';')) {
+        parts = splitCsvLine(line, ';').map((p) => p.trim()).filter(Boolean);
+      } else if (line.includes(',')) {
+        parts = splitCsvLine(line, ',').map((p) => p.trim()).filter(Boolean);
+      } else {
+        parts = [line];
       }
-      if (!name) name = parts[0] ?? '';
-      return finalizeContact({ name, phone, email });
+
+      const assigned = assignNamePhoneEmail(parts);
+      return finalizeContact(assigned);
     })
     .filter((c): c is CrmImportContact => !!c);
 }
 
 /**
- * Importa contatos de texto colado ou CSV com cabeçalho (nome/telefone/e-mail).
+ * Importa contatos de texto colado ou CSV/TXT com ou sem cabeçalho.
+ * Sem cabeçalho: detecta automaticamente nome e telefone
+ * (tab, vírgula, ou telefone formatado no final da linha).
  */
 export function parseCrmImportContacts(text: string): CrmImportContact[] {
   const trimmed = stripBom(text).trim();

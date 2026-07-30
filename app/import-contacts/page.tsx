@@ -16,6 +16,7 @@ import {
   Menu,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { parseCrmImportContacts } from '@/lib/utils/crm-import-contacts';
 
 const ImportContactsPage = () => {
   const { checking } = useRequireAuth();
@@ -46,51 +47,25 @@ const ImportContactsPage = () => {
   };
 
   const parseCSV = (raw: string) => {
-    const firstLine = raw.split(/\r?\n/)[0] || '';
-    const delimiter = firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
-
-    const lines = raw
-      .split(/\r?\n/)
-      .map(l => l.trim())
-      .filter(l => l.length > 0);
-
-    if (lines.length === 0) return [];
-
-    const header = lines[0].split(delimiter).map(h => h.trim().toLowerCase());
-
-    // Mapeamento melhorado de colunas de telefone (case-insensitive)
-    const phoneCandidates = [
-      'telefone', 'phone', 'phone_number', 'number', 'phone_numbwer_number', 'phonenumber',
-      'celular', 'mobile', 'whatsapp', 'tel', 'fone'
-    ];
-    const telIdx = header.findIndex(h => phoneCandidates.includes(h));
-    
-    // Validação: telefone é obrigatório
-    if (telIdx < 0) {
-      showToast('Coluna de telefone não encontrada. Campos aceitos: telefone, phone, phone_number, number, phone_numbwer_number, phonenumber, celular, mobile, whatsapp, tel, fone', 'error');
-      setCsvContacts([]);
-      return [];
-    }
-
-    // Mapeamento melhorado de colunas de nome
-    const nameCandidates = ['name', 'nome', 'full_name', 'fullname', 'contact_name', 'contact'];
-    const nameIdx = header.findIndex(h => nameCandidates.includes(h));
-
+    const contacts = parseCrmImportContacts(raw);
     const parsed: Partial<any>[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(delimiter);
-      const telefoneRaw = telIdx >= 0 ? (cols[telIdx] || '').replace(/\D/g, '') : '';
-      
-      // Telefone é obrigatório - pula linhas sem telefone válido
+    for (const c of contacts) {
+      const telefoneRaw = (c.phone || '').replace(/\D/g, '');
       if (!telefoneRaw || telefoneRaw.length < 8) continue;
-
       parsed.push({
-        name: nameIdx >= 0 ? (cols[nameIdx] || '').trim() : undefined,
+        name: (c.name || '').trim() || undefined,
         telefone: telefoneRaw,
         status: 'pending',
         status_disparo: false,
-        status_add_gp: false
+        status_add_gp: false,
       });
+    }
+    if (parsed.length === 0) {
+      showToast(
+        'Nenhum telefone válido. Use cabeçalho (nome/telefone) ou linhas como "Leandro 41992074020" / "Guilherme (11) 99149-7158".',
+        'error'
+      );
+      setCsvContacts([]);
     }
     return parsed;
   };
@@ -254,21 +229,25 @@ const ImportContactsPage = () => {
             <ul className="space-y-2 text-sm text-gray-300">
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
-                <span><strong>Formato:</strong> .csv ou .txt (mesmo layout, sem limite de linhas)</span>
+                <span><strong>Formato:</strong> .csv ou .txt (sem limite de linhas)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
                 <span>
-                  <strong>Campo obrigatório de telefone</strong> (case-insensitive): telefone, phone, phone_number, number, phone_numbwer_number, phonenumber, celular, mobile, whatsapp, tel, fone
+                  <strong>Com cabeçalho:</strong> telefone/phone/whatsapp (obrigatório) e nome (opcional)
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
-                <span><strong>Opcional:</strong> name ou nome</span>
+                <span>
+                  <strong>Sem cabeçalho:</strong> detecta nome e telefone automaticamente — tab, vírgula ou
+                  telefone no fim da linha (<code className="text-xs">Leandro	41992074020</code>,{' '}
+                  <code className="text-xs">Guilherme (11) 99149-7158</code>)
+                </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[#E86A24] mt-1">•</span>
-                <span><strong>Telefone com DDD:</strong> ex. 81999998888</span>
+                <span><strong>Telefone com DDD:</strong> ex. 81999998888 ou (11) 99149-7158</span>
               </li>
             </ul>
           </div>
