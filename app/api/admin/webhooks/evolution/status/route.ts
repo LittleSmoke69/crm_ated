@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/auth';
-import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
+import { requireAdmin } from '@/lib/middleware/permissions';
+import { successResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 /**
@@ -14,7 +14,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
     const tenantScope = req.headers.get('x-zaploto-id')?.trim() || null;
 
     let prodQ = supabaseServiceRole
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar status', 401);
+    return serverErrorResponse(err);
   }
 }
 

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/auth';
+import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import {
@@ -20,7 +20,7 @@ import {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
     const { searchParams } = req.nextUrl;
     const tenantScope = req.headers.get('x-zaploto-id')?.trim() || null;
 
@@ -110,7 +110,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar eventos', 401);
+    return serverErrorResponse(err);
   }
 }
 

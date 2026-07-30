@@ -2,11 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRequireAuth } from '@/utils/useRequireAuth';
-import { useTenantRouter } from '@/lib/utils/tenant-href';
 import { useAdminTenantSwitcher } from '@/contexts/AdminTenantSwitcherContext';
 import Layout from '@/components/Layout';
 import Pagination from '@/components/Admin/Pagination';
-import { useSidebar } from '@/contexts/SidebarContext';
 import {
   Copy,
   CheckCircle2,
@@ -15,21 +13,16 @@ import {
   RefreshCw,
   Eye,
   X,
-  Search,
-  Filter,
   Loader2,
+  Webhook,
+  ShieldAlert,
+  Radio,
 } from 'lucide-react';
 import { PayloadViewer } from '@/components/Webhooks/PayloadViewer';
 
 interface WebhookStatus {
-  prod: {
-    last_event_at: string | null;
-    seconds_ago: number | null;
-  };
-  test: {
-    last_event_at: string | null;
-    seconds_ago: number | null;
-  };
+  prod: { last_event_at: string | null; seconds_ago: number | null };
+  test: { last_event_at: string | null; seconds_ago: number | null };
 }
 
 interface WebhookEvent {
@@ -40,7 +33,8 @@ interface WebhookEvent {
   instance_name: string | null;
   remote_jid: string | null;
   message_id: string | null;
-  payload: any;
+  payload: unknown;
+  payload_normalized?: unknown;
 }
 
 interface WaiterStatus {
@@ -52,77 +46,62 @@ interface WaiterStatus {
   event: WebhookEvent | null;
 }
 
+const ALLOWED = new Set(['super_admin', 'admin']);
+
+function formatTimeAgo(seconds: number | null): string {
+  if (seconds === null) return 'Nunca';
+  if (seconds < 60) return `${seconds}s atrás`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}min atrás`;
+  return `${Math.floor(seconds / 3600)}h atrás`;
+}
+
+function statusTone(seconds: number | null): string {
+  if (seconds === null) return 'bg-gray-400';
+  if (seconds < 120) return 'bg-emerald-500';
+  if (seconds < 600) return 'bg-amber-500';
+  return 'bg-red-500';
+}
+
 export default function WebhooksEvolutionPage() {
-  const { checking, userId } = useRequireAuth();
-  const router = useTenantRouter();
-  const { isCollapsed, setIsCollapsed, isMobileOpen, setIsMobileOpen } = useSidebar();
+  const { checking, userId, userStatus } = useRequireAuth();
   const adminTenant = useAdminTenantSwitcher();
   const selectedTenantId = adminTenant?.selectedTenantId ?? null;
   const tenantApiHeaders = useMemo(
-    () =>
-      selectedTenantId
-        ? ({ 'X-Zaploto-Id': selectedTenantId } as Record<string, string>)
-        : ({} as Record<string, string>),
+    () => (selectedTenantId ? ({ 'X-Zaploto-Id': selectedTenantId } as Record<string, string>) : {}),
     [selectedTenantId]
   );
 
-  // URLs dos webhooks
-  const [baseUrl, setBaseUrl] = useState<string>('');
-  const [webhookUrlProd, setWebhookUrlProd] = useState<string>('');
-  const [webhookUrlTest, setWebhookUrlTest] = useState<string>('');
+  const [webhookUrlProd, setWebhookUrlProd] = useState('');
+  const [webhookUrlTest, setWebhookUrlTest] = useState('');
   const [tenantSlugForWebhooks, setTenantSlugForWebhooks] = useState<string | null>(null);
 
-  // Status
   const [status, setStatus] = useState<WebhookStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Teste estilo n8n
   const [waiterId, setWaiterId] = useState<string | null>(null);
   const [waiterStatus, setWaiterStatus] = useState<WaiterStatus | null>(null);
   const [waiterPolling, setWaiterPolling] = useState(false);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Lista de eventos
   const [events, setEvents] = useState<WebhookEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsPage, setEventsPage] = useState(1);
   const [eventsTotal, setEventsTotal] = useState(0);
   const [eventsTotalPages, setEventsTotalPages] = useState(0);
 
-  // Filtros
   const [filterEnv, setFilterEnv] = useState<'all' | 'prod' | 'test'>('all');
-  const [filterEventType, setFilterEventType] = useState<string>('');
-  const [filterSearch, setFilterSearch] = useState<string>('');
+  const [filterEventType, setFilterEventType] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
 
-  // Modal de payload
   const [selectedEvent, setSelectedEvent] = useState<WebhookEvent | null>(null);
-
-  // Copiar para clipboard
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Controle de eventos
   const [eventsConfig, setEventsConfig] = useState<Array<{ name: string; enabled: boolean }>>([]);
   const [eventsConfigLoading, setEventsConfigLoading] = useState(true);
   const [savingEventsConfig, setSavingEventsConfig] = useState(false);
 
-  // Inicializa URLs
-  // Apenas SuperAdmin pode acessar Webhooks
-  useEffect(() => {
-    if (!userId || checking) return;
-    const check = async () => {
-      try {
-        const res = await fetch('/api/user/profile', { headers: { 'X-User-Id': userId } });
-        const data = await res.json();
-        if (data.success && data.data?.status !== 'super_admin') {
-          router.replace('/');
-          return;
-        }
-      } catch {
-        router.replace('/');
-      }
-    };
-    check();
-  }, [userId, checking, router]);
+  const canAccess = !!userStatus && ALLOWED.has(userStatus);
 
   useEffect(() => {
     if (!userId || !selectedTenantId) {
@@ -149,7 +128,6 @@ export default function WebhooksEvolutionPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const origin = window.location.origin;
-    setBaseUrl(origin);
     if (tenantSlugForWebhooks) {
       setWebhookUrlProd(`${origin}/${tenantSlugForWebhooks}/api/webhooks/evolution/prod`);
       setWebhookUrlTest(`${origin}/${tenantSlugForWebhooks}/api/webhooks/evolution/test`);
@@ -159,45 +137,42 @@ export default function WebhooksEvolutionPage() {
     }
   }, [tenantSlugForWebhooks]);
 
-  // Carrega configuração de eventos
+  const authHeaders = useCallback(
+    () => ({ 'X-User-Id': userId || '', ...tenantApiHeaders }),
+    [userId, tenantApiHeaders]
+  );
+
   const loadEventsConfig = useCallback(async () => {
     if (!userId) return;
     try {
       setEventsConfigLoading(true);
       const response = await fetch('/api/admin/webhooks/evolution/events-config', {
-        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
+        headers: authHeaders(),
       });
       if (response.ok) {
         const result = await response.json();
-        if (result.success) {
-          setEventsConfig(result.data);
-        }
+        if (result.success) setEventsConfig(result.data);
+      } else if (response.status === 403) {
+        setLoadError('Sem permissão para carregar a configuração de eventos.');
       }
     } catch (err) {
       console.error('Erro ao carregar configuração de eventos:', err);
     } finally {
       setEventsConfigLoading(false);
     }
-  }, [userId, tenantApiHeaders]);
+  }, [userId, authHeaders]);
 
-  // Salva configuração de eventos
   const saveEventsConfig = async () => {
     if (!userId) return;
     try {
       setSavingEventsConfig(true);
-      const enabledEvents = eventsConfig.filter(e => e.enabled).map(e => e.name);
+      const enabledEvents = eventsConfig.filter((e) => e.enabled).map((e) => e.name);
       const response = await fetch('/api/admin/webhooks/evolution/events-config', {
         method: 'POST',
-        headers: { 'X-User-Id': userId, 'Content-Type': 'application/json', ...tenantApiHeaders },
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: enabledEvents }),
       });
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success) {
-          // Recarrega para confirmar
-          await loadEventsConfig();
-        }
-      }
+      if (response.ok) await loadEventsConfig();
     } catch (err) {
       console.error('Erro ao salvar configuração de eventos:', err);
     } finally {
@@ -205,49 +180,46 @@ export default function WebhooksEvolutionPage() {
     }
   };
 
-  // Toggle evento
   const toggleEvent = (eventName: string) => {
-    setEventsConfig(prev => prev.map(e => 
-      e.name === eventName ? { ...e, enabled: !e.enabled } : e
-    ));
+    setEventsConfig((prev) =>
+      prev.map((e) => (e.name === eventName ? { ...e, enabled: !e.enabled } : e))
+    );
   };
 
-  // Carrega status
   const loadStatus = useCallback(async () => {
     if (!userId) return;
     try {
       setStatusLoading(true);
       const response = await fetch('/api/admin/webhooks/evolution/status', {
-        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
+        headers: authHeaders(),
       });
       if (response.ok) {
         const result = await response.json();
         if (result.success) {
           setStatus(result.data);
+          setLoadError(null);
         }
+      } else if (response.status === 403) {
+        setLoadError('Sem permissão para ver o status dos webhooks.');
       }
     } catch (err) {
       console.error('Erro ao carregar status:', err);
     } finally {
       setStatusLoading(false);
     }
-  }, [userId, tenantApiHeaders]);
+  }, [userId, authHeaders]);
 
-  // Carrega eventos
   const loadEvents = useCallback(async () => {
     if (!userId) return;
     try {
       setEventsLoading(true);
-      const params = new URLSearchParams({
-        page: eventsPage.toString(),
-        limit: '25',
-      });
+      const params = new URLSearchParams({ page: eventsPage.toString(), limit: '25' });
       if (filterEnv !== 'all') params.append('env', filterEnv);
       if (filterEventType) params.append('event_type', filterEventType);
       if (filterSearch) params.append('q', filterSearch);
 
       const response = await fetch(`/api/admin/webhooks/evolution/events?${params}`, {
-        headers: { 'X-User-Id': userId, ...tenantApiHeaders },
+        headers: authHeaders(),
       });
       if (response.ok) {
         const result = await response.json();
@@ -264,66 +236,57 @@ export default function WebhooksEvolutionPage() {
     } finally {
       setEventsLoading(false);
     }
-  }, [userId, eventsPage, filterEnv, filterEventType, filterSearch, tenantApiHeaders]);
+  }, [userId, eventsPage, filterEnv, filterEventType, filterSearch, authHeaders]);
 
-  // Efeitos
   useEffect(() => {
-    if (userId && !checking) {
-      loadStatus();
-      loadEvents();
-      loadEventsConfig();
+    if (userId && !checking && canAccess) {
+      void loadStatus();
+      void loadEvents();
+      void loadEventsConfig();
     }
-  }, [userId, checking, loadStatus, loadEvents, loadEventsConfig]);
+  }, [userId, checking, canAccess, loadStatus, loadEvents, loadEventsConfig]);
 
-  // Atualiza status a cada 30s
   useEffect(() => {
-    if (userId && !checking) {
-      const interval = setInterval(loadStatus, 30000);
-      return () => clearInterval(interval);
-    }
-  }, [userId, checking, loadStatus]);
+    if (!userId || checking || !canAccess) return;
+    const interval = setInterval(() => void loadStatus(), 30000);
+    return () => clearInterval(interval);
+  }, [userId, checking, canAccess, loadStatus]);
 
-  // Polling do waiter
   useEffect(() => {
-    if (waiterId && waiterPolling) {
-      const poll = async () => {
-        try {
-          const response = await fetch(`/api/admin/webhooks/evolution/test-waiters/${waiterId}`, {
-            headers: { 'X-User-Id': userId || '', ...tenantApiHeaders },
-          });
-          if (response.ok) {
-            const result = await response.json();
-            if (result.success) {
-              const waiter: WaiterStatus = result.data;
-              setWaiterStatus(waiter);
-              
-              if (waiter.status === 'received' || waiter.status === 'expired') {
-                setWaiterPolling(false);
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current);
-                  pollingIntervalRef.current = null;
-                }
-              }
-            }
+    if (!(waiterId && waiterPolling)) return;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/admin/webhooks/evolution/test-waiters/${waiterId}`, {
+          headers: authHeaders(),
+        });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (!result.success) return;
+        const waiter: WaiterStatus = result.data;
+        setWaiterStatus(waiter);
+        if (waiter.status === 'received' || waiter.status === 'expired') {
+          setWaiterPolling(false);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
           }
-        } catch (err) {
-          console.error('Erro ao buscar waiter:', err);
         }
-      };
+      } catch (err) {
+        console.error('Erro ao buscar waiter:', err);
+      }
+    };
 
-      poll();
-      pollingIntervalRef.current = setInterval(poll, 2000); // Poll a cada 2s
-    }
-
+    void poll();
+    pollingIntervalRef.current = setInterval(() => void poll(), 2000);
     return () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
     };
-  }, [waiterId, waiterPolling, userId, tenantApiHeaders]);
+  }, [waiterId, waiterPolling, authHeaders]);
 
-  // Função para copiar
   const copyToClipboard = async (text: string, id: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -334,51 +297,45 @@ export default function WebhooksEvolutionPage() {
     }
   };
 
-  // Função para criar waiter
   const createWaiter = async () => {
     try {
       const response = await fetch('/api/admin/webhooks/evolution/test-waiters', {
         method: 'POST',
-        headers: {
-          'X-User-Id': userId || '',
-          'Content-Type': 'application/json',
-          ...tenantApiHeaders,
-        },
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       });
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success) {
-          setWaiterId(result.data.id);
-          setWaiterStatus({ ...result.data, status: 'waiting', event: null });
-          setWaiterPolling(true);
-        }
+      if (!response.ok) return;
+      const result = await response.json();
+      if (result.success) {
+        setWaiterId(result.data.id);
+        setWaiterStatus({ ...result.data, status: 'waiting', event: null });
+        setWaiterPolling(true);
       }
     } catch (err) {
       console.error('Erro ao criar waiter:', err);
     }
   };
 
-  // Função para formatar tempo
-  const formatTimeAgo = (seconds: number | null): string => {
-    if (seconds === null) return 'Nunca';
-    if (seconds < 60) return `${seconds}s atrás`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}min atrás`;
-    return `${Math.floor(seconds / 3600)}h atrás`;
-  };
-
-  // Função para obter cor do status
-  const getStatusColor = (seconds: number | null): string => {
-    if (seconds === null) return 'bg-gray-400';
-    if (seconds < 120) return 'bg-green-500';
-    if (seconds < 600) return 'bg-yellow-500';
-    return 'bg-red-500';
-  };
-
   if (checking) {
     return (
       <Layout>
-        <div className="flex items-center justify-center h-screen">
+        <div className="flex items-center justify-center min-h-[60vh]">
           <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!canAccess) {
+    return (
+      <Layout>
+        <div className="p-6 max-w-lg mx-auto mt-16">
+          <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] p-8 text-center space-y-3">
+            <ShieldAlert className="w-10 h-10 text-[#E86A24] mx-auto" />
+            <h1 className="text-xl font-semibold text-[var(--foreground)]">Acesso restrito</h1>
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Apenas admin e super admin podem gerenciar Webhooks Evolution.
+            </p>
+          </div>
         </div>
       </Layout>
     );
@@ -386,232 +343,237 @@ export default function WebhooksEvolutionPage() {
 
   return (
     <Layout>
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-gray-900">Webhooks Evolution</h1>
+      <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-[#E86A24] mb-1">
+              <Webhook className="w-5 h-5" />
+              <span className="text-xs font-semibold uppercase tracking-wide">Integrações</span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">Webhooks Evolution</h1>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)] max-w-2xl">
+              URL que a instância Evolution deve chamar ao receber/enviar mensagens. Em produção Cap:
+              configure exatamente a URL PROD abaixo.
+            </p>
+          </div>
           <button
-            onClick={() => { loadStatus(); loadEvents(); }}
-            className="flex items-center gap-2 px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition"
+            type="button"
+            onClick={() => {
+              void loadStatus();
+              void loadEvents();
+              void loadEventsConfig();
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#E86A24] text-white text-sm font-medium hover:bg-[#D95E1B] transition"
           >
             <RefreshCw className="w-4 h-4" />
             Atualizar
           </button>
         </div>
 
-        {/* Seção 1: Status */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Card PROD */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Webhook PROD</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700">URL:</label>
-                <div className="flex gap-2 mt-1">
-                  <input
-                    type="text"
-                    value={webhookUrlProd}
-                    readOnly
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm text-gray-700"
-                  />
-                  <button
-                    onClick={() => copyToClipboard(webhookUrlProd, 'prod-url')}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
-                  >
-                    {copiedId === 'prod-url' ? (
-                      <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    ) : (
-                      <Copy className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${getStatusColor(status?.prod.seconds_ago || null)}`}></div>
-                <span className="text-sm text-gray-600">
-                  Último evento: {statusLoading ? 'Carregando...' : formatTimeAgo(status?.prod.seconds_ago || null)}
-                </span>
-              </div>
-            </div>
+        {loadError && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{loadError}</span>
           </div>
+        )}
 
-          {/* Card TEST */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Webhook TEST</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700">URL:</label>
-                <div className="flex gap-2 mt-1">
-                  <input
-                    type="text"
-                    value={webhookUrlTest}
-                    readOnly
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm text-gray-700"
-                  />
-                  <button
-                    onClick={() => copyToClipboard(webhookUrlTest, 'test-url')}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            { key: 'prod', title: 'Webhook PROD', url: webhookUrlProd, tone: 'prod' as const },
+            { key: 'test', title: 'Webhook TEST', url: webhookUrlTest, tone: 'test' as const },
+          ].map((card) => {
+            const envStatus = card.tone === 'prod' ? status?.prod : status?.test;
+            return (
+              <div
+                key={card.key}
+                className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden"
+              >
+                <div className="px-5 py-3 border-b border-[var(--card-border)] bg-[var(--muted)]/30 flex items-center justify-between">
+                  <h2 className="font-semibold text-[var(--foreground)] flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-[#E86A24]" />
+                    {card.title}
+                  </h2>
+                  <span
+                    className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+                      card.tone === 'prod'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-violet-100 text-violet-800'
+                    }`}
                   >
-                    {copiedId === 'test-url' ? (
-                      <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    ) : (
-                      <Copy className="w-5 h-5" />
-                    )}
-                  </button>
+                    {card.tone}
+                  </span>
+                </div>
+                <div className="p-5 space-y-3">
+                  <label className="text-xs font-medium text-[var(--muted-foreground)]">URL da instância</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={card.url}
+                      readOnly
+                      className="flex-1 min-w-0 px-3 py-2.5 rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] text-xs md:text-sm font-mono text-[var(--foreground)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void copyToClipboard(card.url, `${card.key}-url`)}
+                      className="shrink-0 px-3 py-2.5 rounded-xl border border-[var(--card-border)] hover:bg-[var(--muted)]/40 transition"
+                      title="Copiar URL"
+                      aria-label={`Copiar URL ${card.title}`}
+                    >
+                      {copiedId === `${card.key}-url` ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-5 h-5 text-[var(--muted-foreground)]" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+                    <span className={`w-2.5 h-2.5 rounded-full ${statusTone(envStatus?.seconds_ago ?? null)}`} />
+                    Último evento:{' '}
+                    {statusLoading ? 'Carregando...' : formatTimeAgo(envStatus?.seconds_ago ?? null)}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${getStatusColor(status?.test.seconds_ago || null)}`}></div>
-                <span className="text-sm text-gray-600">
-                  Último evento: {statusLoading ? 'Carregando...' : formatTimeAgo(status?.test.seconds_ago || null)}
-                </span>
-              </div>
-            </div>
-          </div>
+            );
+          })}
         </div>
 
-        {/* Seção 2: Teste estilo n8n */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Teste estilo n8n</h2>
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] p-5 space-y-4">
+          <div>
+            <h2 className="font-semibold text-[var(--foreground)]">Teste ao vivo</h2>
+            <p className="text-sm text-[var(--muted-foreground)] mt-1">
+              Aguarda o próximo evento no endpoint TEST (estilo n8n).
+            </p>
+          </div>
           {!waiterId ? (
             <button
-              onClick={createWaiter}
-              className="px-6 py-3 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium"
+              type="button"
+              onClick={() => void createWaiter()}
+              className="px-5 py-2.5 rounded-xl bg-[#E86A24] text-white text-sm font-medium hover:bg-[#D95E1B] transition"
             >
               Aguardar evento (TESTE)
             </button>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {waiterStatus?.status === 'waiting' && (
-                <div className="flex items-center gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <Clock className="w-5 h-5 text-yellow-600 animate-pulse" />
-                  <span className="text-yellow-800 font-medium">Aguardando evento...</span>
+                <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
+                  <Clock className="w-5 h-5 animate-pulse shrink-0" />
+                  <span className="font-medium text-sm">Aguardando evento...</span>
                 </div>
               )}
               {waiterStatus?.status === 'received' && waiterStatus.event && (
-                <div className="space-y-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <span className="text-green-800 font-medium">Evento recebido ✅</span>
+                <div className="space-y-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200">
+                  <div className="flex items-center gap-2 text-emerald-800 font-medium text-sm">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Evento recebido
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-emerald-950">
                     <div>
                       <span className="font-medium">Tipo:</span> {waiterStatus.event.event_type}
                     </div>
                     <div>
-                      <span className="font-medium">Instância:</span> {waiterStatus.event.instance_name || 'N/A'}
-                    </div>
-                    <div>
-                      <span className="font-medium">Remote JID:</span> {waiterStatus.event.remote_jid || 'N/A'}
-                    </div>
-                    <div>
-                      <span className="font-medium">Message ID:</span> {waiterStatus.event.message_id || 'N/A'}
-                    </div>
-                    <div className="md:col-span-2">
-                      <span className="font-medium">Recebido em:</span>{' '}
-                      {new Date(waiterStatus.event.received_at).toLocaleString('pt-BR')}
+                      <span className="font-medium">Instância:</span>{' '}
+                      {waiterStatus.event.instance_name || 'N/A'}
                     </div>
                   </div>
                   <button
-                    onClick={() => copyToClipboard(JSON.stringify(waiterStatus.event?.payload, null, 2), 'payload')}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm font-medium flex items-center gap-2"
+                    type="button"
+                    onClick={() =>
+                      void copyToClipboard(JSON.stringify(waiterStatus.event?.payload, null, 2), 'payload')
+                    }
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-300 bg-white text-sm"
                   >
                     {copiedId === 'payload' ? (
                       <>
-                        <CheckCircle2 className="w-4 h-4 text-green-600" />
-                        Copiado!
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Copiado
                       </>
                     ) : (
                       <>
-                        <Copy className="w-4 h-4" />
-                        Copiar JSON
+                        <Copy className="w-4 h-4" /> Copiar JSON
                       </>
                     )}
                   </button>
                 </div>
               )}
               {waiterStatus?.status === 'expired' && (
-                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
-                  <AlertCircle className="w-5 h-5 text-red-600" />
-                  <span className="text-red-800">Expirou, tente novamente</span>
+                <div className="flex items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  Expirou — tente novamente
                 </div>
               )}
               <button
+                type="button"
                 onClick={() => {
                   setWaiterId(null);
                   setWaiterStatus(null);
                   setWaiterPolling(false);
                 }}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm font-medium"
+                className="px-4 py-2 rounded-xl border border-[var(--card-border)] text-sm hover:bg-[var(--muted)]/40"
               >
-                Criar novo waiter
+                Novo teste
               </button>
             </div>
           )}
         </div>
 
-        {/* Seção 3: Controle de Eventos */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-semibold mb-4">Controle de Eventos</h2>
-          <p className="text-sm text-gray-600 mb-4">
-            Selecione quais eventos serão enviados via webhook ao criar instâncias mestres. 
-            Instâncias normais não incluem webhook.
-          </p>
-          
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] p-5 space-y-4">
+          <div>
+            <h2 className="font-semibold text-[var(--foreground)]">Controle de eventos</h2>
+            <p className="text-sm text-[var(--muted-foreground)] mt-1">
+              Eventos enviados ao criar instâncias mestres. Chat de atendimento usa principalmente{' '}
+              <code className="text-xs bg-[var(--muted)]/50 px-1 rounded">MESSAGES_UPSERT</code> e{' '}
+              <code className="text-xs bg-[var(--muted)]/50 px-1 rounded">SEND_MESSAGE</code>.
+            </p>
+          </div>
           {eventsConfigLoading ? (
-            <div className="p-8 text-center">
-              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto" />
+            <div className="py-10 flex justify-center">
+              <Loader2 className="w-7 h-7 animate-spin text-[#E86A24]" />
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <>
+              <div className="max-h-80 overflow-y-auto rounded-xl border border-[var(--card-border)] p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                   {eventsConfig.map((event) => (
                     <label
                       key={event.name}
-                      className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+                      className="flex items-center gap-2.5 p-2.5 rounded-lg border border-[var(--card-border)] hover:bg-[var(--muted)]/30 cursor-pointer"
                     >
                       <input
                         type="checkbox"
                         checked={event.enabled}
                         onChange={() => toggleEvent(event.name)}
-                        className="w-4 h-4 text-[#E86A24] border-gray-300 rounded focus:ring-[#E86A24]"
+                        className="w-4 h-4 rounded border-gray-300 text-[#E86A24] focus:ring-[#E86A24]"
                       />
-                      <span className="text-sm font-mono text-gray-700">{event.name}</span>
+                      <span className="text-xs font-mono text-[var(--foreground)] truncate">{event.name}</span>
                     </label>
                   ))}
                 </div>
               </div>
               <button
-                onClick={saveEventsConfig}
+                type="button"
+                onClick={() => void saveEventsConfig()}
                 disabled={savingEventsConfig}
-                className="px-6 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#7CC845] transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#E86A24] text-white text-sm font-medium hover:bg-[#D95E1B] disabled:opacity-50"
               >
-                {savingEventsConfig ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
-                    Salvando...
-                  </>
-                ) : (
-                  'Salvar Configuração'
-                )}
+                {savingEventsConfig && <Loader2 className="w-4 h-4 animate-spin" />}
+                {savingEventsConfig ? 'Salvando...' : 'Salvar configuração'}
               </button>
-            </div>
+            </>
           )}
         </div>
 
-        {/* Seção 4: Eventos recebidos */}
-        <div className="bg-white rounded-lg shadow-md">
-          <div className="p-6 border-b border-gray-200">
-            <h2 className="text-xl font-semibold mb-4">Eventos recebidos</h2>
-            
-            {/* Filtros */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] overflow-hidden">
+          <div className="p-5 border-b border-[var(--card-border)] space-y-4">
+            <h2 className="font-semibold text-[var(--foreground)]">Eventos recebidos</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Ambiente</label>
+                <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1">Ambiente</label>
                 <select
                   value={filterEnv}
-                  onChange={(e) => { setFilterEnv(e.target.value as any); setEventsPage(1); }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  onChange={(e) => {
+                    setFilterEnv(e.target.value as 'all' | 'prod' | 'test');
+                    setEventsPage(1);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] text-sm"
                 >
                   <option value="all">Todos</option>
                   <option value="prod">PROD</option>
@@ -619,76 +581,88 @@ export default function WebhooksEvolutionPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de evento</label>
+                <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1">Tipo</label>
                 <input
                   type="text"
                   value={filterEventType}
-                  onChange={(e) => { setFilterEventType(e.target.value); setEventsPage(1); }}
-                  placeholder="Ex: MESSAGES_UPSERT"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  onChange={(e) => {
+                    setFilterEventType(e.target.value);
+                    setEventsPage(1);
+                  }}
+                  placeholder="MESSAGES_UPSERT"
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] text-sm"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Buscar</label>
+                <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1">Buscar</label>
                 <input
                   type="text"
                   value={filterSearch}
-                  onChange={(e) => { setFilterSearch(e.target.value); setEventsPage(1); }}
+                  onChange={(e) => {
+                    setFilterSearch(e.target.value);
+                    setEventsPage(1);
+                  }}
                   placeholder="Instância, JID ou Message ID"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  className="w-full px-3 py-2 rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] text-sm"
                 />
               </div>
             </div>
           </div>
 
-          {/* Tabela */}
           {eventsLoading ? (
-            <div className="p-8 text-center">
-              <Loader2 className="w-8 h-8 animate-spin text-[#E86A24] mx-auto" />
+            <div className="py-12 flex justify-center">
+              <Loader2 className="w-7 h-7 animate-spin text-[#E86A24]" />
             </div>
           ) : events.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">Nenhum evento encontrado</div>
+            <div className="py-12 text-center text-sm text-[var(--muted-foreground)]">
+              Nenhum evento encontrado. Se o chat não recebe mensagens, confira a URL PROD na Evolution.
+            </div>
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data/Hora</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ambiente</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Instância</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remote JID</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Message ID</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ações</th>
+                <table className="w-full text-sm">
+                  <thead className="bg-[var(--muted)]/30">
+                    <tr className="text-left text-xs uppercase tracking-wide text-[var(--muted-foreground)]">
+                      <th className="px-4 py-3 font-medium">Data</th>
+                      <th className="px-4 py-3 font-medium">Env</th>
+                      <th className="px-4 py-3 font-medium">Tipo</th>
+                      <th className="px-4 py-3 font-medium">Instância</th>
+                      <th className="px-4 py-3 font-medium">Remote JID</th>
+                      <th className="px-4 py-3 font-medium">Ações</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="divide-y divide-[var(--card-border)]">
                     {events.map((event) => (
-                      <tr key={event.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <tr key={event.id} className="hover:bg-[var(--muted)]/20">
+                        <td className="px-4 py-3 whitespace-nowrap text-[var(--foreground)]">
                           {new Date(event.received_at).toLocaleString('pt-BR')}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 py-1 text-xs font-medium rounded ${
-                            event.env === 'prod' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
-                          }`}>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                              event.env === 'prod'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-violet-100 text-violet-800'
+                            }`}
+                          >
                             {event.env.toUpperCase()}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{event.event_type}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{event.instance_name || 'N/A'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{event.remote_jid || 'N/A'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono text-xs">
-                          {event.message_id || 'N/A'}
+                        <td className="px-4 py-3 font-mono text-xs">{event.event_type}</td>
+                        <td className="px-4 py-3 text-[var(--muted-foreground)]">
+                          {event.instance_name || '—'}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <td className="px-4 py-3 text-[var(--muted-foreground)] font-mono text-xs truncate max-w-[160px]">
+                          {event.remote_jid || '—'}
+                        </td>
+                        <td className="px-4 py-3">
                           <button
+                            type="button"
                             onClick={() => setSelectedEvent(event)}
-                            className="text-[#E86A24] hover:text-[#7CC845] flex items-center gap-1"
+                            className="inline-flex items-center gap-1 text-[#E86A24] hover:underline text-xs font-medium"
                           >
-                            <Eye className="w-4 h-4" />
-                            Ver payload
+                            <Eye className="w-3.5 h-3.5" />
+                            Payload
                           </button>
                         </td>
                       </tr>
@@ -710,52 +684,54 @@ export default function WebhooksEvolutionPage() {
         </div>
       </div>
 
-      {/* Modal de payload estilo n8n */}
       {selectedEvent && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[var(--card)] rounded-2xl border border-[var(--card-border)] shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col">
+            <div className="p-5 border-b border-[var(--card-border)] flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-xl font-semibold text-gray-900">Payload do Evento</h3>
-                <p className="text-sm text-gray-500 mt-1">
-                  Tipo: <span className="font-mono">{selectedEvent.event_type}</span> | 
-                  Instância: <span className="font-mono">{selectedEvent.instance_name || 'N/A'}</span> | 
-                  Recebido em: {new Date(selectedEvent.received_at).toLocaleString('pt-BR')}
+                <h3 className="text-lg font-semibold text-[var(--foreground)]">Payload do evento</h3>
+                <p className="text-xs text-[var(--muted-foreground)] mt-1 font-mono">
+                  {selectedEvent.event_type} · {selectedEvent.instance_name || 'N/A'} ·{' '}
+                  {new Date(selectedEvent.received_at).toLocaleString('pt-BR')}
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedEvent(null)}
-                className="text-gray-400 hover:text-gray-600 transition"
+                className="p-2 rounded-lg hover:bg-[var(--muted)]/40 text-[var(--muted-foreground)]"
+                aria-label="Fechar"
               >
-                <X className="w-6 h-6" />
+                <X className="w-5 h-5" />
               </button>
             </div>
             <div className="flex-1 overflow-hidden min-h-0">
-              <PayloadViewer 
+              <PayloadViewer
                 payload={selectedEvent.payload}
-                normalized={(selectedEvent as any).payload_normalized}
+                normalized={selectedEvent.payload_normalized}
               />
             </div>
-            <div className="p-4 border-t border-gray-200 flex justify-end gap-4">
+            <div className="p-4 border-t border-[var(--card-border)] flex justify-end gap-2">
               <button
-                onClick={() => copyToClipboard(JSON.stringify(selectedEvent.payload, null, 2), 'modal-payload')}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm font-medium flex items-center gap-2"
+                type="button"
+                onClick={() =>
+                  void copyToClipboard(JSON.stringify(selectedEvent.payload, null, 2), 'modal-payload')
+                }
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--card-border)] text-sm"
               >
                 {copiedId === 'modal-payload' ? (
                   <>
-                    <CheckCircle2 className="w-4 h-4 text-green-600" />
-                    Copiado!
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Copiado
                   </>
                 ) : (
                   <>
-                    <Copy className="w-4 h-4" />
-                    Copiar JSON
+                    <Copy className="w-4 h-4" /> Copiar JSON
                   </>
                 )}
               </button>
               <button
+                type="button"
                 onClick={() => setSelectedEvent(null)}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm font-medium"
+                className="px-4 py-2 rounded-xl bg-[#E86A24] text-white text-sm font-medium hover:bg-[#D95E1B]"
               >
                 Fechar
               </button>
@@ -766,4 +742,3 @@ export default function WebhooksEvolutionPage() {
     </Layout>
   );
 }
-

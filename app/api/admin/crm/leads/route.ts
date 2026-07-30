@@ -61,9 +61,11 @@ async function scanLeads(params: {
         query = query.eq('gerente_id', scopeGerenteId);
       }
     } else {
-      query = query.or(
-        `user_id.in.(${idsList}),and(user_id.is.null,zaploto_id.eq.${zaplotoId}),and(user_id.is.null,zaploto_id.is.null)`
-      );
+      // Admin: todos os leads do tenant (por zaploto_id), leads de usuários do tenant e legado sem dono
+      const parts = [`zaploto_id.eq.${zaplotoId}`];
+      if (idsList) parts.push(`user_id.in.(${idsList})`);
+      parts.push('and(user_id.is.null,zaploto_id.is.null)');
+      query = query.or(parts.join(','));
     }
 
     if (captureStatus && CAPTURE_STATUSES.includes(captureStatus as any)) {
@@ -226,7 +228,8 @@ export async function POST(req: NextRequest) {
     const phone = normalizePhone(body.phone);
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : null;
     let gerenteId = body.gerente_id || null;
-    let captadorId = body.captador_id || null;
+    // Somente o gerente vincula captador; admin só associa ao gerente.
+    let captadorId = isGerente ? (body.captador_id || null) : null;
 
     if (isGerente) {
       gerenteId = userId;
@@ -236,6 +239,8 @@ export async function POST(req: NextRequest) {
           return errorResponse('Captador fora da sua equipe.', 403);
         }
       }
+    } else if (!gerenteId) {
+      return errorResponse('Selecione o gerente para vincular o lead.', 400);
     }
 
     if (!name && !phone) {
@@ -334,10 +339,12 @@ export async function PATCH(req: NextRequest) {
       if (hasGerente && body.gerente_id && body.gerente_id !== userId) {
         return errorResponse('Gerente não pode reatribuir leads a outro gerente.', 403);
       }
+    } else if (hasCaptador) {
+      return errorResponse('Somente o gerente pode vincular leads a um captador.', 403);
     }
 
     const nowIso = new Date().toISOString();
-    const captadorId = hasCaptador ? (body.captador_id || null) : undefined;
+    const captadorId = hasCaptador && isGerente ? (body.captador_id || null) : undefined;
 
     if (hasGerente && body.gerente_id) {
       const { data: g } = await supabaseServiceRole.from('profiles').select('id, status').eq('id', body.gerente_id).single();
@@ -347,7 +354,7 @@ export async function PATCH(req: NextRequest) {
     if (hasCaptador && captadorId) {
       const { data: c } = await supabaseServiceRole.from('profiles').select('id, status, enroller').eq('id', captadorId).single();
       if (!c || c.status !== 'captador') return errorResponse('Captador inválido.', 400);
-      if (isGerente && c.enroller !== userId) {
+      if (c.enroller !== userId) {
         return errorResponse('Só é possível atribuir leads aos seus captadores.', 403);
       }
       captadorEnroller = c.enroller || null;

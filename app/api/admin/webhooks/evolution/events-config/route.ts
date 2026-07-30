@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/auth';
+import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -9,7 +9,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
 
     // Lista padrão de eventos da Evolution API
     const allEvents = [
@@ -91,7 +91,7 @@ export async function GET(req: NextRequest) {
       return successResponse(eventsConfig);
     }
     
-    return errorResponse(err.message || 'Erro ao buscar configuração de eventos', 401);
+    return serverErrorResponse(err);
   }
 }
 
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
     
     const body = await req.json();
     const { events } = body;
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
 
     return successResponse({ message: 'Configuração salva com sucesso', events });
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao salvar configuração', 401);
+    return serverErrorResponse(err);
   }
 }
 

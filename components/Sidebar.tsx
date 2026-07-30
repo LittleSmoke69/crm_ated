@@ -386,11 +386,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
     ],
   };
-  /** Admin (modelagem): Integrações só com WhatsApp Oficial + Meta Ads */
+  /** Admin (modelagem): Integrações com Webhook Evolution + WhatsApp Oficial + Meta Ads */
   const itemIntegracoesAdmin: MenuItem = {
     label: 'Integrações',
     icon: Webhook,
     submenu: [
+      { href: '/admin/webhooks/evolution', icon: Webhook, label: 'Webhooks Evolution' },
       { href: '/admin/whatsapp-official', icon: MessageSquare, label: 'WhatsApp Oficial' },
       { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
     ],
@@ -638,7 +639,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         }
       }
 
-      // Admin/super_admin: E-mails + Integrações (WhatsApp Oficial, Meta Ads)
+      // Admin/super_admin: E-mails + Integrações (Webhook Evolution, WhatsApp Oficial, Meta Ads)
       if (userStatus === 'super_admin' || userStatus === 'admin') {
         const hasEmails =
           items.some((it) => it.href === '/admin/emails' || it.label === 'E-mails') ||
@@ -650,12 +651,14 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         }
 
         const integIdx = items.findIndex((it) => it.label === 'Integrações');
+        const evoSub = { href: '/admin/webhooks/evolution', icon: Webhook, label: 'Webhooks Evolution' };
         const waSub = { href: '/admin/whatsapp-official', icon: MessageSquare, label: 'WhatsApp Oficial' };
         const metaSub = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
         if (integIdx >= 0) {
           const integ = items[integIdx];
           const existing = integ.submenu || [];
           const merged = [...existing];
+          if (!merged.some((s) => s.href === '/admin/webhooks/evolution')) merged.unshift(evoSub);
           if (!merged.some((s) => s.href === '/admin/whatsapp-official')) merged.push(waSub);
           if (!merged.some((s) => s.href === '/admin/meta')) merged.push(metaSub);
           // Remove Meta Ads solto no root se já está em Integrações

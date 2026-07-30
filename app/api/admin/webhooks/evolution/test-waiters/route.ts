@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/auth';
+import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -11,7 +11,7 @@ import { supabaseServiceRole } from '@/lib/services/supabase-service';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
 
     // Cria waiter com expiração de 2 minutos
     const expiresAt = new Date();
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     return successResponse({ id: waiter.id });
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao criar waiter', 401);
+    return serverErrorResponse(err);
   }
 }
 

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireSuperAdmin } from '@/lib/middleware/auth';
+import { requireAdmin } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
@@ -12,7 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireSuperAdmin(req);
+    await requireAdmin(req);
     const { id } = await params;
 
     // Busca waiter
@@ -73,7 +73,7 @@ export async function GET(
       } : null,
     });
   } catch (err: any) {
-    return errorResponse(err.message || 'Erro ao buscar waiter', 401);
+    return serverErrorResponse(err);
   }
 }
 

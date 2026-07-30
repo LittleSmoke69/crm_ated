@@ -185,7 +185,7 @@ export default function LeadsSection({
   const [showImport, setShowImport] = useState(false);
   const [importRows, setImportRows] = useState<ImportLead[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
-  const [importDest, setImportDest] = useState({ gerente_id: '', captador_id: '' });
+  const [importDest, setImportDest] = useState({ gerente_id: '' });
   const [assignLeads, setAssignLeads] = useState<CapturedLead[] | null>(null);
   const [assignForm, setAssignForm] = useState({ gerente_id: '', captador_id: '' });
   const [viewLead, setViewLead] = useState<CapturedLead | null>(null);
@@ -405,6 +405,10 @@ export default function LeadsSection({
 
   const submitCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isGerente && !createForm.gerente_id) {
+      showToast('Selecione o gerente para vincular o lead.', 'error');
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch('/api/admin/crm/leads', {
@@ -414,8 +418,8 @@ export default function LeadsSection({
           name: createForm.name,
           phone: createForm.phone,
           email: createForm.email || undefined,
-          gerente_id: createForm.gerente_id || undefined,
-          captador_id: createForm.captador_id || undefined,
+          gerente_id: isGerente ? userId : (createForm.gerente_id || undefined),
+          captador_id: isGerente ? (createForm.captador_id || undefined) : undefined,
         }),
       });
       const json = await res.json();
@@ -454,6 +458,10 @@ export default function LeadsSection({
 
   const submitImport = async () => {
     if (importRows.length === 0) return;
+    if (!isGerente && !importDest.gerente_id) {
+      showToast('Selecione o gerente para vincular os contatos.', 'error');
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch('/api/admin/crm/leads/import', {
@@ -461,8 +469,7 @@ export default function LeadsSection({
         headers: headers(),
         body: JSON.stringify({
           leads: importRows,
-          gerente_id: importDest.gerente_id || undefined,
-          captador_id: importDest.captador_id || undefined,
+          gerente_id: isGerente ? undefined : importDest.gerente_id,
         }),
       });
       const json = await res.json();
@@ -470,7 +477,7 @@ export default function LeadsSection({
       showToast(json.message || 'Base importada com sucesso!', 'success');
       setShowImport(false);
       setImportRows([]);
-      setImportDest({ gerente_id: '', captador_id: '' });
+      setImportDest({ gerente_id: '' });
       loadLeads(1);
     } catch (e: any) {
       showToast(e?.message || 'Erro ao importar', 'error');
@@ -482,8 +489,8 @@ export default function LeadsSection({
   const submitAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignLeads) return;
-    if (!assignForm.gerente_id && !assignForm.captador_id && !isGerente) {
-      showToast('Selecione um gerente e/ou um captador.', 'error');
+    if (!isGerente && !assignForm.gerente_id) {
+      showToast('Selecione o gerente.', 'error');
       return;
     }
     if (isGerente && !assignForm.captador_id) {
@@ -491,15 +498,18 @@ export default function LeadsSection({
       return;
     }
     const body: Record<string, unknown> = {};
-    if (isGerente) body.gerente_id = userId;
-    else if (assignForm.gerente_id) body.gerente_id = assignForm.gerente_id;
-    if (assignForm.captador_id) body.captador_id = assignForm.captador_id;
+    if (isGerente) {
+      body.gerente_id = userId;
+      body.captador_id = assignForm.captador_id;
+    } else {
+      body.gerente_id = assignForm.gerente_id;
+    }
     const ok = await patchLeads(
       assignLeads.map((l) => l.id),
       body,
-      assignForm.captador_id
+      isGerente
         ? 'Lead(s) atribuído(s) — já disponíveis no kanban do captador!'
-        : 'Gerente atribuído.'
+        : 'Lead(s) vinculado(s) ao gerente. O captador será atribuído pelo gerente.'
     );
     if (ok) {
       const assignedIds = new Set(assignLeads.map((l) => l.id));
@@ -611,22 +621,27 @@ export default function LeadsSection({
     required = false
   ) => (
     <>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente {required ? '' : '(opcional)'}</label>
-        <select value={value.gerente_id} onChange={(e) => onChange({ gerente_id: e.target.value, captador_id: '' })} className={inputClass}>
-          <option value="">Selecione...</option>
-          {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-        </select>
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Captador {required ? '' : '(opcional — o lead entra no kanban dele)'}</label>
-        <select value={value.captador_id} onChange={(e) => onChange({ ...value, captador_id: e.target.value })} className={inputClass}>
-          <option value="">Selecione...</option>
-          {(value.gerente_id ? captadores.filter((c) => c.enroller === value.gerente_id) : captadores).map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-      </div>
+      {!isGerente && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente {required ? '' : '(obrigatório)'}</label>
+          <select value={value.gerente_id} onChange={(e) => onChange({ gerente_id: e.target.value, captador_id: '' })} className={inputClass} required>
+            <option value="">Selecione o gerente...</option>
+            {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">O captador só pode ser vinculado pelo gerente.</p>
+        </div>
+      )}
+      {isGerente && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Captador (opcional — o lead entra no kanban dele)</label>
+          <select value={value.captador_id} onChange={(e) => onChange({ ...value, captador_id: e.target.value })} className={inputClass}>
+            <option value="">Sem captador ainda</option>
+            {teamCaptadores.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
     </>
   );
 
@@ -951,7 +966,7 @@ export default function LeadsSection({
                         <button
                           onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: isGerente ? userId : (l.gerente_id || ''), captador_id: '' }); }}
                           className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#E86A24] hover:bg-[#E86A24]/10"
-                          title="Atribuir gerente/captador"
+                          title={isGerente ? 'Atribuir captador' : 'Vincular ao gerente'}
                         >
                           <UserPlus className="w-4 h-4" />
                         </button>
@@ -1035,9 +1050,9 @@ export default function LeadsSection({
             CSV com colunas <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Nome</code>,{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">WhatsApp</code>,{' '}
             <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Email</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Status</code>,{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Gerente</code> e{' '}
-            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Captador</code>. Máximo 5000 linhas por arquivo.
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Status</code> e{' '}
+            <code className="bg-gray-100 dark:bg-[#333] px-1 rounded">Gerente</code>. Máximo 5000 linhas por arquivo.
+            Os contatos são vinculados ao gerente; a coluna Captador fica vazia até o gerente atribuir.
           </p>
           <input
             ref={fileInputRef}
@@ -1054,20 +1069,34 @@ export default function LeadsSection({
               <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 p-3 text-sm text-emerald-700 dark:text-emerald-300">
                 {importRows.length} lead(s) prontos para importar. Prévia: {importRows.slice(0, 3).map((r) => r.name || r.phone).filter(Boolean).join(', ')}...
               </div>
-              <div className="space-y-4 border-t border-gray-200 dark:border-gray-600 pt-4">
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Destino padrão (opcional)</p>
-                {gerenteCaptadorFields(importDest, setImportDest)}
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Gerente, captador e status presentes no CSV são usados em cada linha. O destino abaixo serve apenas para linhas sem esses nomes.
-                </p>
-              </div>
+              {!isGerente && (
+                <div className="space-y-4 border-t border-gray-200 dark:border-gray-600 pt-4">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Vincular ao gerente</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente</label>
+                    <select
+                      value={importDest.gerente_id}
+                      onChange={(e) => setImportDest({ gerente_id: e.target.value })}
+                      className={inputClass}
+                      required
+                    >
+                      <option value="">Selecione o gerente...</option>
+                      {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </select>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Sem captador: o gerente recebe os leads na tabela e atribui aos captadores depois.
+                    Se o CSV trouxer a coluna Gerente, ela prevalece por linha.
+                  </p>
+                </div>
+              )}
             </>
           )}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setShowImport(false)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
             <button
               onClick={submitImport}
-              disabled={busy || importRows.length === 0}
+              disabled={busy || importRows.length === 0 || (!isGerente && !importDest.gerente_id)}
               className="px-5 py-2 rounded-lg bg-[#E86A24] text-white font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2"
             >
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />} Importar {importRows.length > 0 ? `(${importRows.length})` : ''}
@@ -1085,20 +1114,23 @@ export default function LeadsSection({
             {!isGerente && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente</label>
-              <select value={assignForm.gerente_id} onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })} className={inputClass}>
-                <option value="">Selecione...</option>
+              <select value={assignForm.gerente_id} onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })} className={inputClass} required>
+                <option value="">Selecione o gerente...</option>
                 {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
+              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">Somente o gerente vincula o lead a um captador.</p>
             </div>
             )}
+            {isGerente && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Captador</label>
-              <select value={assignForm.captador_id} onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })} className={inputClass} required={isGerente}>
-                <option value="">{isGerente ? 'Selecione o captador...' : 'Somente gerente (sem captador)'}</option>
+              <select value={assignForm.captador_id} onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })} className={inputClass} required>
+                <option value="">Selecione o captador...</option>
                 {captadoresForGerente.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
               <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">Ao escolher um captador, o lead entra na coluna inicial do kanban dele.</p>
             </div>
+            )}
             <div className="flex justify-end gap-3 pt-2">
               <button type="button" onClick={() => setAssignLeads(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
               <button type="submit" disabled={busy} className="px-5 py-2 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-60 flex items-center gap-2">

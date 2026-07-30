@@ -3,7 +3,6 @@ import { requireLeadsManagementAccess } from '@/lib/middleware/permissions';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { getEffectiveZaplotoId } from '@/lib/tenant-context';
-import { getConsultorsByManager } from '@/lib/utils/hierarchy';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -72,8 +71,9 @@ const STATUS_MAP: Record<string, { captureStatus: string; columnKey: string }> =
 
 /**
  * POST /api/admin/crm/leads/import — importa a base de leads (CSV parseado no cliente).
- * Body: { leads: [{ name?, phone?, email?, status?, gerente?, captador?, created_at? }], gerente_id?, captador_id? }
- * Sem captador: entram como pendentes (fora do kanban). Com captador: já entram no kanban dele.
+ * Body: { leads: [{ name?, phone?, email?, status?, gerente?, created_at? }], gerente_id? }
+ * Admin: obriga vínculo ao gerente; nunca atribui captador (user_id null).
+ * Gerente: importa para o próprio escopo; captador fica para atribuição posterior.
  * Duplicados por telefone NÃO são bloqueados (a tela marca "2ª vez"), mas linhas 100% vazias são ignoradas.
  */
 export async function POST(req: NextRequest) {
@@ -90,20 +90,14 @@ export async function POST(req: NextRequest) {
     }
 
     const gerenteId = isGerente ? userId : (body.gerente_id || null);
-    const captadorId = body.captador_id || null;
+
+    if (!isGerente && !gerenteId) {
+      return errorResponse('Selecione o gerente para vincular os contatos importados.', 400);
+    }
 
     if (gerenteId) {
       const { data: g } = await supabaseServiceRole.from('profiles').select('id, status').eq('id', gerenteId).single();
       if (!g || g.status !== 'gerente') return errorResponse('Gerente inválido.', 400);
-    }
-    let captadorEnroller: string | null = null;
-    if (captadorId) {
-      const { data: c } = await supabaseServiceRole.from('profiles').select('id, status, enroller').eq('id', captadorId).single();
-      if (!c || c.status !== 'captador') return errorResponse('Captador inválido.', 400);
-      if (isGerente && c.enroller !== userId) {
-        return errorResponse('Só é possível importar para captadores da sua equipe.', 403);
-      }
-      captadorEnroller = c.enroller || null;
     }
 
     const { data: profileData, error: profilesError } = await supabaseServiceRole
@@ -114,18 +108,6 @@ export async function POST(req: NextRequest) {
     if (profilesError) return errorResponse(`Erro ao consultar usuários: ${profilesError.message}`, 400);
     const profiles = (profileData ?? []) as ProfileRow[];
 
-    const { data: columnData, error: columnsError } = await supabaseServiceRole
-      .from('crm_columns')
-      .select('id, key, sort_order')
-      .eq('zaploto_id', zaplotoId)
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true });
-    if (columnsError) return errorResponse(`Erro ao consultar colunas do CRM: ${columnsError.message}`, 400);
-    const columns = (columnData ?? []) as { id: string; key: string; sort_order: number }[];
-    const columnByKey = new Map(columns.map((column) => [column.key, column]));
-    const firstColumn = columns[0];
-    if (!firstColumn) return errorResponse('O CRM não possui colunas ativas para este ambiente.', 400);
-
     const nowIso = new Date().toISOString();
     const base = Date.now() * 1000;
     const cleaned = raw
@@ -135,7 +117,6 @@ export async function POST(req: NextRequest) {
         email: typeof r.email === 'string' ? r.email.trim().toLowerCase().slice(0, 200) : '',
         statusLabel: typeof r.status === 'string' ? r.status.trim() : '',
         gerenteLabel: typeof r.gerente === 'string' ? r.gerente.trim() : '',
-        captadorLabel: typeof r.captador === 'string' ? r.captador.trim() : '',
         createdAt: parseCsvDate(r.created_at),
         idx: i,
       }))
@@ -144,17 +125,14 @@ export async function POST(req: NextRequest) {
     if (cleaned.length === 0) return errorResponse('Nenhuma linha válida (nome, telefone ou email).', 400);
 
     const unresolvedGerentes = new Set<string>();
-    const unresolvedCaptadores = new Set<string>();
     const unresolvedStatuses = new Set<string>();
     const prepared = cleaned.map((r) => {
       const rowGerente = resolveProfile(profiles, r.gerenteLabel, 'gerente');
-      const rowCaptador = resolveProfile(profiles, r.captadorLabel, 'captador');
       if (!isUnassigned(r.gerenteLabel) && !rowGerente) unresolvedGerentes.add(r.gerenteLabel);
-      if (!isUnassigned(r.captadorLabel) && !rowCaptador) unresolvedCaptadores.add(r.captadorLabel);
       const mappedStatus = STATUS_MAP[normalizeLabel(r.statusLabel)]
         ?? (!r.statusLabel ? STATUS_MAP.pendente : null);
       if (!mappedStatus) unresolvedStatuses.add(r.statusLabel);
-      return { ...r, rowGerente, rowCaptador, mappedStatus };
+      return { ...r, rowGerente, mappedStatus };
     });
 
     if (isGerente) {
@@ -162,57 +140,27 @@ export async function POST(req: NextRequest) {
         if (row.rowGerente?.id && row.rowGerente.id !== userId) {
           return errorResponse('Gerente só pode importar leads para o próprio escopo.', 403);
         }
-        if (row.rowCaptador?.enroller && row.rowCaptador.enroller !== userId) {
-          return errorResponse('Gerente só pode importar leads para captadores da própria equipe.', 403);
-        }
       }
     }
 
-    if (unresolvedGerentes.size || unresolvedCaptadores.size || unresolvedStatuses.size) {
+    if (unresolvedGerentes.size || unresolvedStatuses.size) {
       const details = [
         unresolvedGerentes.size ? `gerentes: ${[...unresolvedGerentes].join(', ')}` : '',
-        unresolvedCaptadores.size ? `captadores: ${[...unresolvedCaptadores].join(', ')}` : '',
         unresolvedStatuses.size ? `status: ${[...unresolvedStatuses].join(', ')}` : '',
       ].filter(Boolean).join('; ');
       return errorResponse(`Importação cancelada. Corrija os valores não reconhecidos (${details}). Nenhum lead foi inserido.`, 400);
     }
 
-    const managersFromRows = new Set<string>();
-    for (const row of prepared) {
-      if (row.rowGerente?.id) managersFromRows.add(row.rowGerente.id);
-      else if (row.rowCaptador?.enroller) managersFromRows.add(row.rowCaptador.enroller);
-    }
-    if (gerenteId) managersFromRows.add(gerenteId);
-    if (isGerente) managersFromRows.add(userId);
-
-    const managerTeams = new Map<string, string[]>();
-    await Promise.all(
-      [...managersFromRows].map(async (managerId) => {
-        const team = await getConsultorsByManager(managerId);
-        managerTeams.set(managerId, team.map((captador) => captador.id));
-      })
-    );
-    const roundRobinByManager = new Map<string, number>();
-
     const rows = prepared.map((r) => {
-      const inferredGerenteId = r.rowGerente?.id
-        ?? r.rowCaptador?.enroller
+      const resolvedGerenteId = r.rowGerente?.id
         ?? gerenteId
         ?? (isGerente ? userId : null);
-      let resolvedCaptadorId = r.rowCaptador?.id ?? captadorId ?? null;
-      if (!resolvedCaptadorId && inferredGerenteId) {
-        const team = managerTeams.get(inferredGerenteId) ?? [];
-        if (team.length > 0) {
-          const idx = roundRobinByManager.get(inferredGerenteId) ?? 0;
-          resolvedCaptadorId = team[idx % team.length];
-          roundRobinByManager.set(inferredGerenteId, idx + 1);
-        }
+      if (!resolvedGerenteId) {
+        throw new Error('LEAD_SEM_GERENTE');
       }
-      const resolvedGerenteId = inferredGerenteId
-        ?? (resolvedCaptadorId ? captadorEnroller : null);
       return {
         external_id: base + r.idx,
-        user_id: resolvedCaptadorId,
+        user_id: null,
         gerente_id: resolvedGerenteId,
         name: r.name || null,
         phone: r.phone || null,
@@ -221,17 +169,16 @@ export async function POST(req: NextRequest) {
         capture_status: r.mappedStatus!.captureStatus,
         source: 'import',
         zaploto_id: zaplotoId,
-        assigned_by: resolvedCaptadorId ? userId : null,
-        assigned_at: resolvedCaptadorId ? nowIso : null,
+        assigned_by: null,
+        assigned_at: null,
         created_at: r.createdAt ?? nowIso,
         updated_at: nowIso,
-        column_key: r.mappedStatus!.columnKey,
       };
     });
 
     let inserted = 0;
     for (let i = 0; i < rows.length; i += INSERT_BATCH) {
-      const batch = rows.slice(i, i + INSERT_BATCH).map(({ column_key: _columnKey, ...row }) => row);
+      const batch = rows.slice(i, i + INSERT_BATCH);
       const { error } = await supabaseServiceRole.from('crm_leads').insert(batch);
       if (error) {
         return errorResponse(`Erro ao importar (após ${inserted} leads): ${error.message}`, 400);
@@ -239,34 +186,14 @@ export async function POST(req: NextRequest) {
       inserted += batch.length;
     }
 
-    // Cada lead atribuído entra no Kanban do seu captador e no estágio correspondente ao Status do CSV.
-    const assignedRows = rows.filter((row) => row.user_id);
-    if (assignedRows.length > 0) {
-        const stageRows = assignedRows.map((r, i) => {
-          const column = columnByKey.get(r.column_key) ?? firstColumn;
-          return ({
-          lead_external_id: String(r.external_id),
-          user_id: r.user_id!,
-          column_id: column.id,
-          column_key: column.key,
-          position: i,
-          is_manual: true,
-          moved_by: userId,
-          moved_at: nowIso,
-          updated_at: nowIso,
-        });
-        });
-        for (let i = 0; i < stageRows.length; i += INSERT_BATCH) {
-          const { error } = await supabaseServiceRole.from('crm_lead_stage').insert(stageRows.slice(i, i + INSERT_BATCH));
-          if (error) return errorResponse(`Leads inseridos, mas houve erro ao posicionar no CRM: ${error.message}`, 500);
-        }
-    }
-
     return successResponse(
-      { imported: inserted, assigned: assignedRows.length, pending: rows.length - assignedRows.length, skipped: raw.length - cleaned.length },
-      `${inserted} lead(s) importado(s): ${assignedRows.length} vinculado(s) ao CRM e ${rows.length - assignedRows.length} pendente(s).`
+      { imported: inserted, assigned: 0, pending: inserted, skipped: raw.length - cleaned.length },
+      `${inserted} lead(s) importado(s) e vinculados ao gerente. O captador será atribuído pelo gerente.`
     );
   } catch (err: any) {
+    if (err?.message === 'LEAD_SEM_GERENTE') {
+      return errorResponse('Todos os leads precisam de um gerente. Selecione o gerente padrão ou informe a coluna Gerente no CSV.', 400);
+    }
     return serverErrorResponse(err);
   }
 }
