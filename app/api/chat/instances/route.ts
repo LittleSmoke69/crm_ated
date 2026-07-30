@@ -19,19 +19,28 @@ export async function GET(req: NextRequest) {
 
     const { data: profile } = await supabaseServiceRole
       .from('profiles')
-      .select('status')
+      .select('status, zaploto_id')
       .eq('id', userId)
       .single();
 
-    const isAdmin = profile?.status === 'admin';
+    const status = String(profile?.status || '').toLowerCase();
+    const isAdmin = status === 'admin' || status === 'super_admin' || status === 'suporte';
+    const zaplotoId = (profile as { zaploto_id?: string | null } | null)?.zaploto_id ?? null;
 
     let query = supabaseServiceRole
       .from('evolution_instances')
-      .select('id, instance_name, status, workspace_id, user_id, created_at')
-      .eq('is_chat_instance', true)
+      .select('id, instance_name, status, workspace_id, user_id, created_at, is_chat_instance, phone_number')
+      .eq('is_active', true)
       .order('created_at', { ascending: false });
 
-    if (!isAdmin) {
+    if (isAdmin) {
+      // Admin do tenant vê instâncias de qualquer admin do mesmo zaploto (+ órfãs).
+      if (status === 'admin') {
+        query = zaplotoId
+          ? query.or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+          : query.is('zaploto_id', null);
+      }
+    } else {
       query = query.eq('user_id', userId);
     }
 

@@ -1,0 +1,13 @@
+evolution.capdosucesso.co.uk {
+	encode gzip
+
+	# Manager UI
+	handle_path /manager* {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	# Evolution API
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}

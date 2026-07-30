@@ -40,6 +40,7 @@ import {
   Package,
   Globe,
   Trophy,
+  Mail,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Logo from '@/components/Logo';
@@ -233,6 +234,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
     LayoutDashboard, MessageSquare, Rocket, Users, Plus, Shield, Webhook, Workflow, Bot, Layout,
     Kanban, Activity, BarChart3, Briefcase, Settings, FlaskConical, User, ListOrdered, ClipboardList,
     ArrowLeftToLine, ExternalLink, ArrowRightLeft, BookOpen, Link2, UserPlus, Headphones, Package,
+    Mail,
   };
 
   useEffect(() => {
@@ -384,6 +386,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
     ],
   };
+  /** Admin (modelagem): Integrações só com WhatsApp Oficial + Meta Ads */
+  const itemIntegracoesAdmin: MenuItem = {
+    label: 'Integrações',
+    icon: Webhook,
+    submenu: [
+      { href: '/admin/whatsapp-official', icon: MessageSquare, label: 'WhatsApp Oficial' },
+      { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' },
+    ],
+  };
+  const itemEmails: MenuItem = { href: '/admin/emails', icon: Mail, label: 'E-mails' };
   const itemFlows: MenuItem = { href: '/admin/flows', icon: Workflow, label: 'Flows (Automações)' };
   const itemAgentesIAAdmin: MenuItem = { href: '/admin/ai-agents', icon: Bot, label: 'Agentes IA' };
   const itemAgentesIA: MenuItem = { href: '/ai-agents', icon: Bot, label: 'Agentes IA' };
@@ -486,6 +498,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         itemInstances,
         itemMaturador,
         itemPainelAdmin,
+        itemEmails,
         ...(wlActive ? [itemWhiteLabelAdmin] : []),
         itemHierarquia,
         itemWebhooks,
@@ -513,15 +526,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
       ];
     }
 
-    // 🛠️ Admin - painel, CRM, campanhas, instâncias + Integrações (Webhooks, WhatsApp Oficial, Meta) + Gestão de Banca, etc.
+    // 🛠️ Admin - painel, CRM, e-mails, Integrações (WhatsApp Oficial + Meta Ads), etc.
     if (userStatus === 'admin') {
       return [
         itemDashboard,
         itemInstances,
         itemPainelAdmin,
         itemHierarquia,
-        itemWebhooks,
-        itemMetaAds,
+        itemEmails,
+        itemIntegracoesAdmin,
         itemVslRedirect,
         itemZaplink,
         itemAcademy,
@@ -622,6 +635,39 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
           };
         } else {
           items.splice(0, 0, itemLeads);
+        }
+      }
+
+      // Admin/super_admin: E-mails + Integrações (WhatsApp Oficial, Meta Ads)
+      if (userStatus === 'super_admin' || userStatus === 'admin') {
+        const hasEmails =
+          items.some((it) => it.href === '/admin/emails' || it.label === 'E-mails') ||
+          items.some((it) => it.submenu?.some((s) => s.href === '/admin/emails'));
+        if (!hasEmails) {
+          const painelIdx = items.findIndex((it) => it.href === '/admin' || it.label === 'Painel Admin' || it.label === 'Painel Administrativo');
+          if (painelIdx >= 0) items.splice(painelIdx + 1, 0, itemEmails);
+          else items.unshift(itemEmails);
+        }
+
+        const integIdx = items.findIndex((it) => it.label === 'Integrações');
+        const waSub = { href: '/admin/whatsapp-official', icon: MessageSquare, label: 'WhatsApp Oficial' };
+        const metaSub = { href: '/admin/meta', icon: BarChart3, label: 'Meta Ads' };
+        if (integIdx >= 0) {
+          const integ = items[integIdx];
+          const existing = integ.submenu || [];
+          const merged = [...existing];
+          if (!merged.some((s) => s.href === '/admin/whatsapp-official')) merged.push(waSub);
+          if (!merged.some((s) => s.href === '/admin/meta')) merged.push(metaSub);
+          // Remove Meta Ads solto no root se já está em Integrações
+          items[integIdx] = { ...integ, submenu: merged };
+          const metaRoot = items.findIndex((it) => it.href === '/admin/meta' && it.label === 'Meta Ads');
+          if (metaRoot >= 0) items.splice(metaRoot, 1);
+        } else {
+          const emailsIdx = items.findIndex((it) => it.href === '/admin/emails');
+          const insertAt = emailsIdx >= 0 ? emailsIdx + 1 : 1;
+          items.splice(insertAt, 0, itemIntegracoesAdmin);
+          const metaRoot = items.findIndex((it) => it.href === '/admin/meta' && it.label === 'Meta Ads');
+          if (metaRoot >= 0) items.splice(metaRoot, 1);
         }
       }
 

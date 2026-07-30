@@ -18,6 +18,10 @@ import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import {
+  countConnectedEvolutionInstances,
+  resolveActiveAtendimentoChannel,
+} from '@/lib/chat/atendimento-active-channel';
+import {
   MessageSquare,
   Send,
   CheckCheck,
@@ -1213,7 +1217,7 @@ export default function ChatPage() {
         const evo: ChannelEvolution[] = result.data.evolution || [];
         const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
         setChannels({ evolution: evo, whatsapp_official: wa });
-        const firstChannel: Channel | null = evo.length > 0 ? evo[0] : wa.length > 0 ? wa[0] : null;
+        const firstChannel: Channel | null = resolveActiveAtendimentoChannel(evo, wa);
         setPendingAtendimentoChannel((prev) => prev ?? firstChannel);
         const allChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
           ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
@@ -1430,6 +1434,28 @@ export default function ChatPage() {
     loadGerenteGateAtendimento();
   }, [atendimentoGatePassed, userStatus, userId, loadGerenteGateAtendimento]);
 
+  // Gerente/captador: não veem a tela de escolha de canal — entram no canal ativo pelo admin.
+  useEffect(() => {
+    if (checking || channelsLoading || atendimentoGatePassed || !userStatus) return;
+    if (userStatus === 'admin' || userStatus === 'super_admin') return;
+    if (userStatus !== 'gerente' && userStatus !== 'captador' && userStatus !== 'consultor' && userStatus !== 'dono_banca') {
+      return;
+    }
+    const active = resolveActiveAtendimentoChannel(channels.evolution, channels.whatsapp_official);
+    if (!active) return;
+    setPendingAtendimentoChannel(active);
+    setSelectedChannel(active);
+    setAtendimentoGatePassed(true);
+    setConversationFilter('mine');
+  }, [
+    checking,
+    channelsLoading,
+    atendimentoGatePassed,
+    userStatus,
+    channels.evolution,
+    channels.whatsapp_official,
+  ]);
+
   const canSelectChannel =
     userStatus === 'super_admin' ||
     userStatus === 'admin' ||
@@ -1561,6 +1587,22 @@ export default function ChatPage() {
     if (!userId) return;
     void loadEvolutionChannels();
   }, [userId, loadEvolutionChannels]);
+
+  // Admin: atualiza instâncias Evolution quando outra conectar
+  useEffect(() => {
+    if (!(userStatus === 'admin' || userStatus === 'super_admin')) return;
+    const onFocus = () => void loadEvolutionChannels();
+    window.addEventListener('focus', onFocus);
+    const timer = window.setInterval(() => {
+      if (!atendimentoGatePassed && adminChannelTypeChoice === 'evolution') {
+        void loadEvolutionChannels();
+      }
+    }, 10000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(timer);
+    };
+  }, [userStatus, atendimentoGatePassed, adminChannelTypeChoice, loadEvolutionChannels]);
 
   /** Enquanto o gate está aberto, sincroniza contatos/chats via Evolution API (servidor) para o canal Evolution em foco. */
   const pendingEvolutionInstanceIdForGate =
@@ -4320,10 +4362,45 @@ export default function ChatPage() {
                   </span>
                   <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">Evolution API</p>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {channels.evolution.length} {channels.evolution.length === 1 ? 'instância conectada' : 'instâncias conectadas'}
+                    {(() => {
+                      const n = countConnectedEvolutionInstances(channels.evolution);
+                      return `${n} ${n === 1 ? 'instância conectada' : 'instâncias conectadas'}`;
+                    })()}
+                    {channels.evolution.length > 0 &&
+                      ` · ${channels.evolution.length} ${channels.evolution.length === 1 ? 'disponível' : 'disponíveis'}`}
                   </p>
                 </button>
               </div>
+            </div>
+          </div>
+        </Layout>
+      );
+    }
+
+    // Gerente/captador sem canal ativo: não mostram seletor — só aviso.
+    if (
+      !isAdminOrSuperAdmin &&
+      (userStatus === 'gerente' ||
+        userStatus === 'captador' ||
+        userStatus === 'consultor' ||
+        userStatus === 'dono_banca')
+    ) {
+      return (
+        <Layout onSignOut={handleSignOut}>
+          <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-4 sm:p-6 bg-gray-50 dark:bg-[#1a1a1a]">
+            <div className="w-full max-w-md text-center zap-panel border border-gray-200 dark:border-[#404040] rounded-2xl p-8">
+              <Headphones className="w-10 h-10 text-[#E86A24] mx-auto mb-4" />
+              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">Chat de Atendimento</h1>
+              {channelsLoading ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando canal ativo…
+                </p>
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Nenhum canal ativo disponível. Peça ao administrador para ativar uma instância Evolution
+                  (chat) ou o WhatsApp Oficial.
+                </p>
+              )}
             </div>
           </div>
         </Layout>

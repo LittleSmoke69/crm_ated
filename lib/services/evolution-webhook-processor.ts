@@ -14,6 +14,10 @@ import {
   normalizeEvolutionChatWebhookEvent,
 } from '@/lib/server/evolution-chat-webhook-config';
 import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
+import {
+  ensurePendingLeadForConversation,
+  resolveTenantIdForChatLead,
+} from '@/lib/services/chat-crm-integration';
 
 /** Tipos de evento da Evolution que são relevantes para o chat. */
 const CHAT_EVENT_TYPES = new Set([
@@ -102,6 +106,25 @@ async function handleMessageUpsert(
   };
 
   const conversation = await chatService.upsertConversation(conversationData);
+
+  // Contato 1:1 → cria/vincula lead pendente sem gerente/captador (nome + telefone) na tela Leads.
+  if (!conversationData.is_group) {
+    try {
+      const tenantId = await resolveTenantIdForChatLead({
+        workspaceId: instance.workspace_id,
+        ownerUserId: instance.user_id,
+      });
+      await ensurePendingLeadForConversation({
+        conversationId: conversation.id,
+        tenantId,
+        phone: remoteJid.split('@')[0],
+        name: conversationData.title,
+        source: 'evolution',
+      });
+    } catch (err) {
+      console.error('[EvolutionChat] ensurePendingLead:', err);
+    }
+  }
 
   const messageFromMe = (key.fromMe as boolean | undefined) || fromMe;
   await chatService.saveMessage({

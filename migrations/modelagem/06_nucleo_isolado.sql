@@ -47,6 +47,10 @@ BEGIN
     (v_tenant, 'crm_kanban',       'Kanban',             '/crm/kanban',        'Kanban',          'crm', 0),
     (v_tenant, 'chat_atendimento', 'Chat de Atendimento','/chat',              'MessageSquare',   NULL, 11),
     (v_tenant, 'chat_gestao',      'Gestão do Chat',     '/admin/chat-gestao', 'BarChart3',       NULL, 12),
+    (v_tenant, 'admin_emails',     'E-mails',            '/admin/emails',      'Mail',            NULL, 13),
+    (v_tenant, 'integrations',     'Integrações',        NULL,                 'Webhook',         NULL, 14),
+    (v_tenant, 'whatsapp_official','WhatsApp Oficial',   '/admin/whatsapp-official','MessageSquare','integrations', 0),
+    (v_tenant, 'meta_ads',         'Meta Ads',           '/admin/meta',        'BarChart3',       'integrations', 1),
     (v_tenant, 'profile',          'Meu Perfil',         '/perfil',            'User',            NULL, 99)
   ON CONFLICT (zaploto_id, code) DO UPDATE
     SET label = EXCLUDED.label, href = EXCLUDED.href, icon_name = EXCLUDED.icon_name,
@@ -66,11 +70,12 @@ BEGIN
     ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
   END LOOP;
 
-  -- Painel Administrativo: só super_admin e admin.
+  -- Painel Administrativo + E-mails + Integrações: só super_admin e admin.
   INSERT INTO zaploto_role_sidebar (zaploto_id, role_id, sidebar_item_id, visible)
   SELECT v_tenant, r.id, si.id, true
   FROM zaploto_roles r
-  JOIN zaploto_sidebar_items si ON si.zaploto_id = v_tenant AND si.code = 'painel_admin'
+  JOIN zaploto_sidebar_items si ON si.zaploto_id = v_tenant
+    AND si.code IN ('painel_admin', 'admin_emails', 'integrations', 'whatsapp_official', 'meta_ads')
   WHERE r.zaploto_id = v_tenant AND r.code IN ('super_admin','admin')
   ON CONFLICT (role_id, sidebar_item_id) DO UPDATE SET visible = true;
 END $$;

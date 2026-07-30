@@ -1,0 +1,73 @@
+# Evolution API 2.3.7 — https://github.com/evolution-foundation/evolution-api/releases/tag/2.3.7
+services:
+  api:
+    container_name: evolution_api
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: always
+    depends_on:
+      - redis
+      - postgres
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - evolution-net
+    env_file:
+      - .env
+    expose:
+      - "8080"
+
+  frontend:
+    container_name: evolution_frontend
+    image: evoapicloud/evolution-manager:latest
+    restart: always
+    ports:
+      - "127.0.0.1:3000:80"
+    networks:
+      - evolution-net
+
+  redis:
+    container_name: evolution_redis
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes --port 6379
+    volumes:
+      - evolution_redis:/data
+    networks:
+      evolution-net:
+        aliases:
+          - evolution-redis
+    expose:
+      - "6379"
+
+  postgres:
+    container_name: evolution_postgres
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE}
+      POSTGRES_USER: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - max_connections=500
+      - -c
+      - listen_addresses=*
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - evolution-net
+    expose:
+      - "5432"
+
+volumes:
+  evolution_instances:
+  evolution_redis:
+  postgres_data:
+
+networks:
+  evolution-net:
+    name: evolution-net
+    driver: bridge

@@ -14,6 +14,10 @@ import {
   isWithin24hWindow as isWithin24hWindowInbox,
   sortConversationsForInbox,
 } from '@/lib/chat/conversation-inbox';
+import {
+  countConnectedEvolutionInstances,
+  resolveActiveAtendimentoChannel,
+} from '@/lib/chat/atendimento-active-channel';
 import { zapInput } from '@/lib/zap-card-styles';
 import {
   MessageSquare,
@@ -1305,19 +1309,38 @@ export default function ChatPage() {
           const evo: ChannelEvolution[] = result.data.evolution || [];
           const wa: ChannelWhatsAppOfficial[] = result.data.whatsapp_official || [];
           setChannels({ evolution: evo, whatsapp_official: wa });
-          // Prioridade: WhatsApp Oficial > Evolution
-          const defaultChannel = wa.length > 0 ? wa[0] : evo.length > 0 ? evo[0] : null;
-          if (!selectedChannel && defaultChannel) {
-            const instant =
-              readSessionConversations(defaultChannel.id) ||
-              conversationsCacheRef.current[defaultChannel.id];
-            if (instant?.length) {
-              commitConversations(defaultChannel.id, instant);
-            }
-            setSelectedChannel(defaultChannel);
-            setConversationFilter('all');
+
+          const isAdminUser =
+            userStatus === 'admin' || userStatus === 'super_admin';
+          const isStaffUser =
+            userStatus === 'gerente' ||
+            userStatus === 'captador' ||
+            userStatus === 'consultor' ||
+            userStatus === 'dono_banca';
+
+          // Gerente/captador: entra direto no canal ativo (sem tela de escolha Oficial x Evolution).
+          // Admin escolhe o tipo/instância no gate. Enquanto status não carrega, não pré-seleciona.
+          if (isStaffUser && !isAdminUser) {
+            const defaultChannel = resolveActiveAtendimentoChannel(evo, wa);
+            setSelectedChannel((prev) => {
+              if (prev) {
+                const stillThere =
+                  (prev.type === 'evolution' && evo.some((c) => c.id === prev.id)) ||
+                  (prev.type === 'whatsapp_official' && wa.some((c) => c.id === prev.id));
+                if (stillThere) return prev;
+              }
+              if (!defaultChannel) return null;
+              const instant =
+                readSessionConversations(defaultChannel.id) ||
+                conversationsCacheRef.current[defaultChannel.id];
+              if (instant?.length) {
+                commitConversations(defaultChannel.id, instant);
+              }
+              setConversationFilter('all');
+              return defaultChannel;
+            });
           }
-          // Pré-carrega: WhatsApp Oficial primeiro (canal padrão), depois Evolution
+          // Pré-carrega conversas dos canais disponíveis
           const orderedChannels: Array<{ id: string; type: 'evolution' | 'whatsapp_official' }> = [
             ...wa.map((c) => ({ id: c.id, type: 'whatsapp_official' as const })),
             ...evo.map((c) => ({ id: c.id, type: 'evolution' as const })),
@@ -1341,11 +1364,27 @@ export default function ChatPage() {
         }
       })
       .catch((e) => console.error('[Chat] canais:', e));
-  }, [userId, commitConversations]);
+  }, [userId, userStatus, commitConversations]);
 
   useEffect(() => {
     loadChannels();
   }, [loadChannels]);
+
+  // Admin: atualiza lista de Evolution quando outra instância conectar
+  useEffect(() => {
+    if (!(userStatus === 'admin' || userStatus === 'super_admin')) return;
+    const onFocus = () => loadChannels();
+    window.addEventListener('focus', onFocus);
+    const timer = window.setInterval(() => {
+      if (adminChannelTypeChoice === 'evolution' && !evolutionListConfirmed) {
+        loadChannels();
+      }
+    }, 10000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(timer);
+    };
+  }, [userStatus, adminChannelTypeChoice, evolutionListConfirmed, loadChannels]);
 
   // ── Criar instância Evolution (Evolution API > listar conexões > Nova Conexão) ──
   const handleCreateEvolutionInstance = async () => {
@@ -3249,7 +3288,12 @@ export default function ChatPage() {
                 </span>
                 <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 mb-1">Evolution API</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {channels.evolution.length} {channels.evolution.length === 1 ? 'instância conectada' : 'instâncias conectadas'}
+                  {(() => {
+                    const n = countConnectedEvolutionInstances(channels.evolution);
+                    return `${n} ${n === 1 ? 'instância conectada' : 'instâncias conectadas'}`;
+                  })()}
+                  {channels.evolution.length > 0 &&
+                    ` · ${channels.evolution.length} ${channels.evolution.length === 1 ? 'disponível' : 'disponíveis'}`}
                 </p>
               </button>
             </div>
