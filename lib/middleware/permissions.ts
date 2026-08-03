@@ -205,7 +205,7 @@ export async function requireSuperAdmin(req: NextRequest): Promise<{ userId: str
 }
 
 /**
- * APIs de gestão de leads capturados: super_admin, admin e gerente (escopo próprio).
+ * APIs de gestão de leads capturados: super_admin, admin, gerente e captador (escopo próprio).
  */
 export async function requireLeadsManagementAccess(
   req: NextRequest
@@ -220,7 +220,7 @@ export async function requireLeadsManagementAccess(
     throw new Error('Perfil não encontrado');
   }
   const s = profile.status;
-  if (s === 'super_admin' || s === 'admin' || s === 'gerente') {
+  if (s === 'super_admin' || s === 'admin' || s === 'gerente' || s === 'captador') {
     return { userId, profile };
   }
   const hasLeads = await hasSidebarPermission(profile, 'crm_leads');

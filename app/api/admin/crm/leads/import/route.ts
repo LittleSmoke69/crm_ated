@@ -65,7 +65,9 @@ const STATUS_MAP: Record<string, { captureStatus: string; columnKey: string }> =
   pendente: { captureStatus: 'pendente', columnKey: 'status_pendente' },
   'em atendimento': { captureStatus: 'em_contato', columnKey: 'status_em_atendimento' },
   'nao responde': { captureStatus: 'descartado', columnKey: 'status_nao_responde' },
-  encerrado: { captureStatus: 'descartado', columnKey: 'status_encerrado' },
+  encerrado: { captureStatus: 'descartado', columnKey: 'lixo' },
+  lixo: { captureStatus: 'descartado', columnKey: 'lixo' },
+  perdido: { captureStatus: 'descartado', columnKey: 'lixo' },
   convertido: { captureStatus: 'convertido', columnKey: 'status_convertido' },
 };
 

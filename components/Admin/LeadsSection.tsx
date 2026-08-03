@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Columns3,
   Copy,
   Download,
   Eye,
@@ -11,6 +12,7 @@ import {
   Pencil,
   Search,
   Trash2,
+  Trophy,
   Upload,
   UserPlus,
   X,
@@ -41,6 +43,8 @@ type CapturedLead = {
 };
 
 type PersonOption = { id: string; name: string; enroller?: string | null };
+type KanbanColumnOption = { id: string; key: string; title: string };
+type SalesSummary = { total_leads: number; total_vendas: number; taxa: number };
 
 const STATUS_OPTIONS = [
   { value: 'pendente', label: 'Pendente', cls: 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10' },
@@ -181,12 +185,18 @@ export default function LeadsSection({
   userRole = 'admin',
 }: {
   userId: string;
-  userRole?: 'admin' | 'gerente';
+  userRole?: 'admin' | 'gerente' | 'captador';
 }) {
   const isGerente = userRole === 'gerente';
+  const isCaptador = userRole === 'captador';
+  const isAdmin = userRole === 'admin';
+  const canManage = !isCaptador;
   const [leads, setLeads] = useState<CapturedLead[]>([]);
   const [gerentes, setGerentes] = useState<PersonOption[]>([]);
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
+  const [columns, setColumns] = useState<KanbanColumnOption[]>([]);
+  const [defaultColumnKey, setDefaultColumnKey] = useState('novo');
+  const [sales, setSales] = useState<SalesSummary>({ total_leads: 0, total_vendas: 0, taxa: 0 });
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(50);
@@ -218,6 +228,8 @@ export default function LeadsSection({
   const [importDest, setImportDest] = useState({ gerente_id: '' });
   const [assignLeads, setAssignLeads] = useState<CapturedLead[] | null>(null);
   const [assignForm, setAssignForm] = useState({ gerente_id: '', captador_id: '' });
+  const [moveColumnLeads, setMoveColumnLeads] = useState<CapturedLead[] | null>(null);
+  const [moveColumnKey, setMoveColumnKey] = useState('novo');
   const [viewLead, setViewLead] = useState<CapturedLead | null>(null);
   const [editingLeadInfo, setEditingLeadInfo] = useState(false);
   const [editLeadForm, setEditLeadForm] = useState({ name: '', phone: '', email: '' });
@@ -263,6 +275,15 @@ export default function LeadsSection({
       setPage(json.data.page || targetPage);
       setGerentes(json.data.gerentes || []);
       setCaptadores(json.data.captadores || []);
+      setColumns(json.data.columns || []);
+      if (json.data.default_column_key) setDefaultColumnKey(json.data.default_column_key);
+      if (json.data.sales) {
+        setSales({
+          total_leads: json.data.sales.total_leads || 0,
+          total_vendas: json.data.sales.total_vendas || 0,
+          taxa: json.data.sales.taxa || 0,
+        });
+      }
       if (!opts?.preserveSelection) {
         setSelectedMap(new Map());
       } else {
@@ -395,7 +416,7 @@ export default function LeadsSection({
     try {
       const ASSIGN_CHUNK = 100;
       // Atribuição em massa: processa em lotes para evitar timeout
-      if (ids.length > ASSIGN_CHUNK && (body.captador_id !== undefined || body.gerente_id !== undefined)) {
+      if (ids.length > ASSIGN_CHUNK && (body.captador_id !== undefined || body.gerente_id !== undefined || body.column_key !== undefined)) {
         let done = 0;
         for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
           const chunk = ids.slice(i, i + ASSIGN_CHUNK);
@@ -582,6 +603,25 @@ export default function LeadsSection({
     }
   };
 
+  const submitMoveColumn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!moveColumnLeads || !moveColumnKey) return;
+    const withCaptador = moveColumnLeads.filter((l) => l.captador_id);
+    if (withCaptador.length === 0) {
+      showToast('Selecione leads que já tenham captador atribuído.', 'error');
+      return;
+    }
+    const ok = await patchLeads(
+      withCaptador.map((l) => l.id),
+      { column_key: moveColumnKey },
+      `${withCaptador.length} lead(s) movido(s) de coluna no kanban.`
+    );
+    if (ok) {
+      setMoveColumnLeads(null);
+      setMoveColumnKey(defaultColumnKey);
+    }
+  };
+
   const submitDelete = async () => {
     if (!deleteLeads) return;
     setBusy(true);
@@ -716,22 +756,58 @@ export default function LeadsSection({
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-stone-900 dark:text-stone-50">Leads</h1>
-          <p className="text-stone-600 dark:text-stone-400 mt-1">Gerenciamento de leads capturados</p>
+          <p className="text-stone-600 dark:text-stone-400 mt-1">
+            {isCaptador ? 'Seus leads atribuídos' : 'Gerenciamento de leads capturados'}
+          </p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <Button onClick={() => setShowCreate(true)} icon={<UserPlus className="w-4 h-4" />}>
-            Cadastrar
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => { setShowImport(true); setImportRows([]); setImportError(null); }}
-            icon={<Upload className="w-4 h-4" />}
-          >
-            Importar
-          </Button>
-          <Button variant="secondary" onClick={exportCsv} disabled={busy} icon={<Download className="w-4 h-4" />}>
-            Exportar CSV
-          </Button>
+        {canManage && (
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={() => setShowCreate(true)} icon={<UserPlus className="w-4 h-4" />}>
+              Cadastrar
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => { setShowImport(true); setImportRows([]); setImportError(null); }}
+              icon={<Upload className="w-4 h-4" />}
+            >
+              Importar
+            </Button>
+            <Button variant="secondary" onClick={exportCsv} disabled={busy} icon={<Download className="w-4 h-4" />}>
+              Exportar CSV
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Card: vendas fechadas */}
+      <div className="rounded-2xl border border-emerald-500/25 bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/40 dark:to-[#241e19] p-5 sm:p-6 flex flex-wrap items-center gap-5">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+          <Trophy className="w-6 h-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700/80 dark:text-emerald-300/80">
+            Vendas fechadas
+          </p>
+          <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums">
+            {sales.total_vendas}
+          </p>
+          <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
+            {isCaptador
+              ? 'Dos seus leads no kanban (coluna Cliente ganho)'
+              : isGerente
+                ? 'Sua equipe — leads na coluna Cliente ganho'
+                : 'Todos os captadores — leads na coluna Cliente ganho'}
+          </p>
+        </div>
+        <div className="flex gap-6 text-sm">
+          <div>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Leads atribuídos</p>
+            <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums">{sales.total_leads}</p>
+          </div>
+          <div>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Taxa</p>
+            <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">{sales.taxa}%</p>
+          </div>
         </div>
       </div>
 
@@ -759,7 +835,7 @@ export default function LeadsSection({
               {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           </div>
-          {!isGerente && (
+          {!isGerente && !isCaptador && (
           <div>
             <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Gerente</label>
             <select value={fGerente} onChange={(e) => setFGerente(e.target.value)} className={inputClass}>
@@ -768,6 +844,7 @@ export default function LeadsSection({
             </select>
           </div>
           )}
+          {!isCaptador && (
           <div>
             <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Captador</label>
             <select value={fCaptador} onChange={(e) => setFCaptador(e.target.value)} className={inputClass}>
@@ -775,6 +852,7 @@ export default function LeadsSection({
               {(isGerente ? teamCaptadores : captadores).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Período</label>
             <select value={fPeriod} onChange={(e) => setFPeriod(e.target.value)} className={inputClass}>
@@ -890,13 +968,30 @@ export default function LeadsSection({
               <button type="button" onClick={clearSelection} className="text-xs font-medium text-stone-500 dark:text-stone-400 hover:underline">
                 Limpar
               </button>
+              {canManage && (
               <button
-                onClick={() => { setAssignLeads(selectedLeadObjs); setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' }); }}
+                onClick={() => {
+                  setAssignLeads(selectedLeadObjs);
+                  setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' });
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#E86A24]/45 text-[#C45A1A] dark:text-[#EF9057] hover:bg-[#E86A24]/15"
               >
                 <UserPlus className="w-3.5 h-3.5" /> Atribuir
               </button>
-              {!isGerente && (
+              )}
+              {isAdmin && selectedLeadObjs.some((l) => l.captador_id) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoveColumnLeads(selectedLeadObjs.filter((l) => l.captador_id));
+                    setMoveColumnKey(defaultColumnKey);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-sky-500/40 text-sky-700 dark:text-sky-300 hover:bg-sky-500/10"
+                >
+                  <Columns3 className="w-3.5 h-3.5" /> Trocar coluna
+                </button>
+              )}
+              {!isGerente && !isCaptador && (
               <button
                 onClick={() => setDeleteLeads(selectedLeadObjs)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10"
@@ -952,11 +1047,13 @@ export default function LeadsSection({
                     <EmptyState
                       icon={<UserPlus className="w-7 h-7" />}
                       title="Nenhum lead encontrado"
-                      description="Use Cadastrar ou Importar para subir sua base."
+                      description={isCaptador ? 'Ainda não há leads atribuídos a você.' : 'Use Cadastrar ou Importar para subir sua base.'}
                       action={
-                        <Button size="sm" onClick={() => setShowCreate(true)} icon={<UserPlus className="w-4 h-4" />}>
-                          Cadastrar
-                        </Button>
+                        canManage ? (
+                          <Button size="sm" onClick={() => setShowCreate(true)} icon={<UserPlus className="w-4 h-4" />}>
+                            Cadastrar
+                          </Button>
+                        ) : undefined
                       }
                     />
                   </td>
@@ -971,8 +1068,8 @@ export default function LeadsSection({
                       <select
                         value={l.capture_status}
                         onChange={(e) => changeStatus(l, e.target.value)}
-                        disabled={busy}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-transparent cursor-pointer ${statusCls(l.capture_status)}`}
+                        disabled={busy || isCaptador}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-transparent ${isCaptador ? 'cursor-default' : 'cursor-pointer'} ${statusCls(l.capture_status)}`}
                       >
                         {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value} className="bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100">{s.label}</option>)}
                       </select>
@@ -992,13 +1089,15 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       {l.gerente_name ? (
                         <span className={badgeGerente}>{l.gerente_name}</span>
-                      ) : (
+                      ) : canManage ? (
                         <button
                           onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: '', captador_id: '' }); }}
                           className="px-3 py-1 rounded-md text-xs font-medium border border-stone-300 dark:border-white/15 text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-white/5"
                         >
                           Atribuir
                         </button>
+                      ) : (
+                        <span className="text-stone-400">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -1022,6 +1121,7 @@ export default function LeadsSection({
                             <MessageCircle className="w-4 h-4" />
                           </a>
                         )}
+                        {canManage && (
                         <button
                           onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: isGerente ? userId : (l.gerente_id || ''), captador_id: '' }); }}
                           className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#E86A24] hover:bg-[#E86A24]/10"
@@ -1029,10 +1129,11 @@ export default function LeadsSection({
                         >
                           <UserPlus className="w-4 h-4" />
                         </button>
+                        )}
                         <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-stone-500 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-white/5" title="Ver detalhes">
                           <Eye className="w-4 h-4" />
                         </button>
-                        {!isGerente && (
+                        {!isGerente && !isCaptador && (
                         <button onClick={() => setDeleteLeads([l])} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10" title="Excluir">
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1173,7 +1274,12 @@ export default function LeadsSection({
             {!isGerente && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Gerente</label>
-              <select value={assignForm.gerente_id} onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })} className={inputClass} required>
+              <select
+                value={assignForm.gerente_id}
+                onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })}
+                className={inputClass}
+                required
+              >
                 <option value="">Selecione o gerente...</option>
                 {gerentes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
@@ -1187,13 +1293,42 @@ export default function LeadsSection({
                 <option value="">Selecione o captador...</option>
                 {captadoresForGerente.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">Ao escolher um captador, o lead entra na coluna inicial do kanban dele.</p>
+              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">O lead entra automaticamente na coluna Novo lead do kanban do captador.</p>
             </div>
             )}
             <div className="flex justify-end gap-3 pt-2">
               <button type="button" onClick={() => setAssignLeads(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
               <button type="submit" disabled={busy} className="px-5 py-2 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-60 flex items-center gap-2">
                 {busy && <Loader2 className="w-4 h-4 animate-spin" />} Atribuir
+              </button>
+            </div>
+          </form>
+        )
+      )}
+
+      {/* Modal: trocar coluna do kanban (somente admin/super_admin) */}
+      {isAdmin && moveColumnLeads && modalShell(
+        moveColumnLeads.length === 1
+          ? `Trocar coluna — ${moveColumnLeads[0].name || moveColumnLeads[0].phone || 'lead'}`
+          : `Trocar coluna de ${moveColumnLeads.length} leads`,
+        () => setMoveColumnLeads(null),
+        (
+          <form onSubmit={submitMoveColumn} className="p-5 space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Move os leads já atribuídos para outra coluna do kanban do captador.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Coluna</label>
+              <select value={moveColumnKey} onChange={(e) => setMoveColumnKey(e.target.value)} className={inputClass} required>
+                {columns.map((c) => (
+                  <option key={c.id} value={c.key}>{c.title}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setMoveColumnLeads(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
+              <button type="submit" disabled={busy || columns.length === 0} className="px-5 py-2 rounded-lg bg-[#E86A24] text-white font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
+                {busy && <Loader2 className="w-4 h-4 animate-spin" />} Mover
               </button>
             </div>
           </form>

@@ -15,6 +15,10 @@ const SCAN_MAX = 20000;
 /** PostgREST .in() na querystring — chunks grandes geram 414. */
 const IN_CHUNK = 80;
 const STAGE_UPSERT_CHUNK = 200;
+/** Coluna de venda fechada no kanban. */
+const WON_COLUMN = 'ganho';
+/** Coluna padrão ao atribuir lead ao captador. */
+const DEFAULT_ASSIGN_COLUMN = 'novo';
 
 function normalizePhone(v: string | null | undefined): string {
   return String(v || '').replace(/\D/g, '');
@@ -27,29 +31,105 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-/** Coluna inicial do kanban do captador (status_pendente / novo / primeira ativa do tenant). */
-async function resolveInitialKanbanColumn(zaplotoId: string | null): Promise<{ id: string; key: string } | null> {
-  const preferredKeys = ['status_pendente', 'novo'];
+/** Resolve coluna do kanban: preferredKey → novo → status_pendente → primeira ativa. */
+async function resolveKanbanColumn(
+  zaplotoId: string | null,
+  preferredKey?: string | null
+): Promise<{ id: string; key: string; title: string } | null> {
+  const preferredKeys = [
+    ...(preferredKey ? [String(preferredKey).trim()] : []),
+    DEFAULT_ASSIGN_COLUMN,
+    'status_pendente',
+  ].filter(Boolean);
+  const seen = new Set<string>();
   for (const key of preferredKeys) {
+    if (seen.has(key)) continue;
+    seen.add(key);
     let q = supabaseServiceRole
       .from('crm_columns')
-      .select('id, key')
+      .select('id, key, title')
       .eq('key', key)
       .eq('is_active', true)
       .limit(1);
     if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
     const { data } = await q.maybeSingle();
-    if (data?.id && data?.key) return { id: data.id, key: data.key };
+    if (data?.id && data?.key) {
+      return { id: data.id, key: data.key, title: (data as { title?: string }).title || data.key };
+    }
   }
   let q = supabaseServiceRole
     .from('crm_columns')
-    .select('id, key')
+    .select('id, key, title')
     .eq('is_active', true)
     .order('sort_order', { ascending: true })
     .limit(1);
   if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
   const { data } = await q.maybeSingle();
-  return data?.id && data?.key ? { id: data.id, key: data.key } : null;
+  return data?.id && data?.key
+    ? { id: data.id, key: data.key, title: (data as { title?: string }).title || data.key }
+    : null;
+}
+
+async function listActiveKanbanColumns(zaplotoId: string | null) {
+  let q = supabaseServiceRole
+    .from('crm_columns')
+    .select('id, key, title, sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+  if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
+  const { data } = await q;
+  return (data || []).map((c: any) => ({
+    id: c.id as string,
+    key: c.key as string,
+    title: (c.title as string) || (c.key as string),
+  }));
+}
+
+/** Total de vendas fechadas (coluna ganho) no escopo dos captadores. */
+async function countWonSales(captadorIds: string[]) {
+  if (captadorIds.length === 0) {
+    return { total_leads: 0, total_vendas: 0, taxa: 0 };
+  }
+
+  const leadPairs: { external_id: string; user_id: string }[] = [];
+  for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
+    const { data, error } = await supabaseServiceRole
+      .from('crm_leads')
+      .select('external_id, user_id')
+      .in('user_id', chunk);
+    if (error) throw new Error(error.message);
+    for (const row of data || []) {
+      const uid = (row as { user_id?: string }).user_id;
+      if (!uid) continue;
+      leadPairs.push({
+        external_id: String((row as { external_id: number | string }).external_id),
+        user_id: uid,
+      });
+    }
+  }
+
+  const wonSet = new Set<string>();
+  const extIds = [...new Set(leadPairs.map((p) => p.external_id))];
+  for (const chunk of chunkArray(extIds, IN_CHUNK)) {
+    const { data: stages, error } = await supabaseServiceRole
+      .from('crm_lead_stage')
+      .select('lead_external_id, user_id')
+      .in('lead_external_id', chunk)
+      .eq('column_key', WON_COLUMN);
+    if (error) throw new Error(error.message);
+    for (const s of stages || []) {
+      const row = s as { lead_external_id: string; user_id: string };
+      wonSet.add(`${row.lead_external_id}:${row.user_id}`);
+    }
+  }
+
+  let totalVendas = 0;
+  for (const p of leadPairs) {
+    if (wonSet.has(`${p.external_id}:${p.user_id}`)) totalVendas += 1;
+  }
+  const totalLeads = leadPairs.length;
+  const taxa = totalLeads > 0 ? Math.round((totalVendas / totalLeads) * 1000) / 10 : 0;
+  return { total_leads: totalLeads, total_vendas: totalVendas, taxa };
 }
 
 async function fetchLeadsByIds(ids: string[]) {
@@ -139,8 +219,21 @@ async function scanLeads(params: {
   /** Quando definido, restringe a leads do gerente (pool + equipe). */
   scopeGerenteId?: string;
   scopeTeamIds?: string[];
+  /** Captador: só leads atribuídos a ele. */
+  scopeCaptadorId?: string;
 }) {
-  const { tenantUserIds, zaplotoId, q, captureStatus, gerenteId, captadorId, fromIso, scopeGerenteId, scopeTeamIds } = params;
+  const {
+    tenantUserIds,
+    zaplotoId,
+    q,
+    captureStatus,
+    gerenteId,
+    captadorId,
+    fromIso,
+    scopeGerenteId,
+    scopeTeamIds,
+    scopeCaptadorId,
+  } = params;
   const rows: any[] = [];
   let from = 0;
   while (rows.length < SCAN_MAX) {
@@ -152,7 +245,9 @@ async function scanLeads(params: {
 
     // Escopo: leads de usuários do tenant OU pendentes (sem dono) do tenant/legado
     const idsList = tenantUserIds.join(',');
-    if (scopeGerenteId) {
+    if (scopeCaptadorId) {
+      query = query.eq('user_id', scopeCaptadorId);
+    } else if (scopeGerenteId) {
       const teamIds = (scopeTeamIds ?? []).filter(Boolean);
       if (teamIds.length > 0) {
         query = query.or(`gerente_id.eq.${scopeGerenteId},user_id.in.(${teamIds.join(',')})`);
@@ -199,6 +294,7 @@ export async function GET(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadsManagementAccess(req);
     const isGerente = profile.status === 'gerente';
+    const isCaptador = profile.status === 'captador';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const profiles = await getTenantProfiles(zaplotoId);
     const tenantUserIds = profiles.map((p: any) => p.id);
@@ -220,20 +316,23 @@ export async function GET(req: NextRequest) {
       fromIso = new Date(Date.now() - 30 * 86400000).toISOString();
     }
 
-    const captadorFilter = isGerente
-      ? (sp.get('captador_id') && teamCaptadorIds.has(sp.get('captador_id')!) ? sp.get('captador_id')! : undefined)
-      : sp.get('captador_id') || undefined;
+    const captadorFilter = isCaptador
+      ? userId
+      : isGerente
+        ? (sp.get('captador_id') && teamCaptadorIds.has(sp.get('captador_id')!) ? sp.get('captador_id')! : undefined)
+        : sp.get('captador_id') || undefined;
 
     const rows = await scanLeads({
       tenantUserIds,
       zaplotoId,
       q: sp.get('q') || undefined,
       captureStatus: sp.get('capture_status') || undefined,
-      gerenteId: isGerente ? undefined : sp.get('gerente_id') || undefined,
+      gerenteId: isGerente || isCaptador ? undefined : sp.get('gerente_id') || undefined,
       captadorId: captadorFilter,
       fromIso,
       scopeGerenteId: isGerente ? userId : undefined,
       scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
+      scopeCaptadorId: isCaptador ? userId : undefined,
     });
 
     // Nº de ocorrência por telefone (1ª, 2ª, 3ª vez...) — mais antigo = 1ª vez
@@ -288,23 +387,38 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const salesScopeIds = isCaptador
+      ? [userId]
+      : isGerente
+        ? [...new Set([...teamCaptadorIds, userId])]
+        : profiles.filter((p: any) => p.status === 'captador').map((p: any) => p.id as string);
+    const sales = await countWonSales(salesScopeIds);
+    const columns = await listActiveKanbanColumns(zaplotoId);
+
     return successResponse({
       leads,
       total,
       page,
       page_size: pageSize,
-      gerentes: isGerente
-        ? [{ id: userId, name: profile.full_name || profile.email || 'Gerente' }]
-        : profiles
-            .filter((p: any) => p.status === 'gerente')
-            .map((p: any) => ({ id: p.id, name: p.full_name || p.email })),
-      captadores: (isGerente ? teamCaptadores : profiles.filter((p: any) => p.status === 'captador')).map(
-        (p: any) => ({
-          id: p.id,
-          name: p.full_name || p.email,
-          enroller: p.enroller,
-        })
-      ),
+      sales,
+      columns,
+      default_column_key: DEFAULT_ASSIGN_COLUMN,
+      gerentes: isCaptador
+        ? []
+        : isGerente
+          ? [{ id: userId, name: profile.full_name || profile.email || 'Gerente' }]
+          : profiles
+              .filter((p: any) => p.status === 'gerente')
+              .map((p: any) => ({ id: p.id, name: p.full_name || p.email })),
+      captadores: isCaptador
+        ? [{ id: userId, name: profile.full_name || profile.email || 'Captador', enroller: profile.enroller }]
+        : (isGerente ? teamCaptadores : profiles.filter((p: any) => p.status === 'captador')).map(
+            (p: any) => ({
+              id: p.id,
+              name: p.full_name || p.email,
+              enroller: p.enroller,
+            })
+          ),
     });
   } catch (err: any) {
     return serverErrorResponse(err);
@@ -319,6 +433,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadsManagementAccess(req);
+    if (profile.status === 'captador') {
+      return errorResponse('Captador não pode cadastrar leads por esta tela.', 403);
+    }
     const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
@@ -329,6 +446,11 @@ export async function POST(req: NextRequest) {
     let gerenteId = body.gerente_id || null;
     // Somente o gerente vincula captador; admin só associa ao gerente.
     let captadorId = isGerente ? (body.captador_id || null) : null;
+    // Coluna do kanban: gerente sempre usa Novo lead; só admin/super_admin podem escolher.
+    const preferredColumnKey =
+      !isGerente && typeof body.column_key === 'string' && body.column_key.trim()
+        ? body.column_key.trim()
+        : DEFAULT_ASSIGN_COLUMN;
 
     if (isGerente) {
       gerenteId = userId;
@@ -374,9 +496,9 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Erro ao cadastrar lead: ${error?.message || 'desconhecido'}`, 400);
     }
 
-    // Já atribuído a captador: entra no kanban dele (coluna inicial do tenant)
+    // Já atribuído a captador: entra no kanban dele (padrão: Novo lead)
     if (captadorId) {
-      const column = await resolveInitialKanbanColumn(zaplotoId);
+      const column = await resolveKanbanColumn(zaplotoId, preferredColumnKey);
       if (!column) {
         return errorResponse('CRM sem colunas ativas para posicionar o lead no kanban.', 400);
       }
@@ -401,12 +523,16 @@ export async function POST(req: NextRequest) {
 
 /**
  * PATCH /api/admin/crm/leads — atualiza/atribui leads (aceita 1 ou vários ids).
- * Body: { ids: string[], capture_status?, gerente_id?, captador_id? }
+ * Body: { ids: string[], capture_status?, gerente_id?, captador_id?, column_key? }
  * captador_id: '' remove o captador (lead volta ao pool); uuid atribui e envia ao kanban do captador.
+ * column_key: coluna do kanban ao atribuir ou ao mover leads já atribuídos.
  */
 export async function PATCH(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadsManagementAccess(req);
+    if (profile.status === 'captador') {
+      return errorResponse('Captador não pode alterar leads por esta tela.', 403);
+    }
     const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
@@ -421,7 +547,14 @@ export async function PATCH(req: NextRequest) {
     const hasName = typeof body.name === 'string';
     const hasPhone = typeof body.phone === 'string';
     const hasEmail = typeof body.email === 'string';
-    if (!hasStatus && !hasGerente && !hasCaptador && !hasName && !hasPhone && !hasEmail) {
+    const requestedColumnKey =
+      typeof body.column_key === 'string' && body.column_key.trim()
+        ? body.column_key.trim()
+        : '';
+    // Gerente só atribui — ignora column_key. Admin/super_admin podem trocar coluna.
+    const preferredColumnKey = isGerente ? '' : requestedColumnKey;
+    const hasColumn = Boolean(preferredColumnKey);
+    if (!hasStatus && !hasGerente && !hasCaptador && !hasName && !hasPhone && !hasEmail && !hasColumn) {
       return errorResponse('Nada para atualizar.', 400);
     }
     if ((hasName || hasPhone || hasEmail) && ids.length !== 1) {
@@ -469,8 +602,42 @@ export async function PATCH(req: NextRequest) {
       captadorEnroller = c.enroller || null;
     }
 
+    // Só troca de coluna (leads já atribuídos a captador)
+    if (hasColumn && !hasCaptador && !hasGerente && !hasStatus && !hasName && !hasPhone && !hasEmail) {
+      const column = await resolveKanbanColumn(zaplotoId, preferredColumnKey);
+      if (!column) return errorResponse('Coluna do kanban inválida ou inativa.', 400);
+      const withCaptador = leads.filter((l) => l.user_id);
+      if (withCaptador.length === 0) {
+        return errorResponse('Nenhum lead selecionado possui captador para mover no kanban.', 400);
+      }
+      const byCaptador = new Map<string, typeof withCaptador>();
+      for (const lead of withCaptador) {
+        const uid = lead.user_id!;
+        const list = byCaptador.get(uid) || [];
+        list.push(lead);
+        byCaptador.set(uid, list);
+      }
+      try {
+        for (const [ownerId, ownerLeads] of byCaptador) {
+          await placeLeadsOnCaptadorKanban({
+            leads: ownerLeads,
+            captadorId: ownerId,
+            movedBy: userId,
+            column,
+            nowIso,
+          });
+        }
+      } catch (e: any) {
+        return errorResponse(e?.message || 'Erro ao mover coluna no kanban.', 500);
+      }
+      return successResponse(
+        { updated: withCaptador.length, column_key: column.key },
+        `${withCaptador.length} lead(s) movido(s) para "${column.title}".`
+      );
+    }
+
     // Edição pontual (nome/telefone/e-mail) ou status isolado — 1 a 1
-    if (hasName || hasPhone || hasEmail || (hasStatus && !hasGerente && !hasCaptador)) {
+    if (hasName || hasPhone || hasEmail || (hasStatus && !hasGerente && !hasCaptador && !hasColumn)) {
       for (const lead of leads) {
         const update: Record<string, unknown> = { updated_at: nowIso, zaploto_id: zaplotoId };
         if (hasStatus) update.capture_status = body.capture_status;
@@ -500,8 +667,9 @@ export async function PATCH(req: NextRequest) {
     }
 
     // Kanban: só do captador (admin/gerente não têm quadro operacional)
+    // Gerente sempre posiciona em Novo lead; column_key customizado só via admin.
     if (hasCaptador && captadorId) {
-      const column = await resolveInitialKanbanColumn(zaplotoId);
+      const column = await resolveKanbanColumn(zaplotoId, DEFAULT_ASSIGN_COLUMN);
       if (!column) {
         return errorResponse('CRM sem colunas ativas para posicionar os leads no kanban do captador.', 400);
       }
@@ -573,8 +741,8 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadsManagementAccess(req);
-    if (profile.status === 'gerente') {
-      return errorResponse('Gerente não pode excluir leads.', 403);
+    if (profile.status === 'gerente' || profile.status === 'captador') {
+      return errorResponse('Sem permissão para excluir leads.', 403);
     }
     const body = await req.json().catch(() => ({}));
     const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: any) => typeof x === 'string') : [];

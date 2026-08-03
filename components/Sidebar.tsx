@@ -686,8 +686,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSignOut }) => {
         }
       }
 
-      // Garante "Leads" para admin/super_admin/gerente mesmo se o seed dinâmico não tiver crm_leads
-      if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'gerente')) {
+      // Garante "Leads" para admin/super_admin/gerente/captador mesmo se o seed dinâmico não tiver crm_leads
+      if (!hasLeads && (userStatus === 'super_admin' || userStatus === 'admin' || userStatus === 'gerente' || userStatus === 'captador')) {
         const crmIdx = items.findIndex((it) => it.label === 'CRM');
         const leadsSub = { href: '/admin/leads', icon: UserPlus, label: 'Leads' };
         if (crmIdx >= 0) {

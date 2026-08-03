@@ -37,7 +37,7 @@ export default function AdminLeadsPage() {
     loadProfile();
   }, [userId]);
 
-  const canAccess = status === 'super_admin' || status === 'admin' || status === 'gerente' || hasLeadsSidebar;
+  const canAccess = status === 'super_admin' || status === 'admin' || status === 'gerente' || status === 'captador' || hasLeadsSidebar;
 
   if (checking || loadingStatus) {
     return (
@@ -56,7 +56,7 @@ export default function AdminLeadsPage() {
           <div className="text-center bg-white dark:bg-[#241e19] p-8 rounded-xl shadow-lg border border-stone-200 dark:border-white/10">
             <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
             <h1 className="text-xl font-bold text-stone-800 dark:text-stone-50 mb-2">Acesso Negado</h1>
-            <p className="text-stone-600 dark:text-stone-400 mb-4">Acesso restrito a administradores e gerentes.</p>
+            <p className="text-stone-600 dark:text-stone-400 mb-4">Acesso restrito a administradores, gerentes e captadores.</p>
             <button
               onClick={() => router.push('/')}
               className="px-4 py-2 bg-[#E86A24] text-white rounded-lg hover:bg-[#D95E1B] transition"
@@ -84,7 +84,12 @@ export default function AdminLeadsPage() {
             <span className="text-stone-400 dark:text-stone-600">/</span>
             <span className="text-stone-600 dark:text-stone-400 font-medium">Leads</span>
           </div>
-          {userId && <LeadsSection userId={userId} userRole={status === 'gerente' ? 'gerente' : 'admin'} />}
+          {userId && (
+            <LeadsSection
+              userId={userId}
+              userRole={status === 'gerente' ? 'gerente' : status === 'captador' ? 'captador' : 'admin'}
+            />
+          )}
         </div>
       </div>
     </Layout>

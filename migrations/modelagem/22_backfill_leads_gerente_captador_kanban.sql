@@ -51,7 +51,7 @@ resolved_columns AS (
           WHEN 'pendente' THEN 'status_pendente'
           WHEN 'em_contato' THEN 'status_em_atendimento'
           WHEN 'convertido' THEN 'status_convertido'
-          WHEN 'descartado' THEN 'status_encerrado'
+          WHEN 'descartado' THEN 'lixo'
           ELSE 'novo'
         END,
         'novo'
@@ -61,7 +61,7 @@ resolved_columns AS (
         WHEN 'pendente' THEN 'status_pendente'
         WHEN 'em_contato' THEN 'status_em_atendimento'
         WHEN 'convertido' THEN 'status_convertido'
-        WHEN 'descartado' THEN 'status_encerrado'
+        WHEN 'descartado' THEN 'lixo'
         ELSE 'novo'
       END) DESC,
       (c.zaploto_id = cl.zaploto_id) DESC,
