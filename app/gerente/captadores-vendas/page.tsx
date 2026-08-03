@@ -71,7 +71,7 @@ export default function GerenteCaptadoresVendasPage() {
             Taxa de vendas — Captadores
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Conversão dos captadores da sua equipe com base em vendas fechadas no CRM Kanban (coluna &quot;Cliente ganho&quot;).
+            Conversão dos captadores da sua equipe: leads na coluna &quot;Convertido&quot; ou marcados como venda fechada.
           </p>
         </div>
 

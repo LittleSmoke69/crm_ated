@@ -15,8 +15,6 @@ const SCAN_MAX = 20000;
 /** PostgREST .in() na querystring — chunks grandes geram 414. */
 const IN_CHUNK = 80;
 const STAGE_UPSERT_CHUNK = 200;
-/** Coluna de venda fechada no kanban. */
-const WON_COLUMN = 'ganho';
 /** Coluna padrão ao atribuir lead ao captador. */
 const DEFAULT_ASSIGN_COLUMN = 'novo';
 
@@ -85,51 +83,200 @@ async function listActiveKanbanColumns(zaplotoId: string | null) {
   }));
 }
 
-/** Total de vendas fechadas (coluna ganho) no escopo dos captadores. */
-async function countWonSales(captadorIds: string[]) {
-  if (captadorIds.length === 0) {
-    return { total_leads: 0, total_vendas: 0, taxa: 0 };
+/** Fallback de keys conhecidas (além das resolvidas pelo título). */
+const WON_COLUMN_KEY_FALLBACKS = ['status_convertido', 'convertido', 'ganho'] as const;
+const VENDA_TAG_LABELS = ['venda', 'venda fechada'];
+
+type CaptadorSalesRow = {
+  id: string;
+  name: string;
+  total_leads: number;
+  vendas_fechadas: number;
+  taxa_vendas: number;
+};
+
+type SalesSummary = {
+  total_leads: number;
+  total_vendas: number;
+  taxa: number;
+  by_captador: CaptadorSalesRow[];
+};
+
+function normalizeLabel(v: string): string {
+  return String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+/** Colunas que contam como venda: Convertido, Cliente ganho, Venda fechada (por título ou key). */
+async function resolveWonColumnKeys(): Promise<string[]> {
+  const { data } = await supabaseServiceRole
+    .from('crm_columns')
+    .select('key, title')
+    .eq('is_active', true);
+
+  const keys = new Set<string>([...WON_COLUMN_KEY_FALLBACKS]);
+  for (const c of data || []) {
+    const key = String((c as { key?: string }).key || '');
+    if (!key) continue;
+    const titleN = normalizeLabel((c as { title?: string }).title || '');
+    const keyN = normalizeLabel(key);
+    if (
+      titleN.includes('convertid') ||
+      titleN.includes('venda fechada') ||
+      titleN.includes('cliente ganho') ||
+      keyN.includes('convertid') ||
+      keyN === 'ganho' ||
+      (keyN.includes('venda') && keyN.includes('fechad'))
+    ) {
+      keys.add(key);
+    }
   }
+  return [...keys];
+}
+
+/** Ids das etiquetas de venda (Venda / Venda fechada). */
+async function resolveVendaTagIds(): Promise<string[]> {
+  const { data } = await supabaseServiceRole.from('crm_tags').select('id, label');
+  const wanted = new Set(VENDA_TAG_LABELS);
+  return (data || [])
+    .filter((t: any) => wanted.has(normalizeLabel(t.label || '')))
+    .map((t: any) => String(t.id));
+}
+
+/**
+ * Vendas fechadas (OR), alinhado ao kanban:
+ * - estágio do captador em Convertido / ganho / venda fechada, OU
+ * - sem estágio mas a 1ª coluna do funil é Convertido (mesmo fallback do board), OU
+ * - etiqueta Venda / Venda fechada
+ */
+async function countWonSales(
+  captadorIds: string[],
+  nameById: Map<string, string>
+): Promise<SalesSummary> {
+  const empty: SalesSummary = { total_leads: 0, total_vendas: 0, taxa: 0, by_captador: [] };
+  if (captadorIds.length === 0) return empty;
+
+  const stats = new Map<string, { total: number; vendas: number }>();
+  for (const id of captadorIds) stats.set(id, { total: 0, vendas: 0 });
+
+  const { data: cols } = await supabaseServiceRole
+    .from('crm_columns')
+    .select('key, title, sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+  const firstKey = String((cols?.[0] as { key?: string } | undefined)?.key || 'novo');
+  const wonKeys = new Set(await resolveWonColumnKeys());
+  // Se a 1ª coluna do kanban é Convertido, leads sem estágio caem nela (paridade com /api/crm/board)
+  const defaultIsWon = wonKeys.has(firstKey);
 
   const leadPairs: { external_id: string; user_id: string }[] = [];
   for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
-    const { data, error } = await supabaseServiceRole
-      .from('crm_leads')
-      .select('external_id, user_id')
-      .in('user_id', chunk);
-    if (error) throw new Error(error.message);
-    for (const row of data || []) {
-      const uid = (row as { user_id?: string }).user_id;
-      if (!uid) continue;
-      leadPairs.push({
-        external_id: String((row as { external_id: number | string }).external_id),
-        user_id: uid,
-      });
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabaseServiceRole
+        .from('crm_leads')
+        .select('external_id, user_id')
+        .in('user_id', chunk)
+        .range(from, from + SCAN_PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = data || [];
+      for (const row of batch) {
+        const uid = (row as { user_id?: string }).user_id;
+        if (!uid || !stats.has(uid)) continue;
+        leadPairs.push({
+          external_id: String((row as { external_id: number | string }).external_id),
+          user_id: uid,
+        });
+        stats.get(uid)!.total += 1;
+      }
+      if (batch.length < SCAN_PAGE) break;
+      from += SCAN_PAGE;
     }
   }
 
-  const wonSet = new Set<string>();
-  const extIds = [...new Set(leadPairs.map((p) => p.external_id))];
-  for (const chunk of chunkArray(extIds, IN_CHUNK)) {
-    const { data: stages, error } = await supabaseServiceRole
-      .from('crm_lead_stage')
-      .select('lead_external_id, user_id')
-      .in('lead_external_id', chunk)
-      .eq('column_key', WON_COLUMN);
-    if (error) throw new Error(error.message);
-    for (const s of stages || []) {
-      const row = s as { lead_external_id: string; user_id: string };
-      wonSet.add(`${row.lead_external_id}:${row.user_id}`);
+  // Estágio atual por lead+captador
+  const stageByLeadUser = new Map<string, string>();
+  for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabaseServiceRole
+        .from('crm_lead_stage')
+        .select('lead_external_id, user_id, column_key')
+        .in('user_id', chunk)
+        .range(from, from + SCAN_PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = data || [];
+      for (const s of batch) {
+        const row = s as { lead_external_id: string; user_id: string; column_key: string };
+        stageByLeadUser.set(`${String(row.lead_external_id)}:${row.user_id}`, row.column_key);
+      }
+      if (batch.length < SCAN_PAGE) break;
+      from += SCAN_PAGE;
     }
   }
 
-  let totalVendas = 0;
+  const wonLeadKeys = new Set<string>();
   for (const p of leadPairs) {
-    if (wonSet.has(`${p.external_id}:${p.user_id}`)) totalVendas += 1;
+    const key = `${p.external_id}:${p.user_id}`;
+    const col = stageByLeadUser.get(key) ?? (defaultIsWon ? firstKey : null);
+    if (col && wonKeys.has(col)) wonLeadKeys.add(key);
   }
-  const totalLeads = leadPairs.length;
+
+  const vendaTagIds = await resolveVendaTagIds();
+  if (vendaTagIds.length > 0) {
+    for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
+      let from = 0;
+      for (;;) {
+        const { data, error } = await supabaseServiceRole
+          .from('crm_lead_tags')
+          .select('lead_external_id, user_id')
+          .in('user_id', chunk)
+          .in('tag_id', vendaTagIds)
+          .range(from, from + SCAN_PAGE - 1);
+        if (error) throw new Error(error.message);
+        const batch = data || [];
+        for (const t of batch) {
+          const row = t as { lead_external_id: string; user_id: string };
+          if (!stats.has(row.user_id)) continue;
+          wonLeadKeys.add(`${String(row.lead_external_id)}:${row.user_id}`);
+        }
+        if (batch.length < SCAN_PAGE) break;
+        from += SCAN_PAGE;
+      }
+    }
+  }
+
+  for (const key of wonLeadKeys) {
+    const uid = key.slice(key.lastIndexOf(':') + 1);
+    const st = stats.get(uid);
+    if (st) st.vendas += 1;
+  }
+
+  let totalLeads = 0;
+  let totalVendas = 0;
+  const byCaptador: CaptadorSalesRow[] = [];
+  for (const id of captadorIds) {
+    const st = stats.get(id) ?? { total: 0, vendas: 0 };
+    totalLeads += st.total;
+    totalVendas += st.vendas;
+    const taxa = st.total > 0 ? Math.round((st.vendas / st.total) * 1000) / 10 : 0;
+    byCaptador.push({
+      id,
+      name: nameById.get(id) || 'Captador',
+      total_leads: st.total,
+      vendas_fechadas: st.vendas,
+      taxa_vendas: taxa,
+    });
+  }
+  byCaptador.sort(
+    (a, b) => b.vendas_fechadas - a.vendas_fechadas || b.taxa_vendas - a.taxa_vendas || a.name.localeCompare(b.name)
+  );
+
   const taxa = totalLeads > 0 ? Math.round((totalVendas / totalLeads) * 1000) / 10 : 0;
-  return { total_leads: totalLeads, total_vendas: totalVendas, taxa };
+  return { total_leads: totalLeads, total_vendas: totalVendas, taxa, by_captador: byCaptador };
 }
 
 async function fetchLeadsByIds(ids: string[]) {
@@ -387,12 +534,21 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const captadorProfiles = isCaptador
+      ? []
+      : isGerente
+        ? teamCaptadores
+        : profiles.filter((p: any) => p.status === 'captador');
     const salesScopeIds = isCaptador
       ? [userId]
-      : isGerente
-        ? [...new Set([...teamCaptadorIds, userId])]
-        : profiles.filter((p: any) => p.status === 'captador').map((p: any) => p.id as string);
-    const sales = await countWonSales(salesScopeIds);
+      : captadorProfiles.map((p: any) => p.id as string);
+    const nameById = new Map<string, string>(
+      captadorProfiles.map((p: any) => [p.id as string, (p.full_name || p.email || 'Captador') as string])
+    );
+    if (isCaptador) {
+      nameById.set(userId, profile.full_name || profile.email || 'Captador');
+    }
+    const sales = await countWonSales(salesScopeIds, nameById);
     const columns = await listActiveKanbanColumns(zaplotoId);
 
     return successResponse({

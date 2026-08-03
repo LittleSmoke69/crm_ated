@@ -26,7 +26,7 @@ type Client = {
 };
 type Attendant = { id: string; name: string };
 
-const WON_COLUMN_KEY = 'ganho';
+const WON_COLUMN_KEY = 'status_convertido';
 /** Evita travar o browser ao renderizar milhares de cards de uma vez. */
 const CARDS_PER_COLUMN_STEP = 100;
 

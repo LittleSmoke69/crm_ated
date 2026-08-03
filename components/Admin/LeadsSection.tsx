@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Columns3,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
   Eye,
@@ -44,7 +46,19 @@ type CapturedLead = {
 
 type PersonOption = { id: string; name: string; enroller?: string | null };
 type KanbanColumnOption = { id: string; key: string; title: string };
-type SalesSummary = { total_leads: number; total_vendas: number; taxa: number };
+type CaptadorSalesRow = {
+  id: string;
+  name: string;
+  total_leads: number;
+  vendas_fechadas: number;
+  taxa_vendas: number;
+};
+type SalesSummary = {
+  total_leads: number;
+  total_vendas: number;
+  taxa: number;
+  by_captador: CaptadorSalesRow[];
+};
 
 const STATUS_OPTIONS = [
   { value: 'pendente', label: 'Pendente', cls: 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10' },
@@ -196,7 +210,9 @@ export default function LeadsSection({
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
   const [columns, setColumns] = useState<KanbanColumnOption[]>([]);
   const [defaultColumnKey, setDefaultColumnKey] = useState('novo');
-  const [sales, setSales] = useState<SalesSummary>({ total_leads: 0, total_vendas: 0, taxa: 0 });
+  const [sales, setSales] = useState<SalesSummary>({ total_leads: 0, total_vendas: 0, taxa: 0, by_captador: [] });
+  const [showSalesBreakdown, setShowSalesBreakdown] = useState(false);
+  const [showZeroSalesCaptadores, setShowZeroSalesCaptadores] = useState(false);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(50);
@@ -282,6 +298,7 @@ export default function LeadsSection({
           total_leads: json.data.sales.total_leads || 0,
           total_vendas: json.data.sales.total_vendas || 0,
           taxa: json.data.sales.taxa || 0,
+          by_captador: Array.isArray(json.data.sales.by_captador) ? json.data.sales.by_captador : [],
         });
       }
       if (!opts?.preserveSelection) {
@@ -688,6 +705,28 @@ export default function LeadsSection({
     }
   };
 
+  const salesByCaptadorSorted = useMemo(() => {
+    return [...sales.by_captador].sort(
+      (a, b) =>
+        b.vendas_fechadas - a.vendas_fechadas ||
+        b.taxa_vendas - a.taxa_vendas ||
+        b.total_leads - a.total_leads ||
+        a.name.localeCompare(b.name, 'pt-BR')
+    );
+  }, [sales.by_captador]);
+
+  const salesWithVendas = useMemo(
+    () => salesByCaptadorSorted.filter((c) => c.vendas_fechadas > 0),
+    [salesByCaptadorSorted]
+  );
+  const salesWithoutVendas = useMemo(
+    () => salesByCaptadorSorted.filter((c) => c.vendas_fechadas <= 0),
+    [salesByCaptadorSorted]
+  );
+  const salesRowsVisible = showZeroSalesCaptadores
+    ? salesByCaptadorSorted
+    : salesWithVendas;
+
   const teamCaptadores = useMemo(() => {
     if (!isGerente) return captadores;
     return captadores.filter((c) => c.enroller === userId);
@@ -780,35 +819,95 @@ export default function LeadsSection({
       </div>
 
       {/* Card: vendas fechadas */}
-      <div className="rounded-2xl border border-emerald-500/25 bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/40 dark:to-[#241e19] p-5 sm:p-6 flex flex-wrap items-center gap-5">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-          <Trophy className="w-6 h-6" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700/80 dark:text-emerald-300/80">
-            Vendas fechadas
-          </p>
-          <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums">
-            {sales.total_vendas}
-          </p>
-          <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
-            {isCaptador
-              ? 'Dos seus leads no kanban (coluna Cliente ganho)'
-              : isGerente
-                ? 'Sua equipe — leads na coluna Cliente ganho'
-                : 'Todos os captadores — leads na coluna Cliente ganho'}
-          </p>
-        </div>
-        <div className="flex gap-6 text-sm">
-          <div>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Leads atribuídos</p>
-            <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums">{sales.total_leads}</p>
+      <div className="rounded-2xl border border-emerald-500/25 bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/40 dark:to-[#241e19] overflow-hidden">
+        <div className="p-5 sm:p-6 flex flex-wrap items-center gap-5">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+            <Trophy className="w-6 h-6" />
           </div>
-          <div>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Taxa</p>
-            <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">{sales.taxa}%</p>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700/80 dark:text-emerald-300/80">
+              Vendas fechadas
+            </p>
+            <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums">
+              {sales.total_vendas}
+            </p>
+            <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
+              {isCaptador
+                ? 'Mesma contagem do seu kanban (Convertido ou venda fechada)'
+                : isGerente
+                  ? 'Paridade com o kanban — Convertido ou venda fechada por captador'
+                  : 'Paridade com o kanban — Convertido ou venda fechada por captador'}
+            </p>
           </div>
+          <div className="flex gap-6 text-sm">
+            <div>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Leads atribuídos</p>
+              <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums">{sales.total_leads}</p>
+            </div>
+            <div>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Taxa</p>
+              <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">{sales.taxa}%</p>
+            </div>
+          </div>
+          {!isCaptador && salesWithVendas.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowSalesBreakdown((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-emerald-500/35 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
+            >
+              {showSalesBreakdown ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              Por captador ({salesWithVendas.length})
+            </button>
+          )}
         </div>
+        {!isCaptador && showSalesBreakdown && salesRowsVisible.length > 0 && (
+          <div className="border-t border-emerald-500/20">
+            <div className="px-4 py-2 flex flex-wrap items-center justify-between gap-2 bg-emerald-500/5 text-xs text-stone-500 dark:text-stone-400">
+              <span>
+                Ordenado por vendas · {salesWithVendas.length} com venda
+                {salesWithoutVendas.length > 0 ? ` · ${salesWithoutVendas.length} sem venda` : ''}
+              </span>
+              {salesWithoutVendas.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowZeroSalesCaptadores((v) => !v)}
+                  className="font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
+                >
+                  {showZeroSalesCaptadores ? 'Ocultar sem vendas' : 'Mostrar sem vendas'}
+                </button>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 bg-emerald-50 dark:bg-emerald-950/60">
+                    <th className="px-4 py-2.5 font-semibold w-10">#</th>
+                    <th className="px-4 py-2.5 font-semibold">Captador</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Leads</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Vendas</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Taxa</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-emerald-500/10">
+                  {salesRowsVisible.map((c, idx) => (
+                    <tr
+                      key={c.id}
+                      className={`hover:bg-emerald-500/5 ${c.vendas_fechadas > 0 ? '' : 'opacity-50'}`}
+                    >
+                      <td className="px-4 py-2.5 tabular-nums text-stone-400 text-xs">{idx + 1}</td>
+                      <td className="px-4 py-2.5 font-semibold text-stone-900 dark:text-stone-50">{c.name}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-stone-700 dark:text-stone-300">{c.total_leads}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-bold text-emerald-700 dark:text-emerald-300">
+                        {c.vendas_fechadas}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-bold text-stone-800 dark:text-stone-100">{c.taxa_vendas}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Filtros */}
