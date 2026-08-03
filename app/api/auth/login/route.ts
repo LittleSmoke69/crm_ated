@@ -5,6 +5,7 @@ import { getTenantByIdOrSlug } from '@/lib/services/zaploto-tenant-service';
 import { checkIpRateLimit } from '@/lib/server/ip-rate-limit';
 import { appendSessionCookie } from '@/lib/server/session-token';
 import { normalizeStatus } from '@/lib/middleware/permissions';
+import { applyEnvSuperAdminStatus, isEnvSuperAdmin } from '@/lib/server/env-super-admins';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 
 const DEFAULT_ZAPLOTO_ID = '00000000-0000-0000-0000-000000000001';
@@ -56,6 +57,17 @@ export async function POST(req: NextRequest) {
       return errorResponse('Credenciais inválidas.', 401);
     }
 
+    if (
+      isEnvSuperAdmin(user.username, user.email) &&
+      String(user.status || '').toLowerCase() !== 'super_admin'
+    ) {
+      await supabaseServiceRole
+        .from('profiles')
+        .update({ status: 'super_admin' })
+        .eq('id', user.id);
+      (user as { status: string }).status = 'super_admin';
+    }
+
     // Usuário desativado (user_settings.is_active = false) não pode entrar
     const { data: settings } = await supabaseServiceRole
       .from('user_settings')
@@ -73,7 +85,11 @@ export async function POST(req: NextRequest) {
       }
       const profileZaplotoId =
         (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID;
-      const role = user.status as string | null | undefined;
+      const role = applyEnvSuperAdminStatus(
+        user.status as string | null | undefined,
+        user.username,
+        user.email
+      );
       if (role !== 'super_admin' && profileZaplotoId !== tenant.id) {
         return errorResponse('Credenciais inválidas para este painel.', 403);
       }
@@ -85,11 +101,17 @@ export async function POST(req: NextRequest) {
       .update({ last_login_at: new Date().toISOString() })
       .eq('id', user.id);
 
+    const effectiveStatus = applyEnvSuperAdminStatus(
+      normalizeStatus(user.status),
+      user.username,
+      user.email
+    );
+
     const res = successResponse({
       userId: user.id,
       email: user.email,
       username: user.username,
-      status: normalizeStatus(user.status) ?? null,
+      status: effectiveStatus ?? null,
       zaploto_id:
         (user.zaploto_id as string | null | undefined)?.trim() || DEFAULT_ZAPLOTO_ID,
     });

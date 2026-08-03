@@ -9,6 +9,7 @@ import {
   hasSidebarPermission,
   normalizeStatus,
 } from '@/lib/middleware/permissions';
+import { applyEnvSuperAdminStatus, isEnvSuperAdmin } from '@/lib/server/env-super-admins';
 import { successResponse, errorResponse } from '@/lib/utils/response';
 
 async function canAccessAdminPanel(userId: string): Promise<boolean> {
@@ -62,6 +63,18 @@ export async function POST(req: NextRequest) {
       return errorResponse('Credenciais inválidas.', 401);
     }
 
+    // Eleva via SUPER_ADMIN_USERNAMES antes das checagens de painel
+    if (
+      isEnvSuperAdmin(user.username, user.email) &&
+      String(user.status || '').toLowerCase() !== 'super_admin'
+    ) {
+      await supabaseServiceRole
+        .from('profiles')
+        .update({ status: 'super_admin' })
+        .eq('id', user.id);
+      (user as { status: string }).status = 'super_admin';
+    }
+
     const canAccess = await canAccessAdminPanel(user.id);
     if (!canAccess) {
       return errorResponse('Acesso negado. Esta conta não possui permissões de administrador.', 403);
@@ -82,11 +95,17 @@ export async function POST(req: NextRequest) {
       .update({ last_login_at: new Date().toISOString() })
       .eq('id', user.id);
 
+    const effectiveStatus = applyEnvSuperAdminStatus(
+      normalizeStatus(user.status),
+      user.username,
+      user.email
+    );
+
     const res = successResponse({
       userId: user.id,
       email: user.email,
       username: user.username,
-      status: normalizeStatus(user.status) ?? null,
+      status: effectiveStatus ?? null,
     });
     await appendSessionCookie(res, user.id);
     return res;

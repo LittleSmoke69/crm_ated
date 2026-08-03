@@ -175,6 +175,86 @@ export async function getSidebarItemsForRole(
     }
   }
 
+  // Admin / super_admin: Kanban SEMPRE no submenu CRM (fallback hardcoded se faltar no DB)
+  if (roleCode === 'super_admin' || roleCode === 'admin') {
+    const kanbanInCrm = root.some((i) =>
+      i.submenu?.some((s) => s.href === '/crm/kanban' || s.code === 'crm_kanban')
+    );
+
+    if (!kanbanInCrm) {
+      let kanban: SidebarItem | null = null;
+      const { data: kanbanItem } = await supabaseServiceRole
+        .from('zaploto_sidebar_items')
+        .select('id, code, label, href, icon_name, parent_code, sort_order')
+        .eq('zaploto_id', zaplotoId)
+        .eq('code', 'crm_kanban')
+        .maybeSingle();
+
+      if (kanbanItem) {
+        kanban = {
+          id: kanbanItem.id,
+          code: kanbanItem.code,
+          label: kanbanItem.label || 'Kanban',
+          href: kanbanItem.href || '/crm/kanban',
+          icon_name: kanbanItem.icon_name || 'Kanban',
+          parent_code: 'crm',
+          sort_order: typeof kanbanItem.sort_order === 'number' ? kanbanItem.sort_order : 0,
+        };
+      } else {
+        kanban = {
+          id: `forced-crm-kanban-${zaplotoId}`,
+          code: 'crm_kanban',
+          label: 'Kanban',
+          href: '/crm/kanban',
+          icon_name: 'Kanban',
+          parent_code: 'crm',
+          sort_order: 0,
+        };
+      }
+
+      // Remove Kanban solto na raiz (se existir) para colocar dentro do CRM
+      for (let i = root.length - 1; i >= 0; i--) {
+        if (root[i].href === '/crm/kanban' || root[i].code === 'crm_kanban') {
+          root.splice(i, 1);
+        }
+      }
+
+      let crmParent =
+        root.find((i) => i.code === 'crm' || i.label === 'CRM') ||
+        root.find((i) =>
+          i.submenu?.some(
+            (s) =>
+              s.href === '/admin/leads' ||
+              (s.href || '').startsWith('/crm/') ||
+              s.code?.startsWith('crm_')
+          )
+        );
+
+      if (!crmParent) {
+        crmParent = {
+          id: `crm-forced-${zaplotoId}`,
+          code: 'crm',
+          label: 'CRM',
+          href: null,
+          icon_name: 'Layout',
+          parent_code: null,
+          sort_order: 10,
+          submenu: [],
+        };
+        root.push(crmParent);
+      }
+
+      const subs = [...(crmParent.submenu || [])].filter(
+        (s) => s.href !== '/crm/kanban' && s.code !== 'crm_kanban'
+      );
+      const leadsIdx = subs.findIndex(
+        (s) => s.href === '/admin/leads' || s.code === 'crm_leads' || s.label === 'Leads'
+      );
+      subs.splice(leadsIdx >= 0 ? leadsIdx + 1 : 0, 0, kanban);
+      crmParent.submenu = subs;
+    }
+  }
+
   return root.sort((a, b) => a.sort_order - b.sort_order);
 }
 

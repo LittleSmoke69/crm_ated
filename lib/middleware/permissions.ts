@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { requireAuth } from './auth';
+import { applyEnvSuperAdminStatus } from '@/lib/server/env-super-admins';
 
 /** Linha de cargos ativa: Super Admin > Admin > Gerente > Captador. */
 export type ActiveUserStatus = 'super_admin' | 'admin' | 'gerente' | 'captador';
@@ -79,7 +80,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     try {
       const { data, error } = await supabaseServiceRole
         .from('profiles')
-        .select('id, email, full_name, status, enroller, created_at, banca_url, banca_name, telefone, zaploto_id, theme_preference')
+        .select('id, email, username, full_name, status, enroller, created_at, banca_url, banca_name, telefone, zaploto_id, theme_preference')
         .eq('id', userId)
         .single();
 
@@ -99,7 +100,18 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
         return null;
       }
 
-      return { ...data, status: normalizeStatus((data as { status?: string | null }).status) } as UserProfile;
+      const row = data as {
+        status?: string | null;
+        username?: string | null;
+        email?: string | null;
+      };
+      const status = applyEnvSuperAdminStatus(
+        normalizeStatus(row.status),
+        row.username,
+        row.email
+      ) as UserProfile['status'];
+
+      return { ...data, status } as UserProfile;
     } catch (error: unknown) {
       const e = error as { message?: string; code?: string };
       if (isNetworkOrUnavailableError(e) && attempt < GET_PROFILE_MAX_RETRIES) {
