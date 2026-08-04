@@ -71,7 +71,7 @@ export default function AdminLeadsPage() {
 
   return (
     <Layout>
-      <div className="min-h-screen bg-stone-50 dark:bg-[#1a1612] overflow-x-hidden">
+      <div className="min-h-screen bg-stone-50 dark:bg-[#1a1612]">
         <div className="p-3 sm:p-4 md:p-6 max-w-[1600px] w-full mx-auto min-w-0">
           <div className="flex items-center gap-2 text-sm mb-6">
             <button
@@ -87,7 +87,13 @@ export default function AdminLeadsPage() {
           {userId && (
             <LeadsSection
               userId={userId}
-              userRole={status === 'gerente' ? 'gerente' : status === 'captador' ? 'captador' : 'admin'}
+              userRole={
+                String(status || '').toLowerCase() === 'gerente'
+                  ? 'gerente'
+                  : String(status || '').toLowerCase() === 'captador'
+                    ? 'captador'
+                    : 'admin'
+              }
             />
           )}
         </div>

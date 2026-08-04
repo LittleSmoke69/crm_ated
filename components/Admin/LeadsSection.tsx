@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Columns3,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -80,6 +79,63 @@ function columnSelectCls(key: string | null | undefined, title?: string | null):
     return 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10';
   }
   return 'border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10';
+}
+
+/** Select nativo da coluna CRM — abre o menu do SO (não depende de modal/portal). */
+function CrmColumnSelect({
+  lead,
+  columns,
+  disabled,
+  onChange,
+  onFocusSelect,
+}: {
+  lead: CapturedLead;
+  columns: KanbanColumnOption[];
+  disabled?: boolean;
+  onChange: (key: string) => void;
+  onFocusSelect?: () => void;
+}) {
+  const options = useMemo(() => {
+    const list = [...columns];
+    if (lead.column_key && !list.some((c) => c.key === lead.column_key)) {
+      list.unshift({
+        id: `current-${lead.id}-${lead.column_key}`,
+        key: lead.column_key,
+        title: lead.column_title || lead.column_key,
+      });
+    }
+    return list;
+  }, [columns, lead.column_key, lead.column_title, lead.id]);
+
+  const value =
+    lead.column_key && options.some((c) => c.key === lead.column_key)
+      ? lead.column_key
+      : lead.column_key || '';
+
+  return (
+    <select
+      value={value}
+      disabled={Boolean(disabled)}
+      onFocus={() => onFocusSelect?.()}
+      onMouseDown={() => onFocusSelect?.()}
+      onChange={(e) => {
+        const next = e.target.value;
+        if (!next || next === lead.column_key) return;
+        onChange(next);
+      }}
+      title={lead.column_title || 'Coluna do kanban'}
+      className={`w-full min-w-[15rem] max-w-[18rem] px-3 py-2.5 min-h-[48px] rounded-xl text-sm font-bold border shadow-sm cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${columnSelectCls(lead.column_key, lead.column_title)} bg-white dark:bg-[#2a221c]`}
+      style={{ appearance: 'auto', WebkitAppearance: 'menulist' }}
+    >
+      {options.length === 0 && <option value={value || ''}>{value ? (lead.column_title || value) : 'Carregando colunas…'}</option>}
+      {!value && options.length > 0 && <option value="">Sem coluna</option>}
+      {options.map((c) => (
+        <option key={c.id} value={c.key}>
+          {c.title}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
@@ -214,10 +270,12 @@ export default function LeadsSection({
   userId: string;
   userRole?: 'admin' | 'gerente' | 'captador';
 }) {
-  const isGerente = userRole === 'gerente';
-  const isCaptador = userRole === 'captador';
-  const isAdmin = userRole === 'admin';
+  const role = String(userRole || 'admin').toLowerCase();
+  const isGerente = role === 'gerente';
+  const isCaptador = role === 'captador';
+  const isAdmin = role === 'admin' || role === 'super_admin';
   const canManage = !isCaptador;
+  const canEditColumn = !isCaptador;
   const [leads, setLeads] = useState<CapturedLead[]>([]);
   const [gerentes, setGerentes] = useState<PersonOption[]>([]);
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
@@ -257,8 +315,7 @@ export default function LeadsSection({
   const [importDest, setImportDest] = useState({ gerente_id: '' });
   const [assignLeads, setAssignLeads] = useState<CapturedLead[] | null>(null);
   const [assignForm, setAssignForm] = useState({ gerente_id: '', captador_id: '' });
-  const [moveColumnLeads, setMoveColumnLeads] = useState<CapturedLead[] | null>(null);
-  const [moveColumnKey, setMoveColumnKey] = useState('novo');
+  const [bulkColumnKey, setBulkColumnKey] = useState('');
   const [viewLead, setViewLead] = useState<CapturedLead | null>(null);
   const [editingLeadInfo, setEditingLeadInfo] = useState(false);
   const [editLeadForm, setEditLeadForm] = useState({ name: '', phone: '', email: '' });
@@ -666,23 +723,21 @@ export default function LeadsSection({
     }
   };
 
-  const submitMoveColumn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!moveColumnLeads || !moveColumnKey) return;
-    const withCaptador = moveColumnLeads.filter((l) => l.captador_id);
+  const applyBulkColumn = async (columnKey: string) => {
+    if (!columnKey) return;
+    const withCaptador = selectedLeadObjs.filter((l) => l.captador_id);
     if (withCaptador.length === 0) {
       showToast('Selecione leads que já tenham captador atribuído.', 'error');
+      setBulkColumnKey('');
       return;
     }
     const ok = await patchLeads(
       withCaptador.map((l) => l.id),
-      { column_key: moveColumnKey },
+      { column_key: columnKey },
       `${withCaptador.length} lead(s) movido(s) de coluna no kanban.`
     );
-    if (ok) {
-      setMoveColumnLeads(null);
-      setMoveColumnKey(defaultColumnKey);
-    }
+    setBulkColumnKey('');
+    if (!ok) return;
   };
 
   const submitDelete = async () => {
@@ -1133,17 +1188,23 @@ export default function LeadsSection({
                 <UserPlus className="w-5 h-5" /> Atribuir
               </button>
               )}
-              {(isAdmin || isGerente) && selectedLeadObjs.some((l) => l.captador_id) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMoveColumnLeads(selectedLeadObjs.filter((l) => l.captador_id));
-                    setMoveColumnKey(defaultColumnKey);
+              {canEditColumn && selectedLeadObjs.some((l) => l.captador_id) && (
+                <select
+                  value={bulkColumnKey}
+                  disabled={busy || columns.length === 0}
+                  onChange={(e) => {
+                    const key = e.target.value;
+                    setBulkColumnKey(key);
+                    if (key) void applyBulkColumn(key);
                   }}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-bold border border-sky-500/40 text-sky-700 dark:text-sky-300 hover:bg-sky-500/10"
+                  className="min-h-[44px] min-w-[12rem] px-3 py-2 rounded-xl text-sm font-bold border border-sky-500/40 text-sky-700 dark:text-sky-300 bg-white dark:bg-[#2a221c]"
+                  title="Trocar coluna dos selecionados"
                 >
-                  <Columns3 className="w-4 h-4" /> Trocar coluna
-                </button>
+                  <option value="">Trocar coluna…</option>
+                  {columns.map((c) => (
+                    <option key={c.id} value={c.key}>{c.title}</option>
+                  ))}
+                </select>
               )}
               {!isGerente && !isCaptador && (
               <button
@@ -1219,31 +1280,30 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l)} className="w-4 h-4 rounded accent-[#E86A24]" />
                     </td>
-                    <td className="px-4 py-3 min-w-[16rem] relative z-10">
+                    <td className="px-4 py-3 min-w-[16rem]">
                       {l.captador_id ? (
-                        isCaptador ? (
+                        canEditColumn ? (
+                          <CrmColumnSelect
+                            lead={l}
+                            columns={columns}
+                            disabled={false}
+                            onFocusSelect={() => {
+                              if (columns.length === 0) void fetchKanbanColumns();
+                            }}
+                            onChange={(key) => {
+                              if (busy) {
+                                showToast('Aguarde a operação atual terminar.', 'error');
+                                return;
+                              }
+                              changeColumn(l, key);
+                            }}
+                          />
+                        ) : (
                           <span
-                            className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm inline-flex items-center ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
+                            className={`inline-flex min-w-[15rem] px-3.5 py-3 min-h-[48px] items-center rounded-xl text-sm font-bold border ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
                           >
                             {l.column_title || l.column_key || 'Sem coluna'}
                           </span>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setMoveColumnLeads([l]);
-                              setMoveColumnKey(l.column_key || defaultColumnKey || columns[0]?.key || 'novo');
-                              if (columns.length === 0) void fetchKanbanColumns();
-                            }}
-                            title="Trocar coluna do CRM"
-                            className={`relative z-20 w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm text-left inline-flex items-center justify-between gap-2 cursor-pointer hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
-                          >
-                            <span className="truncate">{l.column_title || l.column_key || 'Escolher coluna'}</span>
-                            <ChevronDown className="w-4 h-4 shrink-0 opacity-70" />
-                          </button>
                         )
                       ) : isGerente && canManage ? (
                         <button
@@ -1532,49 +1592,6 @@ export default function LeadsSection({
               <button type="button" onClick={() => setAssignLeads(null)} className="px-5 py-3 min-h-[48px] rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-base">Cancelar</button>
               <button type="submit" disabled={busy} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
                 {busy && <Loader2 className="w-5 h-5 animate-spin" />} Atribuir
-              </button>
-            </div>
-          </form>
-        )
-      )}
-
-      {/* Modal: trocar coluna do kanban */}
-      {(isAdmin || isGerente) && moveColumnLeads && modalShell(
-        moveColumnLeads.length === 1
-          ? `Trocar coluna — ${moveColumnLeads[0].name || moveColumnLeads[0].phone || 'lead'}`
-          : `Trocar coluna de ${moveColumnLeads.length} leads`,
-        () => setMoveColumnLeads(null),
-        (
-          <form onSubmit={submitMoveColumn} className="p-5 space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Escolha a coluna do kanban do captador para estes leads.
-            </p>
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {columns.length === 0 ? (
-                <div className="text-sm text-stone-500 flex items-center gap-2 py-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando colunas…
-                </div>
-              ) : (
-                columns.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setMoveColumnKey(c.key)}
-                    className={`w-full text-left px-4 py-3 min-h-[48px] rounded-xl text-base font-bold border transition-colors ${
-                      moveColumnKey === c.key
-                        ? 'border-[#E86A24] bg-[#E86A24]/15 text-[#E86A24]'
-                        : 'border-stone-200 dark:border-white/10 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-white/5'
-                    }`}
-                  >
-                    {c.title}
-                  </button>
-                ))
-              )}
-            </div>
-            <div className="flex justify-end gap-3 pt-2">
-              <button type="button" onClick={() => setMoveColumnLeads(null)} className="px-5 py-3 min-h-[48px] rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-base">Cancelar</button>
-              <button type="submit" disabled={busy || columns.length === 0 || !moveColumnKey} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
-                {busy && <Loader2 className="w-5 h-5 animate-spin" />} Confirmar
               </button>
             </div>
           </form>

@@ -110,31 +110,31 @@ async function resolveKanbanColumn(
 }
 
 async function listActiveKanbanColumns(zaplotoId: string | null) {
-  const mapRows = (rows: any[] | null | undefined) =>
-    (rows || []).map((c: any) => ({
+  // Mesma fonte do kanban (/api/crm/board): todas as colunas ativas.
+  // Filtro por tenant só como preferência de ordenação/dedupe — nunca esconde a lista do gerente.
+  const { data } = await supabaseServiceRole
+    .from('crm_columns')
+    .select('id, key, title, sort_order, zaploto_id')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  const rows = data || [];
+  const preferred = zaplotoId
+    ? rows.filter((c: any) => !c.zaploto_id || c.zaploto_id === zaplotoId)
+    : rows;
+  const use = preferred.length > 0 ? preferred : rows;
+
+  // Dedupa por key (mantém a primeira / menor sort_order)
+  const byKey = new Map<string, { id: string; key: string; title: string }>();
+  for (const c of use as any[]) {
+    if (!c?.key || byKey.has(c.key)) continue;
+    byKey.set(c.key, {
       id: c.id as string,
       key: c.key as string,
       title: (c.title as string) || (c.key as string),
-    }));
-
-  // Paridade com /api/crm/board: gerente/admin precisam ver as mesmas colunas do kanban.
-  // Preferência: tenant + colunas globais (zaploto_id null); se vazio, todas ativas.
-  if (zaplotoId) {
-    const { data: scoped } = await supabaseServiceRole
-      .from('crm_columns')
-      .select('id, key, title, sort_order')
-      .eq('is_active', true)
-      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
-      .order('sort_order', { ascending: true });
-    if (scoped && scoped.length > 0) return mapRows(scoped);
+    });
   }
-
-  const { data } = await supabaseServiceRole
-    .from('crm_columns')
-    .select('id, key, title, sort_order')
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true });
-  return mapRows(data);
+  return Array.from(byKey.values());
 }
 
 /** Estágio atual (column_key) por lead_external_id:user_id. */
