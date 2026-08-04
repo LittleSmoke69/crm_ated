@@ -25,7 +25,8 @@ export default function AdminLeadsPage() {
         ]);
         const profileJson = await profileRes.json();
         const permJson = await permRes.json();
-        setStatus(profileRes.ok && profileJson.success ? profileJson.data?.status ?? null : null);
+        const rawStatus = profileRes.ok && profileJson.success ? profileJson.data?.status ?? null : null;
+        setStatus(typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : null);
         setHasLeadsSidebar(Boolean(permRes.ok && permJson.success && permJson.data?.hasPermission));
       } catch {
         setStatus(null);

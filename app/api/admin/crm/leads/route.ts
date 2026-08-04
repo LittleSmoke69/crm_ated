@@ -693,6 +693,11 @@ export async function GET(req: NextRequest) {
       sales,
       columns,
       default_column_key: DEFAULT_ASSIGN_COLUMN,
+      viewer: {
+        status: profile.status,
+        can_edit_column: !isCaptador,
+        can_assign: !isCaptador,
+      },
       gerentes: isCaptador
         ? []
         : isGerente

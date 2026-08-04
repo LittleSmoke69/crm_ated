@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronDown,
   ChevronUp,
@@ -81,60 +82,147 @@ function columnSelectCls(key: string | null | undefined, title?: string | null):
   return 'border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10';
 }
 
-/** Select nativo da coluna CRM — abre o menu do SO (não depende de modal/portal). */
+/** Dropdown de coluna CRM com menu no body (não fica preso no overflow da tabela). */
 function CrmColumnSelect({
   lead,
   columns,
   disabled,
   onChange,
-  onFocusSelect,
+  onNeedColumns,
 }: {
   lead: CapturedLead;
   columns: KanbanColumnOption[];
   disabled?: boolean;
   onChange: (key: string) => void;
-  onFocusSelect?: () => void;
+  onNeedColumns?: () => Promise<KanbanColumnOption[]>;
 }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [localCols, setLocalCols] = useState<KanbanColumnOption[]>([]);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 240 });
+
   const options = useMemo(() => {
-    const list = [...columns];
-    if (lead.column_key && !list.some((c) => c.key === lead.column_key)) {
-      list.unshift({
+    const base = (columns.length > 0 ? columns : localCols).slice();
+    if (lead.column_key && !base.some((c) => c.key === lead.column_key)) {
+      base.unshift({
         id: `current-${lead.id}-${lead.column_key}`,
         key: lead.column_key,
         title: lead.column_title || lead.column_key,
       });
     }
-    return list;
-  }, [columns, lead.column_key, lead.column_title, lead.id]);
+    return base;
+  }, [columns, localCols, lead.column_key, lead.column_title, lead.id]);
 
-  const value =
-    lead.column_key && options.some((c) => c.key === lead.column_key)
-      ? lead.column_key
-      : lead.column_key || '';
+  const label = lead.column_title || options.find((c) => c.key === lead.column_key)?.title || lead.column_key || 'Escolher coluna';
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.max(r.width, 240);
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+      const below = r.bottom + 4;
+      const spaceBelow = window.innerHeight - below;
+      const top = spaceBelow < 220 && r.top > 220 ? r.top - Math.min(256, spaceBelow + r.height) - 4 : below;
+      setPos({ top, left, width });
+    };
+    place();
+    // Fecha só no próximo tick — evita o mesmo clique que abriu fechar na hora
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const t = window.setTimeout(() => document.addEventListener('mousedown', onDoc), 0);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener('mousedown', onDoc);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  const toggle = async () => {
+    if (disabled) return;
+    const next = !open;
+    setOpen(next);
+    if (!next) return;
+    if (columns.length > 0) {
+      setLocalCols(columns);
+      return;
+    }
+    if (!onNeedColumns) return;
+    setLoading(true);
+    try {
+      const fetched = await onNeedColumns();
+      setLocalCols(fetched);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <select
-      value={value}
-      disabled={Boolean(disabled)}
-      onFocus={() => onFocusSelect?.()}
-      onMouseDown={() => onFocusSelect?.()}
-      onChange={(e) => {
-        const next = e.target.value;
-        if (!next || next === lead.column_key) return;
-        onChange(next);
-      }}
-      title={lead.column_title || 'Coluna do kanban'}
-      className={`w-full min-w-[15rem] max-w-[18rem] px-3 py-2.5 min-h-[48px] rounded-xl text-sm font-bold border shadow-sm cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${columnSelectCls(lead.column_key, lead.column_title)} bg-white dark:bg-[#2a221c]`}
-      style={{ appearance: 'auto', WebkitAppearance: 'menulist' }}
-    >
-      {options.length === 0 && <option value={value || ''}>{value ? (lead.column_title || value) : 'Carregando colunas…'}</option>}
-      {!value && options.length > 0 && <option value="">Sem coluna</option>}
-      {options.map((c) => (
-        <option key={c.id} value={c.key}>
-          {c.title}
-        </option>
-      ))}
-    </select>
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        disabled={Boolean(disabled)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void toggle();
+        }}
+        title="Trocar coluna do CRM"
+        className={`relative z-20 w-full min-w-[15rem] max-w-[18rem] px-3 py-2.5 min-h-[48px] rounded-xl text-sm font-bold border shadow-sm inline-flex items-center justify-between gap-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${columnSelectCls(lead.column_key, lead.column_title)} bg-white dark:bg-[#2a221c]`}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className={`w-4 h-4 shrink-0 opacity-80 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={menuRef}
+            data-crm-column-menu
+            className="fixed z-[99999] max-h-64 overflow-y-auto rounded-xl border border-stone-200 dark:border-white/15 bg-white dark:bg-[#2a221c] shadow-2xl py-1"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {loading && (
+              <div className="px-3 py-2.5 text-sm text-stone-500 flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" /> Carregando…
+              </div>
+            )}
+            {!loading && options.length === 0 && (
+              <div className="px-3 py-2.5 text-sm text-stone-500">Nenhuma coluna encontrada</div>
+            )}
+            {!loading &&
+              options.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`w-full text-left px-3 py-2.5 text-sm font-semibold hover:bg-[#E86A24]/10 ${
+                    c.key === lead.column_key ? 'text-[#E86A24] bg-[#E86A24]/5' : 'text-stone-800 dark:text-stone-100'
+                  }`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setOpen(false);
+                    if (c.key !== lead.column_key) onChange(c.key);
+                  }}
+                >
+                  {c.title}
+                </button>
+              ))}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -270,12 +358,13 @@ export default function LeadsSection({
   userId: string;
   userRole?: 'admin' | 'gerente' | 'captador';
 }) {
-  const role = String(userRole || 'admin').toLowerCase();
+  const [viewerStatus, setViewerStatus] = useState(String(userRole || 'admin').toLowerCase());
+  const [canEditColumn, setCanEditColumn] = useState(String(userRole || '').toLowerCase() !== 'captador');
+  const role = viewerStatus;
   const isGerente = role === 'gerente';
   const isCaptador = role === 'captador';
   const isAdmin = role === 'admin' || role === 'super_admin';
   const canManage = !isCaptador;
-  const canEditColumn = !isCaptador;
   const [leads, setLeads] = useState<CapturedLead[]>([]);
   const [gerentes, setGerentes] = useState<PersonOption[]>([]);
   const [captadores, setCaptadores] = useState<PersonOption[]>([]);
@@ -333,6 +422,27 @@ export default function LeadsSection({
     'X-User-Id': userId,
   }), [userId]);
 
+  // Fonte de verdade do cargo: profile + meta da API de leads (evita gerente cair como captador).
+  useEffect(() => {
+    let cancelled = false;
+    const resolveRole = async () => {
+      try {
+        const res = await fetch('/api/user/profile', { headers: { 'X-User-Id': userId } });
+        const json = await res.json();
+        const status = String(json?.data?.status || userRole || '').toLowerCase().trim();
+        if (cancelled || !status) return;
+        setViewerStatus(status === 'super_admin' ? 'admin' : status);
+        setCanEditColumn(status !== 'captador');
+      } catch {
+        /* ignore */
+      }
+    };
+    void resolveRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, userRole]);
+
   const fetchKanbanColumns = useCallback(async (): Promise<KanbanColumnOption[]> => {
     try {
       const boardRes = await fetch('/api/crm/board', { headers: headers() });
@@ -383,6 +493,21 @@ export default function LeadsSection({
       setCaptadores(json.data.captadores || []);
       setColumns(json.data.columns || []);
       if (json.data.default_column_key) setDefaultColumnKey(json.data.default_column_key);
+      if (json.data.viewer) {
+        const vs = String(json.data.viewer.status || '').toLowerCase().trim();
+        if (vs) setViewerStatus(vs === 'super_admin' ? 'admin' : vs);
+        if (typeof json.data.viewer.can_edit_column === 'boolean') {
+          setCanEditColumn(json.data.viewer.can_edit_column);
+        } else if (vs) {
+          setCanEditColumn(vs !== 'captador');
+        }
+      }
+      // Heurística: API de gerente devolve só o próprio perfil em `gerentes`
+      const gs = json.data.gerentes;
+      if (Array.isArray(gs) && gs.length === 1 && gs[0]?.id === userId) {
+        setViewerStatus('gerente');
+        setCanEditColumn(true);
+      }
       if (!json.data.columns?.length) {
         await fetchKanbanColumns();
       }
@@ -1230,8 +1355,8 @@ export default function LeadsSection({
       )}
 
       {/* Tabela */}
-      <div className={`${surfaceClass} overflow-visible`}>
-        <div className="overflow-x-auto overflow-y-visible">
+      <div className={`${surfaceClass}`}>
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-stone-200 dark:border-white/10 text-left text-xs uppercase tracking-wider text-stone-500 dark:text-stone-400 bg-stone-50/80 dark:bg-black/20">
@@ -1280,16 +1405,15 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l)} className="w-4 h-4 rounded accent-[#E86A24]" />
                     </td>
-                    <td className="px-4 py-3 min-w-[16rem]">
+                    <td className="px-4 py-3 min-w-[16rem] align-top">
                       {l.captador_id ? (
-                        canEditColumn ? (
+                        // Gerente/admin: sempre dropdown. Só captador vê selo estático.
+                        canEditColumn || isGerente || isAdmin ? (
                           <CrmColumnSelect
                             lead={l}
                             columns={columns}
                             disabled={false}
-                            onFocusSelect={() => {
-                              if (columns.length === 0) void fetchKanbanColumns();
-                            }}
+                            onNeedColumns={fetchKanbanColumns}
                             onChange={(key) => {
                               if (busy) {
                                 showToast('Aguarde a operação atual terminar.', 'error');
