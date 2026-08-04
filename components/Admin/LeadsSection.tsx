@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Columns3,
   ChevronDown,
@@ -80,6 +81,102 @@ function columnSelectCls(key: string | null | undefined, title?: string | null):
     return 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10';
   }
   return 'border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10';
+}
+
+/** Dropdown de coluna fora da tabela (evita overflow e select nativo vazio no gerente). */
+function LeadColumnPicker({
+  value,
+  title,
+  columns,
+  disabled,
+  onChange,
+}: {
+  value: string | null;
+  title?: string | null;
+  columns: KanbanColumnOption[];
+  disabled?: boolean;
+  onChange: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 240 });
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.max(r.width, 240);
+      const left = Math.min(r.left, window.innerWidth - width - 8);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+    };
+    update();
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t)) return;
+      if ((e.target as HTMLElement)?.closest?.('[data-lead-col-picker]')) return;
+      setOpen(false);
+    };
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    window.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('mousedown', onDown);
+    };
+  }, [open]);
+
+  const label =
+    title ||
+    columns.find((c) => c.key === value)?.title ||
+    value ||
+    (columns.length === 0 ? 'Carregando colunas…' : 'Escolher coluna');
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        disabled={disabled || columns.length === 0}
+        onClick={() => setOpen((v) => !v)}
+        title={title || 'Coluna do kanban'}
+        className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm text-left inline-flex items-center justify-between gap-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${columnSelectCls(value, title)} bg-white dark:bg-[#2a221c]`}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className="w-4 h-4 shrink-0 opacity-70" />
+      </button>
+      {open &&
+        columns.length > 0 &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-lead-col-picker
+            className="fixed z-[9999] max-h-72 overflow-y-auto rounded-xl border border-stone-200 dark:border-white/15 bg-white dark:bg-[#2a221c] shadow-2xl py-1"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+          >
+            {columns.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`w-full text-left px-3.5 py-2.5 text-sm font-semibold hover:bg-[#E86A24]/10 ${
+                  c.key === value
+                    ? 'text-[#E86A24] bg-[#E86A24]/5'
+                    : 'text-stone-800 dark:text-stone-100'
+                }`}
+                onClick={() => {
+                  setOpen(false);
+                  if (c.key !== value) onChange(c.key);
+                }}
+              >
+                {c.title}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </>
+  );
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
@@ -306,6 +403,25 @@ export default function LeadsSection({
       setCaptadores(json.data.captadores || []);
       setColumns(json.data.columns || []);
       if (json.data.default_column_key) setDefaultColumnKey(json.data.default_column_key);
+      // Fallback: se a API de leads não trouxe colunas, busca as mesmas do kanban
+      if (!json.data.columns?.length) {
+        try {
+          const boardRes = await fetch('/api/crm/board', { headers: headers() });
+          const boardJson = await boardRes.json();
+          const boardCols = boardJson?.data?.columns;
+          if (boardRes.ok && boardJson.success && Array.isArray(boardCols) && boardCols.length > 0) {
+            setColumns(
+              boardCols.map((c: { id: string; key: string; title?: string }) => ({
+                id: c.id,
+                key: c.key,
+                title: c.title || c.key,
+              }))
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       if (json.data.sales) {
         setSales({
           total_leads: json.data.sales.total_leads || 0,
@@ -1194,35 +1310,13 @@ export default function LeadsSection({
                     </td>
                     <td className="px-4 py-3 min-w-[16rem]">
                       {l.captador_id ? (
-                        <select
-                          value={
-                            l.column_key && columns.some((c) => c.key === l.column_key)
-                              ? l.column_key
-                              : l.column_key || ''
-                          }
-                          onChange={(e) => changeColumn(l, e.target.value)}
-                          disabled={busy || isCaptador || columns.length === 0}
-                          title={l.column_title || 'Coluna do kanban'}
-                          className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm ${
-                            isCaptador ? 'cursor-default' : 'cursor-pointer'
-                          } ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
-                        >
-                          {!l.column_key && (
-                            <option value="" disabled>
-                              Sem coluna
-                            </option>
-                          )}
-                          {l.column_key && !columns.some((c) => c.key === l.column_key) && (
-                            <option value={l.column_key}>
-                              {l.column_title || l.column_key}
-                            </option>
-                          )}
-                          {columns.map((c) => (
-                            <option key={c.id} value={c.key} className="bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100">
-                              {c.title}
-                            </option>
-                          ))}
-                        </select>
+                        <LeadColumnPicker
+                          value={l.column_key}
+                          title={l.column_title}
+                          columns={columns}
+                          disabled={busy || isCaptador}
+                          onChange={(key) => changeColumn(l, key)}
+                        />
                       ) : (
                         <span className="inline-flex px-3.5 py-3 min-h-[48px] items-center rounded-xl text-base font-medium border border-dashed border-stone-300 dark:border-white/15 text-stone-400">
                           Sem captador

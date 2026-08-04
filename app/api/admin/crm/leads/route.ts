@@ -40,56 +40,101 @@ async function resolveKanbanColumn(
     'status_pendente',
   ].filter(Boolean);
   const seen = new Set<string>();
-  for (const key of preferredKeys) {
-    if (seen.has(key)) continue;
-    seen.add(key);
-    let q = supabaseServiceRole
+
+  const findByKey = async (key: string) => {
+    if (zaplotoId) {
+      const scoped = await supabaseServiceRole
+        .from('crm_columns')
+        .select('id, key, title')
+        .eq('key', key)
+        .eq('is_active', true)
+        .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+        .limit(1)
+        .maybeSingle();
+      if (scoped.data?.id && scoped.data?.key) {
+        return {
+          id: scoped.data.id,
+          key: scoped.data.key,
+          title: (scoped.data as { title?: string }).title || scoped.data.key,
+        };
+      }
+    }
+    const any = await supabaseServiceRole
       .from('crm_columns')
       .select('id, key, title')
       .eq('key', key)
       .eq('is_active', true)
-      .limit(1);
-    if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
-    const { data } = await q.maybeSingle();
+      .limit(1)
+      .maybeSingle();
+    if (any.data?.id && any.data?.key) {
+      return {
+        id: any.data.id,
+        key: any.data.key,
+        title: (any.data as { title?: string }).title || any.data.key,
+      };
+    }
+    return null;
+  };
+
+  for (const key of preferredKeys) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found = await findByKey(key);
+    if (found) return found;
+  }
+
+  if (zaplotoId) {
+    const { data } = await supabaseServiceRole
+      .from('crm_columns')
+      .select('id, key, title')
+      .eq('is_active', true)
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+      .order('sort_order', { ascending: true })
+      .limit(1)
+      .maybeSingle();
     if (data?.id && data?.key) {
       return { id: data.id, key: data.key, title: (data as { title?: string }).title || data.key };
     }
   }
-  let q = supabaseServiceRole
+
+  const { data } = await supabaseServiceRole
     .from('crm_columns')
     .select('id, key, title')
     .eq('is_active', true)
     .order('sort_order', { ascending: true })
-    .limit(1);
-  if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
-  const { data } = await q.maybeSingle();
+    .limit(1)
+    .maybeSingle();
   return data?.id && data?.key
     ? { id: data.id, key: data.key, title: (data as { title?: string }).title || data.key }
     : null;
 }
 
 async function listActiveKanbanColumns(zaplotoId: string | null) {
-  let q = supabaseServiceRole
+  const mapRows = (rows: any[] | null | undefined) =>
+    (rows || []).map((c: any) => ({
+      id: c.id as string,
+      key: c.key as string,
+      title: (c.title as string) || (c.key as string),
+    }));
+
+  // Paridade com /api/crm/board: gerente/admin precisam ver as mesmas colunas do kanban.
+  // Preferência: tenant + colunas globais (zaploto_id null); se vazio, todas ativas.
+  if (zaplotoId) {
+    const { data: scoped } = await supabaseServiceRole
+      .from('crm_columns')
+      .select('id, key, title, sort_order')
+      .eq('is_active', true)
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`)
+      .order('sort_order', { ascending: true });
+    if (scoped && scoped.length > 0) return mapRows(scoped);
+  }
+
+  const { data } = await supabaseServiceRole
     .from('crm_columns')
     .select('id, key, title, sort_order')
     .eq('is_active', true)
     .order('sort_order', { ascending: true });
-  if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
-  let { data } = await q;
-  // Fallback: colunas globais (mesmo comportamento do kanban)
-  if ((!data || data.length === 0) && zaplotoId) {
-    const retry = await supabaseServiceRole
-      .from('crm_columns')
-      .select('id, key, title, sort_order')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true });
-    data = retry.data;
-  }
-  return (data || []).map((c: any) => ({
-    id: c.id as string,
-    key: c.key as string,
-    title: (c.title as string) || (c.key as string),
-  }));
+  return mapRows(data);
 }
 
 /** Estágio atual (column_key) por lead_external_id:user_id. */
