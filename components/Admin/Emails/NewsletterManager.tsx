@@ -6,10 +6,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui';
 import {
-  DEFAULT_NEWSLETTER_SUBJECT,
   autocorrectNewsletterHtml,
   getDefaultNewsletterBody,
-  getNewsletterImagePublicUrl,
 } from '@/lib/email/newsletter-html';
 
 interface SmtpAccountOption {
@@ -48,8 +46,8 @@ const STATUS_LABEL: Record<Newsletter['status'], { label: string; cls: string }>
 
 const emptyDraft = {
   id: null as string | null,
-  subject: DEFAULT_NEWSLETTER_SUBJECT,
-  body: getDefaultNewsletterBody(),
+  subject: '',
+  body: '',
   audience: 'all' as 'all' | 'custom',
   custom_emails: '',
   smtp_account_ids: [] as string[],
@@ -84,7 +82,9 @@ export default function NewsletterManager({ userId }: { userId: string }) {
   const [hasSending, setHasSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const [imageUrl, setImageUrl] = useState(getNewsletterImagePublicUrl());
+  const [imageUrl, setImageUrl] = useState('');
+  const [segmentBusy, setSegmentBusy] = useState(false);
+  const [allSegmentCounts, setAllSegmentCounts] = useState<{ opened: number; not_opened: number } | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ msg, type });
@@ -123,6 +123,26 @@ export default function NewsletterManager({ userId }: { userId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Contagens agregadas (todas as campanhas) para o seletor de público
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/newsletters/all/segment', { headers: headers() });
+        const json = await res.json();
+        if (!cancelled && res.ok && json.success && json.data?.counts) {
+          setAllSegmentCounts({
+            opened: json.data.counts.opened || 0,
+            not_opened: json.data.counts.not_opened || 0,
+          });
+        }
+      } catch {
+        /* silencioso — botões ainda funcionam sem contagem */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [headers]);
+
   // Polling enquanto alguma campanha está em envio, para acompanhar o progresso
   useEffect(() => {
     if (!hasSending) return;
@@ -132,6 +152,7 @@ export default function NewsletterManager({ userId }: { userId: string }) {
 
   const resetDraft = () => {
     setDraft(emptyDraft);
+    setImageUrl('');
     setPreview(null);
   };
 
@@ -359,6 +380,7 @@ export default function NewsletterManager({ userId }: { userId: string }) {
 
   const loadSegment = async (newsletterId: string, tag: 'sent' | 'opened' | 'not_opened' | 'clicked') => {
     setBusy(true);
+    setSegmentBusy(true);
     try {
       const res = await fetch(`/api/admin/newsletters/${newsletterId}/segment?tag=${tag}`, { headers: headers() });
       const json = await res.json();
@@ -368,13 +390,22 @@ export default function NewsletterManager({ userId }: { userId: string }) {
         showToast('Nenhum e-mail encontrado nesse segmento.', 'error');
         return;
       }
-      setDraft({ id: null, subject: DEFAULT_NEWSLETTER_SUBJECT, body: getDefaultNewsletterBody(), audience: 'custom', custom_emails: emails.join('\n'), smtp_account_ids: [] });
-      showToast(`${emails.length} e-mail(s) carregado(s) no rascunho — edite assunto/corpo e envie.`, 'success');
+      setDraft((d) => ({
+        ...d,
+        id: null,
+        audience: 'custom',
+        custom_emails: emails.join('\n'),
+      }));
+      const label =
+        tag === 'opened' ? 'abriram' : tag === 'not_opened' ? 'não abriram' : tag === 'clicked' ? 'clicaram' : 'receberam';
+      const scope = newsletterId === 'all' ? 'de todas as campanhas' : 'desta campanha';
+      showToast(`${emails.length} e-mail(s) que ${label} ${scope} — carregados no público.`, 'success');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (e: any) {
       showToast(e?.message || 'Erro ao segmentar campanha', 'error');
     } finally {
       setBusy(false);
+      setSegmentBusy(false);
     }
   };
 
@@ -397,8 +428,13 @@ export default function NewsletterManager({ userId }: { userId: string }) {
       if (!res.ok || !json.success) throw new Error(json.error || 'Erro ao publicar imagem');
       const url = json.data.public_url as string;
       setImageUrl(url);
-      setDraft((d) => ({ ...d, body: getDefaultNewsletterBody(url) }));
-      showToast('Imagem publicada no Storage e aplicada no HTML.', 'success');
+      const imgHtml = getDefaultNewsletterBody(url);
+      setDraft((d) => {
+        if (!d.body.trim()) return { ...d, body: imgHtml };
+        if (d.body.includes(url)) return d;
+        return { ...d, body: `${d.body.trim()}\n${imgHtml}` };
+      });
+      showToast('Imagem publicada. URL inserida no corpo do e-mail.', 'success');
     } catch (e: any) {
       showToast(e?.message || 'Erro ao publicar imagem', 'error');
     } finally {
@@ -484,9 +520,18 @@ export default function NewsletterManager({ userId }: { userId: string }) {
             <div className="mb-2 flex items-center gap-3 rounded-xl border border-gray-200 dark:border-gray-600 p-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={imageUrl} alt="Newsletter" className="h-14 w-auto rounded-md object-cover" />
-              <p className="text-[11px] text-gray-500 dark:text-gray-400 break-all">
-                Storage: <a href={imageUrl} target="_blank" rel="noreferrer" className="text-[#E86A24] hover:underline">{imageUrl}</a>
-              </p>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 break-all">
+                  Storage: <a href={imageUrl} target="_blank" rel="noreferrer" className="text-[#E86A24] hover:underline">{imageUrl}</a>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setImageUrl('')}
+                  className="mt-1 text-[11px] font-medium text-gray-500 hover:text-red-500"
+                >
+                  Ocultar preview
+                </button>
+              </div>
             </div>
           )}
           <textarea
@@ -507,17 +552,47 @@ export default function NewsletterManager({ userId }: { userId: string }) {
           />
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Variáveis: <code>{'{{Nome}}'}</code>, <code>{'{{Email}}'}</code>, <code>{'{{Url}}'}</code>.
-            Ao colar HTML incompleto, o sistema envolve no layout padrão (WhatsApp + tabela 600px).
+            Ao colar HTML incompleto, o sistema envolve no layout de e-mail (tabela 600px).
           </p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Público</label>
-            <select value={draft.audience} onChange={(e) => setDraft({ ...draft, audience: e.target.value as 'all' | 'custom' })} className={inputClass}>
+            <select
+              value={draft.audience}
+              onChange={(e) => setDraft({ ...draft, audience: e.target.value as 'all' | 'custom' })}
+              className={inputClass}
+            >
               <option value="all">Todos os usuários ({allUsersCount})</option>
               <option value="custom">Lista personalizada</option>
             </select>
+            <div className="mt-2.5 rounded-xl border border-gray-200 dark:border-gray-600 p-3 space-y-2">
+              <p className="text-xs font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5" /> Segmentado — todas as campanhas
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy || segmentBusy}
+                  onClick={() => loadSegment('all', 'opened')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-60"
+                >
+                  {segmentBusy ? 'Carregando…' : `Abriram os e-mails${allSegmentCounts ? ` (${allSegmentCounts.opened})` : ''}`}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || segmentBusy}
+                  onClick={() => loadSegment('all', 'not_opened')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 disabled:opacity-60"
+                >
+                  {segmentBusy ? 'Carregando…' : `Não abriram os e-mails${allSegmentCounts ? ` (${allSegmentCounts.not_opened})` : ''}`}
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                Preenche a lista personalizada com quem abriu ou não abriu em qualquer campanha enviada.
+              </p>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Contas de envio</label>

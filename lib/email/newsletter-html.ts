@@ -18,71 +18,20 @@ export function getNewsletterImagePublicUrl(): string {
   return `${base}/storage/v1/object/public/${EMAIL_ASSETS_BUCKET}/${NEWSLETTER_IMAGE_PATH}`;
 }
 
-export const DEFAULT_NEWSLETTER_SUBJECT =
-  '🎁 Você ganhou uma consultoria gratuita de investimentos!';
+export const DEFAULT_NEWSLETTER_SUBJECT = '';
 
-const WA_URL =
-  'https://wa.me/5512996356566?text=Ol%C3%A1%2C%20vim%20pelo%20e-mail%20e%20quero%20saber%20mais';
+/** Corpo padrão vazio — o editor começa em branco (sem template/imagem fixos). */
+export const DEFAULT_NEWSLETTER_BODY = '';
+
+/** Gera HTML mínimo com imagem (opcional), sem o template de consultoria. */
+export function getDefaultNewsletterBody(imageUrl?: string): string {
+  const url = (imageUrl || '').trim();
+  if (!url) return '';
+  return `<p style="text-align:center;margin:0;"><img src="${url}" alt="" width="536" style="display:block;width:100%;max-width:536px;height:auto;border:0;border-radius:8px;"></p>`;
+}
 
 const P =
   'font-size:14px;color:#5c6b70;margin:0 0 14px;line-height:1.6;font-family:Arial,sans-serif;';
-
-function buildDefaultBody(imageUrl: string): string {
-  return `<div style="margin:0;padding:0;background-color:#f4f7f6;width:100%;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7f6;padding:24px 0;">
-  <tr>
-    <td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family:Arial,Helvetica,sans-serif;">
-
-        <tr>
-          <td align="right" style="padding:16px 32px 0 32px;">
-            <a href="${WA_URL}" style="background-color:#25D366;color:#ffffff;text-decoration:none;font-size:13px;font-weight:bold;padding:9px 14px;border-radius:6px;display:inline-block;font-family:Arial,sans-serif;">💬 Falar no WhatsApp</a>
-          </td>
-        </tr>
-
-        <tr>
-          <td style="padding:28px 32px 8px 32px;">
-            <h1 style="font-size:20px;color:#0e161a;margin:0 0 12px;font-family:Arial,sans-serif;">🎁 Você ganhou uma consultoria gratuita de investimentos!</h1>
-            <p style="${P}">Olá {{Nome}}! Tudo bem?</p>
-            <p style="${P}">Temos uma ótima notícia: você acaba de ganhar uma consultoria gratuita sobre investimentos e mercado financeiro! 📈💰</p>
-            <p style="${P}">Durante a consultoria, você poderá tirar dúvidas, conhecer estratégias e entender melhor as oportunidades disponíveis no mercado.</p>
-            <p style="${P}">Para falar com nossa equipe e agendar seu atendimento, basta clicar no WhatsApp abaixo:</p>
-          </td>
-        </tr>
-
-        <tr>
-          <td align="center" style="padding:8px 32px 28px 32px;">
-            <a href="${WA_URL}" style="background-color:#25D366;color:#ffffff;text-decoration:none;font-size:14px;font-weight:bold;padding:13px 26px;border-radius:8px;display:inline-block;font-family:Arial,sans-serif;">💬 Continuar no WhatsApp</a>
-          </td>
-        </tr>
-
-        <tr>
-          <td align="center" style="padding:20px 32px 0 32px;background-color:#ffffff;">
-            <img src="${imageUrl}" alt="Cap do Sucesso" width="536" style="display:block;width:100%;max-width:536px;height:auto;border:0;border-radius:8px;">
-          </td>
-        </tr>
-
-        <tr>
-          <td style="padding:18px 32px;background-color:#ffffff;border-top:1px solid #e2e8e6;">
-            <p style="margin:0;font-size:11px;color:#5c6b70;font-family:Arial,sans-serif;">
-              Você recebeu este e-mail porque tem uma conta na Cap do Sucesso.
-            </p>
-          </td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-</div>`;
-}
-
-/** Corpo padrão (imagem via Storage público). */
-export const DEFAULT_NEWSLETTER_BODY = buildDefaultBody(getNewsletterImagePublicUrl());
-
-/** Gera o corpo padrão com a URL atual do Storage (útil no client). */
-export function getDefaultNewsletterBody(imageUrl?: string): string {
-  return buildDefaultBody(imageUrl || getNewsletterImagePublicUrl());
-}
 
 function escapeHtml(text: string): string {
   return text
@@ -92,7 +41,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Envolve um fragmento (ou texto) no shell padrão de e-mail. */
+/** Envolve um fragmento (ou texto) no shell padrão de e-mail (sem conteúdo/imagem fixos). */
 export function wrapNewsletterFragment(innerHtml: string): string {
   return `<div style="margin:0;padding:0;background-color:#f4f7f6;width:100%;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7f6;padding:24px 0;">
@@ -100,25 +49,8 @@ export function wrapNewsletterFragment(innerHtml: string): string {
     <td align="center">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family:Arial,Helvetica,sans-serif;">
         <tr>
-          <td align="right" style="padding:16px 32px 0 32px;">
-            <a href="${WA_URL}" style="background-color:#25D366;color:#ffffff;text-decoration:none;font-size:13px;font-weight:bold;padding:9px 14px;border-radius:6px;display:inline-block;font-family:Arial,sans-serif;">💬 Falar no WhatsApp</a>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:28px 32px 24px 32px;">
+          <td style="padding:28px 32px 28px 32px;">
             ${innerHtml}
-          </td>
-        </tr>
-        <tr>
-          <td align="center" style="padding:0 32px 28px 32px;">
-            <a href="${WA_URL}" style="background-color:#25D366;color:#ffffff;text-decoration:none;font-size:14px;font-weight:bold;padding:13px 26px;border-radius:8px;display:inline-block;font-family:Arial,sans-serif;">💬 Continuar no WhatsApp</a>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:18px 32px;background-color:#ffffff;border-top:1px solid #e2e8e6;">
-            <p style="margin:0;font-size:11px;color:#5c6b70;font-family:Arial,sans-serif;">
-              Você recebeu este e-mail porque tem uma conta na Cap do Sucesso.
-            </p>
           </td>
         </tr>
       </table>
