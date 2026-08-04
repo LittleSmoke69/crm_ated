@@ -359,7 +359,8 @@ export default function LeadsSection({
   userRole?: 'admin' | 'gerente' | 'captador';
 }) {
   const [viewerStatus, setViewerStatus] = useState(String(userRole || 'admin').toLowerCase());
-  const [canEditColumn, setCanEditColumn] = useState(String(userRole || '').toLowerCase() !== 'captador');
+  // Coluna CRM: sempre editável na UI (API valida escopo por cargo).
+  const [canEditColumn, setCanEditColumn] = useState(true);
   const role = viewerStatus;
   const isGerente = role === 'gerente';
   const isCaptador = role === 'captador';
@@ -432,7 +433,7 @@ export default function LeadsSection({
         const status = String(json?.data?.status || userRole || '').toLowerCase().trim();
         if (cancelled || !status) return;
         setViewerStatus(status === 'super_admin' ? 'admin' : status);
-        setCanEditColumn(status !== 'captador');
+        setCanEditColumn(true);
       } catch {
         /* ignore */
       }
@@ -496,11 +497,7 @@ export default function LeadsSection({
       if (json.data.viewer) {
         const vs = String(json.data.viewer.status || '').toLowerCase().trim();
         if (vs) setViewerStatus(vs === 'super_admin' ? 'admin' : vs);
-        if (typeof json.data.viewer.can_edit_column === 'boolean') {
-          setCanEditColumn(json.data.viewer.can_edit_column);
-        } else if (vs) {
-          setCanEditColumn(vs !== 'captador');
-        }
+        setCanEditColumn(true);
       }
       // Heurística: API de gerente devolve só o próprio perfil em `gerentes`
       const gs = json.data.gerentes;
@@ -1023,7 +1020,12 @@ export default function LeadsSection({
       {/* Cabeçalho */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-stone-900 dark:text-stone-50">Leads</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-bold text-stone-900 dark:text-stone-50">Leads</h1>
+            <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wide border border-[#E86A24]/40 text-[#E86A24] bg-[#E86A24]/10">
+              {isGerente ? 'Gerente' : isCaptador ? 'Captador' : isAdmin ? 'Admin' : role || '—'}
+            </span>
+          </div>
           <p className="text-stone-600 dark:text-stone-400 mt-1">
             {isCaptador ? 'Seus leads atribuídos' : 'Gerenciamento de leads capturados'}
           </p>
@@ -1407,28 +1409,19 @@ export default function LeadsSection({
                     </td>
                     <td className="px-4 py-3 min-w-[16rem] align-top">
                       {l.captador_id ? (
-                        // Gerente/admin: sempre dropdown. Só captador vê selo estático.
-                        canEditColumn || isGerente || isAdmin ? (
-                          <CrmColumnSelect
-                            lead={l}
-                            columns={columns}
-                            disabled={false}
-                            onNeedColumns={fetchKanbanColumns}
-                            onChange={(key) => {
-                              if (busy) {
-                                showToast('Aguarde a operação atual terminar.', 'error');
-                                return;
-                              }
-                              changeColumn(l, key);
-                            }}
-                          />
-                        ) : (
-                          <span
-                            className={`inline-flex min-w-[15rem] px-3.5 py-3 min-h-[48px] items-center rounded-xl text-sm font-bold border ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
-                          >
-                            {l.column_title || l.column_key || 'Sem coluna'}
-                          </span>
-                        )
+                        <CrmColumnSelect
+                          lead={l}
+                          columns={columns}
+                          disabled={false}
+                          onNeedColumns={fetchKanbanColumns}
+                          onChange={(key) => {
+                            if (busy) {
+                              showToast('Aguarde a operação atual terminar.', 'error');
+                              return;
+                            }
+                            changeColumn(l, key);
+                          }}
+                        />
                       ) : isGerente && canManage ? (
                         <button
                           type="button"

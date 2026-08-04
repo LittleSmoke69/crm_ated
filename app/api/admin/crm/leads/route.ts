@@ -695,7 +695,8 @@ export async function GET(req: NextRequest) {
       default_column_key: DEFAULT_ASSIGN_COLUMN,
       viewer: {
         status: profile.status,
-        can_edit_column: !isCaptador,
+        // Gerente/admin: qualquer lead com captador. Captador: próprios leads (paridade kanban).
+        can_edit_column: true,
         can_assign: !isCaptador,
       },
       gerentes: isCaptador
@@ -825,9 +826,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const { userId, profile } = await requireLeadsManagementAccess(req);
-    if (profile.status === 'captador') {
-      return errorResponse('Captador não pode alterar leads por esta tela.', 403);
-    }
+    const isCaptador = profile.status === 'captador';
     const isGerente = profile.status === 'gerente';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
     const body = await req.json().catch(() => ({}));
@@ -846,9 +845,14 @@ export async function PATCH(req: NextRequest) {
       typeof body.column_key === 'string' && body.column_key.trim()
         ? body.column_key.trim()
         : '';
-    // Gerente e admin podem mover coluna do kanban; captador não (bloqueado acima).
     const preferredColumnKey = requestedColumnKey;
     const hasColumn = Boolean(preferredColumnKey);
+    // Captador: só pode trocar coluna dos próprios leads (paridade com o kanban).
+    if (isCaptador) {
+      if (!hasColumn || hasStatus || hasGerente || hasCaptador || hasName || hasPhone || hasEmail) {
+        return errorResponse('Captador só pode alterar a coluna CRM dos próprios leads.', 403);
+      }
+    }
     if (!hasStatus && !hasGerente && !hasCaptador && !hasName && !hasPhone && !hasEmail && !hasColumn) {
       return errorResponse('Nada para atualizar.', 400);
     }
@@ -867,7 +871,13 @@ export async function PATCH(req: NextRequest) {
     }
     if (leads.length === 0) return errorResponse('Nenhum lead encontrado.', 400);
 
-    if (isGerente) {
+    if (isCaptador) {
+      for (const lead of leads) {
+        if (lead.user_id !== userId) {
+          return errorResponse('Captador só pode mover leads atribuídos a você.', 403);
+        }
+      }
+    } else if (isGerente) {
       const team = await getConsultorsByManager(userId);
       const teamIds = new Set(team.map((c) => c.id));
       for (const lead of leads) {
