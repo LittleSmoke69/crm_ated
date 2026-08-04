@@ -34,6 +34,8 @@ type CapturedLead = {
   phone: string | null;
   email: string | null;
   capture_status: string;
+  column_key: string | null;
+  column_title: string | null;
   source: string | null;
   created_at: string;
   captador_id: string | null;
@@ -60,14 +62,25 @@ type SalesSummary = {
   by_captador: CaptadorSalesRow[];
 };
 
-const STATUS_OPTIONS = [
-  { value: 'pendente', label: 'Pendente', cls: 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10' },
-  { value: 'em_contato', label: 'Em contato', cls: 'border-sky-500/40 text-sky-700 dark:text-sky-300 bg-sky-500/10' },
-  { value: 'convertido', label: 'Convertido', cls: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10' },
-  { value: 'descartado', label: 'Descartado', cls: 'border-stone-400/50 text-stone-600 dark:text-stone-300 bg-stone-500/10' },
-];
-
-const statusCls = (v: string) => STATUS_OPTIONS.find((s) => s.value === v)?.cls || STATUS_OPTIONS[0].cls;
+function columnSelectCls(key: string | null | undefined, title?: string | null): string {
+  const n = `${key || ''} ${title || ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (n.includes('convert') || n.includes('ganho') || n.includes('venda')) {
+    return 'border-emerald-500/45 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10';
+  }
+  if (n.includes('lixo') || n.includes('perd') || n.includes('encerr') || n.includes('descart')) {
+    return 'border-stone-400/50 text-stone-600 dark:text-stone-300 bg-stone-500/10';
+  }
+  if (n.includes('atend') || n.includes('contato') || n.includes('nao responde')) {
+    return 'border-sky-500/40 text-sky-700 dark:text-sky-300 bg-sky-500/10';
+  }
+  if (n.includes('novo') || n.includes('pendente')) {
+    return 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10';
+  }
+  return 'border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10';
+}
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
 const SELECT_ALL_PAGE_SIZE = 200;
@@ -226,7 +239,7 @@ export default function LeadsSection({
 
   // Filtros
   const [q, setQ] = useState('');
-  const [fStatus, setFStatus] = useState('');
+  const [fColumn, setFColumn] = useState('');
   const [fGerente, setFGerente] = useState('');
   const [fCaptador, setFCaptador] = useState('');
   const [fPeriod, setFPeriod] = useState('todos');
@@ -266,14 +279,14 @@ export default function LeadsSection({
   const buildQuery = useCallback((extra: Record<string, string> = {}) => {
     const sp = new URLSearchParams();
     if (q.trim()) sp.set('q', q.trim());
-    if (fStatus) sp.set('capture_status', fStatus);
+    if (fColumn) sp.set('column_key', fColumn);
     if (fGerente) sp.set('gerente_id', fGerente);
     if (fCaptador) sp.set('captador_id', fCaptador);
     if (fPeriod !== 'todos') sp.set('period', fPeriod);
     if (onlyDuplicates) sp.set('duplicates', '1');
     Object.entries(extra).forEach(([k, v]) => sp.set(k, v));
     return sp.toString();
-  }, [q, fStatus, fGerente, fCaptador, fPeriod, onlyDuplicates]);
+  }, [q, fColumn, fGerente, fCaptador, fPeriod, onlyDuplicates]);
 
   const loadLeads = useCallback(async (targetPage = 1, opts?: { preserveSelection?: boolean; size?: number }) => {
     setLoading(true);
@@ -325,7 +338,7 @@ export default function LeadsSection({
     setSelectedMap(new Map());
     loadLeads(1, { preserveSelection: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyDuplicates, fStatus, fGerente, fCaptador, fPeriod, pageSize]);
+  }, [onlyDuplicates, fColumn, fGerente, fCaptador, fPeriod, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const selected = useMemo(() => new Set(selectedMap.keys()), [selectedMap]);
@@ -472,8 +485,14 @@ export default function LeadsSection({
     }
   };
 
-  const changeStatus = (lead: CapturedLead, status: string) => {
-    patchLeads([lead.id], { capture_status: status }, 'Status atualizado.');
+  const changeColumn = (lead: CapturedLead, columnKey: string) => {
+    if (!columnKey) return;
+    if (!lead.captador_id) {
+      showToast('Atribua um captador antes de definir a coluna do CRM.', 'error');
+      return;
+    }
+    if (lead.column_key === columnKey) return;
+    patchLeads([lead.id], { column_key: columnKey }, 'Coluna do CRM atualizada.');
   };
 
   const openEditLeadInfo = (lead: CapturedLead) => {
@@ -673,14 +692,14 @@ export default function LeadsSection({
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || 'Erro ao exportar');
       const all: CapturedLead[] = json.data.leads || [];
-      const header = ['ID', 'Nome', 'WhatsApp', 'Email', 'Status', 'Gerente', 'Captador', 'Origem', 'Ocorrência', 'Data/Hora'];
+      const header = ['ID', 'Nome', 'WhatsApp', 'Email', 'Coluna CRM', 'Gerente', 'Captador', 'Origem', 'Ocorrência', 'Data/Hora'];
       const lines = all.map((l) =>
         [
           l.external_id,
           l.name || '',
           l.phone || '',
           l.email || '',
-          STATUS_OPTIONS.find((s) => s.value === l.capture_status)?.label || l.capture_status,
+          l.column_title || l.column_key || '',
           l.gerente_name || '',
           l.captador_name || '',
           l.source || '',
@@ -727,9 +746,12 @@ export default function LeadsSection({
     ? salesByCaptadorSorted
     : salesWithVendas;
 
+  // Gerente: a API já devolve só a equipe. Re-filtrar por enroller esvazia o select
+  // quando o campo vier nulo no payload (bug: modal Atribuir sem captadores).
   const teamCaptadores = useMemo(() => {
     if (!isGerente) return captadores;
-    return captadores.filter((c) => c.enroller === userId);
+    const team = captadores.filter((c) => !c.enroller || c.enroller === userId);
+    return team.length > 0 ? team : captadores;
   }, [captadores, isGerente, userId]);
 
   const captadoresForGerente = useMemo(() => {
@@ -928,10 +950,12 @@ export default function LeadsSection({
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Status</label>
-            <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className={inputClass}>
-              <option value="">Todos</option>
-              {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Coluna CRM</label>
+            <select value={fColumn} onChange={(e) => setFColumn(e.target.value)} className={`${inputClass} min-h-[44px]`}>
+              <option value="">Todas</option>
+              {columns.map((c) => (
+                <option key={c.id} value={c.key}>{c.title}</option>
+              ))}
             </select>
           </div>
           {!isGerente && !isCaptador && (
@@ -1069,33 +1093,38 @@ export default function LeadsSection({
               </button>
               {canManage && (
               <button
+                type="button"
                 onClick={() => {
                   setAssignLeads(selectedLeadObjs);
-                  setAssignForm({ gerente_id: isGerente ? userId : '', captador_id: '' });
+                  setAssignForm({
+                    gerente_id: isGerente ? userId : (selectedLeadObjs[0]?.gerente_id || ''),
+                    captador_id: '',
+                  });
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#E86A24]/45 text-[#C45A1A] dark:text-[#EF9057] hover:bg-[#E86A24]/15"
+                className="inline-flex items-center gap-2 px-6 py-3 min-h-[48px] rounded-xl text-base font-bold bg-[#E86A24] text-white hover:bg-[#D95E1B] shadow-sm"
               >
-                <UserPlus className="w-3.5 h-3.5" /> Atribuir
+                <UserPlus className="w-5 h-5" /> Atribuir
               </button>
               )}
-              {isAdmin && selectedLeadObjs.some((l) => l.captador_id) && (
+              {(isAdmin || isGerente) && selectedLeadObjs.some((l) => l.captador_id) && (
                 <button
                   type="button"
                   onClick={() => {
                     setMoveColumnLeads(selectedLeadObjs.filter((l) => l.captador_id));
                     setMoveColumnKey(defaultColumnKey);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-sky-500/40 text-sky-700 dark:text-sky-300 hover:bg-sky-500/10"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-bold border border-sky-500/40 text-sky-700 dark:text-sky-300 hover:bg-sky-500/10"
                 >
-                  <Columns3 className="w-3.5 h-3.5" /> Trocar coluna
+                  <Columns3 className="w-4 h-4" /> Trocar coluna
                 </button>
               )}
               {!isGerente && !isCaptador && (
               <button
+                type="button"
                 onClick={() => setDeleteLeads(selectedLeadObjs)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+                className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-bold border border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10"
               >
-                <Trash2 className="w-3.5 h-3.5" /> Excluir
+                <Trash2 className="w-4 h-4" /> Excluir
               </button>
               )}
             </>
@@ -1128,7 +1157,7 @@ export default function LeadsSection({
                     title="Selecionar página"
                   />
                 </th>
-                <th className="px-4 py-3.5">Status</th>
+                <th className="px-4 py-3.5">Coluna CRM</th>
                 <th className="px-4 py-3.5">Nome</th>
                 <th className="px-4 py-3.5">WhatsApp</th>
                 <th className="px-4 py-3.5">Gerente</th>
@@ -1163,15 +1192,42 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l)} className="w-4 h-4 rounded accent-[#E86A24]" />
                     </td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={l.capture_status}
-                        onChange={(e) => changeStatus(l, e.target.value)}
-                        disabled={busy || isCaptador}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-transparent ${isCaptador ? 'cursor-default' : 'cursor-pointer'} ${statusCls(l.capture_status)}`}
-                      >
-                        {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value} className="bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100">{s.label}</option>)}
-                      </select>
+                    <td className="px-4 py-3 min-w-[16rem]">
+                      {l.captador_id ? (
+                        <select
+                          value={
+                            l.column_key && columns.some((c) => c.key === l.column_key)
+                              ? l.column_key
+                              : l.column_key || ''
+                          }
+                          onChange={(e) => changeColumn(l, e.target.value)}
+                          disabled={busy || isCaptador || columns.length === 0}
+                          title={l.column_title || 'Coluna do kanban'}
+                          className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm ${
+                            isCaptador ? 'cursor-default' : 'cursor-pointer'
+                          } ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
+                        >
+                          {!l.column_key && (
+                            <option value="" disabled>
+                              Sem coluna
+                            </option>
+                          )}
+                          {l.column_key && !columns.some((c) => c.key === l.column_key) && (
+                            <option value={l.column_key}>
+                              {l.column_title || l.column_key}
+                            </option>
+                          )}
+                          {columns.map((c) => (
+                            <option key={c.id} value={c.key} className="bg-white dark:bg-[#2a221c] text-stone-800 dark:text-stone-100">
+                              {c.title}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="inline-flex px-3.5 py-3 min-h-[48px] items-center rounded-xl text-base font-medium border border-dashed border-stone-300 dark:border-white/15 text-stone-400">
+                          Sem captador
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1190,10 +1246,17 @@ export default function LeadsSection({
                         <span className={badgeGerente}>{l.gerente_name}</span>
                       ) : canManage ? (
                         <button
-                          onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: '', captador_id: '' }); }}
-                          className="px-3 py-1 rounded-md text-xs font-medium border border-stone-300 dark:border-white/15 text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-white/5"
+                          type="button"
+                          onClick={() => {
+                            setAssignLeads([l]);
+                            setAssignForm({
+                              gerente_id: isGerente ? userId : '',
+                              captador_id: '',
+                            });
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-3 min-h-[48px] rounded-xl text-base font-bold bg-[#E86A24] text-white hover:bg-[#D95E1B] shadow-sm"
                         >
-                          Atribuir
+                          <UserPlus className="w-5 h-5" /> Atribuir
                         </button>
                       ) : (
                         <span className="text-stone-400">—</span>
@@ -1202,39 +1265,68 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       {l.captador_name ? (
                         <span className={badgeCaptador}>{l.captador_name}</span>
+                      ) : isGerente && canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssignLeads([l]);
+                            setAssignForm({ gerente_id: userId, captador_id: '' });
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-3 min-h-[48px] rounded-xl text-base font-bold border-2 border-[#E86A24] text-[#E86A24] hover:bg-[#E86A24]/10"
+                        >
+                          <UserPlus className="w-5 h-5" /> Atribuir captador
+                        </button>
                       ) : (
                         <span className="text-stone-400">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-stone-600 dark:text-stone-300 whitespace-nowrap">{formatDateTime(l.created_at)}</td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1.5">
+                      <div className="flex items-center justify-end gap-2">
                         {l.phone && (
                           <a
                             href={`https://wa.me/${l.phone.startsWith('55') ? l.phone : `55${l.phone}`}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                            className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
                             title="Abrir WhatsApp"
                           >
-                            <MessageCircle className="w-4 h-4" />
+                            <MessageCircle className="w-5 h-5" />
                           </a>
                         )}
                         {canManage && (
                         <button
-                          onClick={() => { setAssignLeads([l]); setAssignForm({ gerente_id: isGerente ? userId : (l.gerente_id || ''), captador_id: '' }); }}
-                          className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#E86A24] hover:bg-[#E86A24]/10"
+                          type="button"
+                          onClick={() => {
+                            setAssignLeads([l]);
+                            setAssignForm({
+                              gerente_id: isGerente ? userId : (l.gerente_id || ''),
+                              captador_id: '',
+                            });
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-3 min-h-[48px] rounded-xl text-base font-bold text-white bg-[#E86A24] hover:bg-[#D95E1B] shadow-sm"
                           title={isGerente ? 'Atribuir captador' : 'Vincular ao gerente'}
                         >
-                          <UserPlus className="w-4 h-4" />
+                          <UserPlus className="w-5 h-5" />
+                          <span className="hidden sm:inline">Atribuir</span>
                         </button>
                         )}
-                        <button onClick={() => { setViewLead(l); setEditingLeadInfo(false); }} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-stone-500 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-white/5" title="Ver detalhes">
-                          <Eye className="w-4 h-4" />
+                        <button
+                          type="button"
+                          onClick={() => { setViewLead(l); setEditingLeadInfo(false); }}
+                          className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-stone-500 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-white/5"
+                          title="Ver detalhes"
+                        >
+                          <Eye className="w-5 h-5" />
                         </button>
                         {!isGerente && !isCaptador && (
-                        <button onClick={() => setDeleteLeads([l])} className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10" title="Excluir">
-                          <Trash2 className="w-4 h-4" />
+                        <button
+                          type="button"
+                          onClick={() => setDeleteLeads([l])}
+                          className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-red-500 hover:bg-red-500/10"
+                          title="Excluir"
+                        >
+                          <Trash2 className="w-5 h-5" />
                         </button>
                         )}
                       </div>
@@ -1376,7 +1468,7 @@ export default function LeadsSection({
               <select
                 value={assignForm.gerente_id}
                 onChange={(e) => setAssignForm({ gerente_id: e.target.value, captador_id: '' })}
-                className={inputClass}
+                className={`${inputClass} min-h-[48px] text-base`}
                 required
               >
                 <option value="">Selecione o gerente...</option>
@@ -1388,7 +1480,12 @@ export default function LeadsSection({
             {isGerente && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Captador</label>
-              <select value={assignForm.captador_id} onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })} className={inputClass} required>
+              <select
+                value={assignForm.captador_id}
+                onChange={(e) => setAssignForm({ ...assignForm, captador_id: e.target.value })}
+                className={`${inputClass} min-h-[48px] text-base`}
+                required
+              >
                 <option value="">Selecione o captador...</option>
                 {captadoresForGerente.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -1396,17 +1493,17 @@ export default function LeadsSection({
             </div>
             )}
             <div className="flex justify-end gap-3 pt-2">
-              <button type="button" onClick={() => setAssignLeads(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
-              <button type="submit" disabled={busy} className="px-5 py-2 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-60 flex items-center gap-2">
-                {busy && <Loader2 className="w-4 h-4 animate-spin" />} Atribuir
+              <button type="button" onClick={() => setAssignLeads(null)} className="px-5 py-3 min-h-[48px] rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-base">Cancelar</button>
+              <button type="submit" disabled={busy} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
+                {busy && <Loader2 className="w-5 h-5 animate-spin" />} Atribuir
               </button>
             </div>
           </form>
         )
       )}
 
-      {/* Modal: trocar coluna do kanban (somente admin/super_admin) */}
-      {isAdmin && moveColumnLeads && modalShell(
+      {/* Modal: trocar coluna do kanban */}
+      {(isAdmin || isGerente) && moveColumnLeads && modalShell(
         moveColumnLeads.length === 1
           ? `Trocar coluna — ${moveColumnLeads[0].name || moveColumnLeads[0].phone || 'lead'}`
           : `Trocar coluna de ${moveColumnLeads.length} leads`,
@@ -1418,16 +1515,16 @@ export default function LeadsSection({
             </p>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Coluna</label>
-              <select value={moveColumnKey} onChange={(e) => setMoveColumnKey(e.target.value)} className={inputClass} required>
+              <select value={moveColumnKey} onChange={(e) => setMoveColumnKey(e.target.value)} className={`${inputClass} min-h-[48px] text-base`} required>
                 {columns.map((c) => (
                   <option key={c.id} value={c.key}>{c.title}</option>
                 ))}
               </select>
             </div>
             <div className="flex justify-end gap-3 pt-2">
-              <button type="button" onClick={() => setMoveColumnLeads(null)} className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5">Cancelar</button>
-              <button type="submit" disabled={busy || columns.length === 0} className="px-5 py-2 rounded-lg bg-[#E86A24] text-white font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
-                {busy && <Loader2 className="w-4 h-4 animate-spin" />} Mover
+              <button type="button" onClick={() => setMoveColumnLeads(null)} className="px-5 py-3 min-h-[48px] rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-base">Cancelar</button>
+              <button type="submit" disabled={busy || columns.length === 0} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
+                {busy && <Loader2 className="w-5 h-5 animate-spin" />} Mover
               </button>
             </div>
           </form>
@@ -1463,7 +1560,7 @@ export default function LeadsSection({
               ['Nome', viewLead.name || '—'],
               ['WhatsApp', viewLead.phone || '—'],
               ['Email', viewLead.email || '—'],
-              ['Status', STATUS_OPTIONS.find((s) => s.value === viewLead.capture_status)?.label || viewLead.capture_status],
+              ['Coluna CRM', viewLead.column_title || viewLead.column_key || '—'],
               ['Gerente', viewLead.gerente_name || '—'],
               ['Captador', viewLead.captador_name || '—'],
               ['Origem', viewLead.source || '—'],

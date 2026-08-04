@@ -75,12 +75,77 @@ async function listActiveKanbanColumns(zaplotoId: string | null) {
     .eq('is_active', true)
     .order('sort_order', { ascending: true });
   if (zaplotoId) q = q.eq('zaploto_id', zaplotoId);
-  const { data } = await q;
+  let { data } = await q;
+  // Fallback: colunas globais (mesmo comportamento do kanban)
+  if ((!data || data.length === 0) && zaplotoId) {
+    const retry = await supabaseServiceRole
+      .from('crm_columns')
+      .select('id, key, title, sort_order')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+    data = retry.data;
+  }
   return (data || []).map((c: any) => ({
     id: c.id as string,
     key: c.key as string,
     title: (c.title as string) || (c.key as string),
   }));
+}
+
+/** Estágio atual (column_key) por lead_external_id:user_id. */
+async function fetchStagesByLeadUser(
+  pairs: { external_id: string; user_id: string }[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (pairs.length === 0) return map;
+  const byUser = new Map<string, string[]>();
+  for (const p of pairs) {
+    if (!p.user_id || !p.external_id) continue;
+    const list = byUser.get(p.user_id) || [];
+    list.push(p.external_id);
+    byUser.set(p.user_id, list);
+  }
+  for (const [uid, extIds] of byUser) {
+    for (const chunk of chunkArray([...new Set(extIds)], IN_CHUNK)) {
+      const { data, error } = await supabaseServiceRole
+        .from('crm_lead_stage')
+        .select('lead_external_id, user_id, column_key')
+        .eq('user_id', uid)
+        .in('lead_external_id', chunk);
+      if (error) throw new Error(error.message);
+      for (const s of data || []) {
+        const row = s as { lead_external_id: string; user_id: string; column_key: string };
+        map.set(`${String(row.lead_external_id)}:${row.user_id}`, row.column_key);
+      }
+    }
+  }
+  return map;
+}
+
+/** Leads na coluna informada (external_id:user_id). */
+async function fetchLeadKeysInColumn(columnKey: string, captadorIds: string[]): Promise<Set<string>> {
+  const keys = new Set<string>();
+  if (!columnKey || captadorIds.length === 0) return keys;
+  for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabaseServiceRole
+        .from('crm_lead_stage')
+        .select('lead_external_id, user_id')
+        .in('user_id', chunk)
+        .eq('column_key', columnKey)
+        .range(from, from + SCAN_PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = data || [];
+      for (const s of batch) {
+        const row = s as { lead_external_id: string; user_id: string };
+        keys.add(`${String(row.lead_external_id)}:${row.user_id}`);
+      }
+      if (batch.length < SCAN_PAGE) break;
+      from += SCAN_PAGE;
+    }
+  }
+  return keys;
 }
 
 /** Fallback de keys conhecidas (além das resolvidas pelo título). */
@@ -435,7 +500,7 @@ async function scanLeads(params: {
 
 /**
  * GET /api/admin/crm/leads — lista leads capturados com filtros, paginação e nº de ocorrência por telefone.
- * Query: q, capture_status, gerente_id, captador_id, period (todos|hoje|7d|30d), duplicates=1, page, page_size, all=1 (export)
+ * Query: q, column_key, capture_status, gerente_id, captador_id, period (todos|hoje|7d|30d), duplicates=1, page, page_size, all=1 (export)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -502,11 +567,33 @@ export async function GET(req: NextRequest) {
       filtered = rows.filter((r) => (occurrence.get(r.id)?.total || 1) > 1);
     }
 
+    const columnFilter = (sp.get('column_key') || '').trim();
+    if (columnFilter) {
+      const scopeForColumn = isCaptador
+        ? [userId]
+        : isGerente
+          ? [...teamCaptadorIds]
+          : profiles.filter((p: any) => p.status === 'captador').map((p: any) => p.id as string);
+      const inColumn = await fetchLeadKeysInColumn(columnFilter, scopeForColumn);
+      filtered = filtered.filter((r) => {
+        if (!r.user_id) return false;
+        return inColumn.has(`${String(r.external_id)}:${r.user_id}`);
+      });
+    }
+
     const total = filtered.length;
     const exportAll = sp.get('all') === '1';
     const pageSize = exportAll ? total : Math.min(200, Math.max(1, parseInt(sp.get('page_size') || `${PAGE_SIZE_DEFAULT}`, 10) || PAGE_SIZE_DEFAULT));
     const page = exportAll ? 1 : Math.max(1, parseInt(sp.get('page') || '1', 10) || 1);
     const paged = exportAll ? filtered : filtered.slice((page - 1) * pageSize, page * pageSize);
+
+    const columns = await listActiveKanbanColumns(zaplotoId);
+    const columnTitleByKey = new Map(columns.map((c) => [c.key, c.title]));
+    const stageMap = await fetchStagesByLeadUser(
+      paged
+        .filter((r) => r.user_id)
+        .map((r) => ({ external_id: String(r.external_id), user_id: r.user_id as string }))
+    );
 
     const leads = paged.map((r) => {
       const captador = r.user_id ? profileById.get(r.user_id) : null;
@@ -516,6 +603,7 @@ export async function GET(req: NextRequest) {
           ? profileById.get(captador.enroller)
           : null;
       const occ = occurrence.get(r.id);
+      const columnKey = r.user_id ? stageMap.get(`${String(r.external_id)}:${r.user_id}`) || null : null;
       return {
         id: r.id,
         external_id: String(r.external_id),
@@ -523,6 +611,8 @@ export async function GET(req: NextRequest) {
         phone: r.phone,
         email: r.email,
         capture_status: r.capture_status || 'pendente',
+        column_key: columnKey,
+        column_title: columnKey ? columnTitleByKey.get(columnKey) || columnKey : null,
         source: r.source,
         created_at: r.created_at,
         captador_id: r.user_id,
@@ -549,7 +639,6 @@ export async function GET(req: NextRequest) {
       nameById.set(userId, profile.full_name || profile.email || 'Captador');
     }
     const sales = await countWonSales(salesScopeIds, nameById);
-    const columns = await listActiveKanbanColumns(zaplotoId);
 
     return successResponse({
       leads,
@@ -707,8 +796,8 @@ export async function PATCH(req: NextRequest) {
       typeof body.column_key === 'string' && body.column_key.trim()
         ? body.column_key.trim()
         : '';
-    // Gerente só atribui — ignora column_key. Admin/super_admin podem trocar coluna.
-    const preferredColumnKey = isGerente ? '' : requestedColumnKey;
+    // Gerente e admin podem mover coluna do kanban; captador não (bloqueado acima).
+    const preferredColumnKey = requestedColumnKey;
     const hasColumn = Boolean(preferredColumnKey);
     if (!hasStatus && !hasGerente && !hasCaptador && !hasName && !hasPhone && !hasEmail && !hasColumn) {
       return errorResponse('Nada para atualizar.', 400);
@@ -729,8 +818,13 @@ export async function PATCH(req: NextRequest) {
     if (leads.length === 0) return errorResponse('Nenhum lead encontrado.', 400);
 
     if (isGerente) {
+      const team = await getConsultorsByManager(userId);
+      const teamIds = new Set(team.map((c) => c.id));
       for (const lead of leads) {
-        if (lead.gerente_id !== userId) {
+        const inScope =
+          lead.gerente_id === userId ||
+          (!!lead.user_id && teamIds.has(lead.user_id));
+        if (!inScope) {
           return errorResponse('Lead fora do seu escopo.', 403);
         }
       }
