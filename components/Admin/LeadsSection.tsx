@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Columns3,
   ChevronDown,
@@ -81,136 +80,6 @@ function columnSelectCls(key: string | null | undefined, title?: string | null):
     return 'border-[#E86A24]/50 text-[#E86A24] bg-[#E86A24]/10';
   }
   return 'border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10';
-}
-
-/** Dropdown de coluna fora da tabela (evita overflow e select nativo vazio no gerente). */
-function LeadColumnPicker({
-  value,
-  title,
-  columns,
-  disabled,
-  onChange,
-  onNeedColumns,
-}: {
-  value: string | null;
-  title?: string | null;
-  columns: KanbanColumnOption[];
-  disabled?: boolean;
-  onChange: (key: string) => void;
-  /** Busca colunas sob demanda se a lista ainda estiver vazia. */
-  onNeedColumns?: () => Promise<KanbanColumnOption[]>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [loadingCols, setLoadingCols] = useState(false);
-  const [localColumns, setLocalColumns] = useState<KanbanColumnOption[]>([]);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 240 });
-
-  const options = columns.length > 0 ? columns : localColumns;
-
-  useEffect(() => {
-    if (!open) return;
-    const update = () => {
-      const r = btnRef.current?.getBoundingClientRect();
-      if (!r) return;
-      const width = Math.max(r.width, 240);
-      const left = Math.min(r.left, window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
-    };
-    update();
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (btnRef.current?.contains(t)) return;
-      if ((e.target as HTMLElement)?.closest?.('[data-lead-col-picker]')) return;
-      setOpen(false);
-    };
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
-    window.addEventListener('mousedown', onDown);
-    return () => {
-      window.removeEventListener('scroll', update, true);
-      window.removeEventListener('resize', update);
-      window.removeEventListener('mousedown', onDown);
-    };
-  }, [open]);
-
-  const openMenu = async () => {
-    if (disabled) return;
-    const next = !open;
-    setOpen(next);
-    if (!next) return;
-    if (columns.length > 0) {
-      setLocalColumns(columns);
-      return;
-    }
-    if (!onNeedColumns) return;
-    setLoadingCols(true);
-    try {
-      const fetched = await onNeedColumns();
-      setLocalColumns(fetched);
-    } finally {
-      setLoadingCols(false);
-    }
-  };
-
-  const label =
-    title ||
-    options.find((c) => c.key === value)?.title ||
-    value ||
-    'Escolher coluna';
-
-  return (
-    <>
-      <button
-        ref={btnRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => void openMenu()}
-        title={title || 'Coluna do kanban'}
-        className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm text-left inline-flex items-center justify-between gap-2 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${columnSelectCls(value, title)} bg-white dark:bg-[#2a221c]`}
-      >
-        <span className="truncate">{label}</span>
-        <ChevronDown className="w-4 h-4 shrink-0 opacity-70" />
-      </button>
-      {open &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            data-lead-col-picker
-            className="fixed z-[9999] max-h-72 overflow-y-auto rounded-xl border border-stone-200 dark:border-white/15 bg-white dark:bg-[#2a221c] shadow-2xl py-1"
-            style={{ top: pos.top, left: pos.left, width: pos.width }}
-          >
-            {loadingCols && (
-              <div className="px-3.5 py-3 text-sm text-stone-500 flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Carregando colunas…
-              </div>
-            )}
-            {!loadingCols && options.length === 0 && (
-              <div className="px-3.5 py-3 text-sm text-stone-500">Nenhuma coluna do CRM encontrada.</div>
-            )}
-            {!loadingCols &&
-              options.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`w-full text-left px-3.5 py-2.5 text-sm font-semibold hover:bg-[#E86A24]/10 ${
-                    c.key === value
-                      ? 'text-[#E86A24] bg-[#E86A24]/5'
-                      : 'text-stone-800 dark:text-stone-100'
-                  }`}
-                  onClick={() => {
-                    setOpen(false);
-                    if (c.key !== value) onChange(c.key);
-                  }}
-                >
-                  {c.title}
-                </button>
-              ))}
-          </div>,
-          document.body
-        )}
-    </>
-  );
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
@@ -1300,8 +1169,8 @@ export default function LeadsSection({
       )}
 
       {/* Tabela */}
-      <div className={`${surfaceClass} overflow-hidden`}>
-        <div className="overflow-x-auto">
+      <div className={`${surfaceClass} overflow-visible`}>
+        <div className="overflow-x-auto overflow-y-visible">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-stone-200 dark:border-white/10 text-left text-xs uppercase tracking-wider text-stone-500 dark:text-stone-400 bg-stone-50/80 dark:bg-black/20">
@@ -1350,16 +1219,32 @@ export default function LeadsSection({
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l)} className="w-4 h-4 rounded accent-[#E86A24]" />
                     </td>
-                    <td className="px-4 py-3 min-w-[16rem]">
+                    <td className="px-4 py-3 min-w-[16rem] relative z-10">
                       {l.captador_id ? (
-                        <LeadColumnPicker
-                          value={l.column_key}
-                          title={l.column_title}
-                          columns={columns}
-                          disabled={busy || isCaptador}
-                          onNeedColumns={fetchKanbanColumns}
-                          onChange={(key) => changeColumn(l, key)}
-                        />
+                        isCaptador ? (
+                          <span
+                            className={`w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm inline-flex items-center ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
+                          >
+                            {l.column_title || l.column_key || 'Sem coluna'}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setMoveColumnLeads([l]);
+                              setMoveColumnKey(l.column_key || defaultColumnKey || columns[0]?.key || 'novo');
+                              if (columns.length === 0) void fetchKanbanColumns();
+                            }}
+                            title="Trocar coluna do CRM"
+                            className={`relative z-20 w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border shadow-sm text-left inline-flex items-center justify-between gap-2 cursor-pointer hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 ${columnSelectCls(l.column_key, l.column_title)} bg-white dark:bg-[#2a221c]`}
+                          >
+                            <span className="truncate">{l.column_title || l.column_key || 'Escolher coluna'}</span>
+                            <ChevronDown className="w-4 h-4 shrink-0 opacity-70" />
+                          </button>
+                        )
                       ) : isGerente && canManage ? (
                         <button
                           type="button"
@@ -1662,20 +1547,34 @@ export default function LeadsSection({
         (
           <form onSubmit={submitMoveColumn} className="p-5 space-y-4">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Move os leads já atribuídos para outra coluna do kanban do captador.
+              Escolha a coluna do kanban do captador para estes leads.
             </p>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Coluna</label>
-              <select value={moveColumnKey} onChange={(e) => setMoveColumnKey(e.target.value)} className={`${inputClass} min-h-[48px] text-base`} required>
-                {columns.map((c) => (
-                  <option key={c.id} value={c.key}>{c.title}</option>
-                ))}
-              </select>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {columns.length === 0 ? (
+                <div className="text-sm text-stone-500 flex items-center gap-2 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando colunas…
+                </div>
+              ) : (
+                columns.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setMoveColumnKey(c.key)}
+                    className={`w-full text-left px-4 py-3 min-h-[48px] rounded-xl text-base font-bold border transition-colors ${
+                      moveColumnKey === c.key
+                        ? 'border-[#E86A24] bg-[#E86A24]/15 text-[#E86A24]'
+                        : 'border-stone-200 dark:border-white/10 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    {c.title}
+                  </button>
+                ))
+              )}
             </div>
             <div className="flex justify-end gap-3 pt-2">
               <button type="button" onClick={() => setMoveColumnLeads(null)} className="px-5 py-3 min-h-[48px] rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/5 text-base">Cancelar</button>
-              <button type="submit" disabled={busy || columns.length === 0} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
-                {busy && <Loader2 className="w-5 h-5 animate-spin" />} Mover
+              <button type="submit" disabled={busy || columns.length === 0 || !moveColumnKey} className="px-7 py-3 min-h-[48px] rounded-xl bg-[#E86A24] text-white text-base font-bold hover:bg-[#D95E1B] disabled:opacity-60 flex items-center gap-2">
+                {busy && <Loader2 className="w-5 h-5 animate-spin" />} Confirmar
               </button>
             </div>
           </form>
