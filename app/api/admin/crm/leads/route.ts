@@ -863,10 +863,18 @@ export async function GET(req: NextRequest) {
           : null;
       const occ = occurrence.get(r.id);
       const columnKey = r.user_id ? stageMap.get(`${String(r.external_id)}:${r.user_id}`) || null : null;
+      const rawName = [r.name, r.last_name].filter(Boolean).join(' ').trim() || null;
+      const phoneDigitsOnly = String(r.phone || '').replace(/\D/g, '');
+      const nameDigitsOnly = String(rawName || '').replace(/\D/g, '');
+      const nameIsPhone =
+        !!rawName &&
+        !!phoneDigitsOnly &&
+        (nameDigitsOnly === phoneDigitsOnly ||
+          (/^\d{8,}$/.test(nameDigitsOnly) && !/[A-Za-zÀ-ÿ]/.test(rawName)));
       return {
         id: r.id,
         external_id: String(r.external_id),
-        name: [r.name, r.last_name].filter(Boolean).join(' ') || null,
+        name: nameIsPhone ? null : rawName,
         phone: r.phone,
         email: r.email,
         capture_status: r.capture_status || 'pendente',

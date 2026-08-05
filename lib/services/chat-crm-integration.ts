@@ -30,6 +30,23 @@ function isPhoneLikeName(name: string | null | undefined, phone: string): boolea
   return false;
 }
 
+/** Busca o melhor título/nome já conhecido em conversas do mesmo telefone. */
+async function findBestKnownContactName(phone: string): Promise<string | null> {
+  if (!phone || phone.length < 8) return null;
+  const { data } = await supabaseServiceRole
+    .from('chat_conversations')
+    .select('title, remote_jid')
+    .ilike('remote_jid', `${phone}%`)
+    .limit(20);
+  let best: string | null = null;
+  for (const row of data || []) {
+    const title = resolveContactDisplayName(row.title as string | undefined, phone);
+    if (!title) continue;
+    if (!best || title.length > best.length) best = title;
+  }
+  return best;
+}
+
 export type ChatLeadSource = 'whatsapp_official' | 'evolution' | 'chat';
 
 /**
@@ -56,7 +73,8 @@ export async function ensurePendingLeadForConversation(input: {
 
   const displayName =
     resolveContactDisplayName(input.name, phone) ||
-    resolveContactDisplayName(conversation?.title as string | undefined, phone);
+    resolveContactDisplayName(conversation?.title as string | undefined, phone) ||
+    (await findBestKnownContactName(phone));
 
   if (conversation?.lead_id) {
     const leadId = conversation.lead_id as string;
