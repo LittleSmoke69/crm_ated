@@ -30,7 +30,24 @@ export async function ensurePendingLeadForConversation(input: {
     .select('lead_id')
     .eq('id', input.conversationId)
     .single();
-  if (conversation?.lead_id) return conversation.lead_id as string;
+
+  const displayName = input.name?.trim() || phone;
+  if (conversation?.lead_id) {
+    const leadId = conversation.lead_id as string;
+    // O contato do chat é a fonte do nome para leads criados pela integração.
+    // Não altera responsável/status: enquanto não houver gerente nem captador,
+    // o lead continua como "Não atribuído" na tela Leads. Após delegação no chat
+    // (gerente_id preenchido), passa a "Aguardando captador".
+    if (displayName && displayName !== phone) {
+      const { error: nameError } = await supabaseServiceRole
+        .from('crm_leads')
+        .update({ name: displayName, updated_at: new Date().toISOString() })
+        .eq('id', leadId)
+        .in('source', ['evolution', 'whatsapp_official', 'chat']);
+      if (nameError) throw nameError;
+    }
+    return leadId;
+  }
 
   const { data: candidates, error: findError } = await supabaseServiceRole
     .from('crm_leads')
@@ -42,8 +59,6 @@ export async function ensurePendingLeadForConversation(input: {
   let leadId = (candidates ?? []).find((row) => phoneDigits(row.phone || '') === phone)?.id as
     | string
     | undefined;
-
-  const displayName = input.name?.trim() || phone;
 
   if (!leadId) {
     const now = new Date().toISOString();

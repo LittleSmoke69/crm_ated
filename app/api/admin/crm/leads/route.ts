@@ -31,6 +31,55 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+/** Interpreta period + date (YYYY-MM-DD) em janela [fromIso, toIso). */
+function resolvePeriodRange(
+  periodRaw: string | null,
+  dateRaw: string | null
+): { period: string; fromIso?: string; toIso?: string; date?: string } {
+  const period = (periodRaw || 'todos').trim().toLowerCase() || 'todos';
+  if (period === 'todos') return { period };
+
+  const startOfLocalDay = (y: number, m: number, d: number) => {
+    const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+    return dt;
+  };
+
+  const parseYmd = (s: string): { y: number; m: number; d: number } | null => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!y || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return { y, m: mo, d };
+  };
+
+  if (period === '7d') {
+    return { period, fromIso: new Date(Date.now() - 7 * 86400000).toISOString() };
+  }
+  if (period === '30d') {
+    return { period, fromIso: new Date(Date.now() - 30 * 86400000).toISOString() };
+  }
+
+  // hoje | dia — janela de 1 dia (local)
+  const today = new Date();
+  const ymd =
+    (period === 'dia' || period === 'hoje') && dateRaw
+      ? parseYmd(dateRaw)
+      : { y: today.getFullYear(), m: today.getMonth() + 1, d: today.getDate() };
+  const day = ymd || { y: today.getFullYear(), m: today.getMonth() + 1, d: today.getDate() };
+  const from = startOfLocalDay(day.y, day.m, day.d);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 1);
+  const date = `${day.y}-${String(day.m).padStart(2, '0')}-${String(day.d).padStart(2, '0')}`;
+  return {
+    period: period === 'dia' ? 'dia' : 'hoje',
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+    date,
+  };
+}
+
 /** Resolve coluna do kanban: preferredKey → novo → status_pendente → primeira ativa. */
 async function resolveKanbanColumn(
   zaplotoId: string | null,
@@ -208,9 +257,12 @@ type CaptadorSalesRow = {
 };
 
 type SalesSummary = {
+  /** Total de leads atribuídos (com captador) no escopo do viewer. */
   total_leads: number;
   total_vendas: number;
   taxa: number;
+  /** Pool sem captador — só admin/super_admin/gerente; captador sempre 0. */
+  total_nao_atribuidos: number;
   by_captador: CaptadorSalesRow[];
 };
 
@@ -264,11 +316,59 @@ async function resolveVendaTagIds(): Promise<string[]> {
  * - sem estágio mas a 1ª coluna do funil é Convertido (mesmo fallback do board), OU
  * - etiqueta Venda / Venda fechada
  */
+/** Conta leads sem captador no escopo (admin = tenant; gerente = pool dele). */
+async function countUnassignedLeads(params: {
+  isCaptador: boolean;
+  isGerente: boolean;
+  userId: string;
+  zaplotoId: string;
+  fromIso?: string;
+  toIso?: string;
+}): Promise<number> {
+  const { isCaptador, isGerente, userId, zaplotoId, fromIso, toIso } = params;
+  if (isCaptador) return 0;
+
+  let total = 0;
+  let from = 0;
+  for (;;) {
+    let query = supabaseServiceRole
+      .from('crm_leads')
+      .select('id')
+      .is('user_id', null)
+      .range(from, from + SCAN_PAGE - 1);
+
+    if (isGerente) {
+      query = query.eq('gerente_id', userId);
+    } else {
+      // Admin: pool realmente livre (chat→gerente já tem gerente_id e não conta aqui)
+      query = query.is('gerente_id', null).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+    }
+    if (fromIso) query = query.gte('created_at', fromIso);
+    if (toIso) query = query.lt('created_at', toIso);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const batch = data || [];
+    total += batch.length;
+    if (batch.length < SCAN_PAGE) break;
+    from += SCAN_PAGE;
+  }
+  return total;
+}
+
 async function countWonSales(
   captadorIds: string[],
-  nameById: Map<string, string>
+  nameById: Map<string, string>,
+  totalNaoAtribuidos = 0,
+  range?: { fromIso?: string; toIso?: string }
 ): Promise<SalesSummary> {
-  const empty: SalesSummary = { total_leads: 0, total_vendas: 0, taxa: 0, by_captador: [] };
+  const empty: SalesSummary = {
+    total_leads: 0,
+    total_vendas: 0,
+    taxa: 0,
+    total_nao_atribuidos: totalNaoAtribuidos,
+    by_captador: [],
+  };
   if (captadorIds.length === 0) return empty;
 
   const stats = new Map<string, { total: number; vendas: number }>();
@@ -288,11 +388,14 @@ async function countWonSales(
   for (const chunk of chunkArray(captadorIds, IN_CHUNK)) {
     let from = 0;
     for (;;) {
-      const { data, error } = await supabaseServiceRole
+      let query = supabaseServiceRole
         .from('crm_leads')
         .select('external_id, user_id')
         .in('user_id', chunk)
         .range(from, from + SCAN_PAGE - 1);
+      if (range?.fromIso) query = query.gte('created_at', range.fromIso);
+      if (range?.toIso) query = query.lt('created_at', range.toIso);
+      const { data, error } = await query;
       if (error) throw new Error(error.message);
       const batch = data || [];
       for (const row of batch) {
@@ -388,7 +491,13 @@ async function countWonSales(
   );
 
   const taxa = totalLeads > 0 ? Math.round((totalVendas / totalLeads) * 1000) / 10 : 0;
-  return { total_leads: totalLeads, total_vendas: totalVendas, taxa, by_captador: byCaptador };
+  return {
+    total_leads: totalLeads,
+    total_vendas: totalVendas,
+    taxa,
+    total_nao_atribuidos: totalNaoAtribuidos,
+    by_captador: byCaptador,
+  };
 }
 
 async function fetchLeadsByIds(ids: string[]) {
@@ -475,6 +584,8 @@ async function scanLeads(params: {
   gerenteId?: string;
   captadorId?: string;
   fromIso?: string;
+  /** Limite exclusivo do período (ex.: início do dia seguinte). */
+  toIso?: string;
   /** Pool sem captador (user_id null). */
   unassignedOnly?: boolean;
   /** Quando definido, restringe a leads do gerente (pool + equipe). */
@@ -493,6 +604,7 @@ async function scanLeads(params: {
     gerenteId,
     captadorId,
     fromIso,
+    toIso,
     unassignedOnly,
     scopeGerenteId,
     scopeTeamIds,
@@ -527,7 +639,12 @@ async function scanLeads(params: {
     } else {
       // Admin: todos os leads do tenant (por zaploto_id), leads de usuários do tenant e legado sem dono
       if (unassignedOnly) {
-        query = query.is('user_id', null).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+        // Admin: só pool livre (sem gerente e sem captador).
+        // Leads do chat já delegados ao gerente têm gerente_id e NÃO entram aqui.
+        query = query
+          .is('user_id', null)
+          .is('gerente_id', null)
+          .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
       } else {
         const parts = [`zaploto_id.eq.${zaplotoId}`];
         if (idsList) parts.push(`user_id.in.(${idsList})`);
@@ -552,6 +669,7 @@ async function scanLeads(params: {
     if (gerenteId) query = query.eq('gerente_id', gerenteId);
     if (captadorId) query = query.eq('user_id', captadorId);
     if (fromIso) query = query.gte('created_at', fromIso);
+    if (toIso) query = query.lt('created_at', toIso);
     if (q) {
       const safe = q.replace(/[%,()]/g, ' ').trim();
       const digits = normalizePhone(q);
@@ -585,17 +703,10 @@ export async function GET(req: NextRequest) {
     const salesOnly = req.nextUrl.searchParams.get('sales_only') === '1';
 
     const sp = req.nextUrl.searchParams;
-    const period = sp.get('period') || 'todos';
-    let fromIso: string | undefined;
-    if (period === 'hoje') {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      fromIso = d.toISOString();
-    } else if (period === '7d') {
-      fromIso = new Date(Date.now() - 7 * 86400000).toISOString();
-    } else if (period === '30d') {
-      fromIso = new Date(Date.now() - 30 * 86400000).toISOString();
-    }
+    const { fromIso, toIso, period, date: periodDate } = resolvePeriodRange(
+      sp.get('period'),
+      sp.get('date')
+    );
 
     const columnFilter = (sp.get('column_key') || '').trim();
     const unassignedOnly = columnFilter === UNASSIGNED_COLUMN_FILTER;
@@ -615,7 +726,7 @@ export async function GET(req: NextRequest) {
     const profileById = new Map<string, any>(profiles.map((p: any) => [p.id, p]));
     const teamCaptadorIds = new Set(teamCaptadores.map((c) => c.id));
 
-    // Card de vendas: só countWonSales (sem scan da tabela)
+    // Card de vendas / atribuídos: só countWonSales (sem scan da tabela)
     if (salesOnly) {
       const captadorProfiles = isCaptador
         ? []
@@ -631,8 +742,16 @@ export async function GET(req: NextRequest) {
       if (isCaptador) {
         nameById.set(userId, profile.full_name || profile.email || 'Captador');
       }
-      const sales = await countWonSales(salesScopeIds, nameById);
-      return successResponse({ sales });
+      const totalNaoAtribuidos = await countUnassignedLeads({
+        isCaptador,
+        isGerente,
+        userId,
+        zaplotoId,
+        fromIso,
+        toIso,
+      });
+      const sales = await countWonSales(salesScopeIds, nameById, totalNaoAtribuidos, { fromIso, toIso });
+      return successResponse({ sales, period, date: periodDate || null });
     }
 
     const captadorFilter = isCaptador
@@ -648,7 +767,9 @@ export async function GET(req: NextRequest) {
         total: 0,
         page: 1,
         page_size: PAGE_SIZE_DEFAULT,
-        sales: includeSales ? { total_leads: 0, total_vendas: 0, taxa: 0, by_captador: [] } : undefined,
+        sales: includeSales
+          ? { total_leads: 0, total_vendas: 0, taxa: 0, total_nao_atribuidos: 0, by_captador: [] }
+          : undefined,
         columns,
         default_column_key: DEFAULT_ASSIGN_COLUMN,
         viewer: { status: profile.status, can_edit_column: true, can_assign: !isCaptador },
@@ -673,6 +794,7 @@ export async function GET(req: NextRequest) {
       gerenteId: isGerente || isCaptador ? undefined : sp.get('gerente_id') || undefined,
       captadorId: captadorFilter,
       fromIso,
+      toIso,
       unassignedOnly,
       scopeGerenteId: isGerente ? userId : undefined,
       scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
@@ -711,7 +833,12 @@ export async function GET(req: NextRequest) {
         return inColumn.has(`${String(r.external_id)}:${r.user_id}`);
       });
     } else if (unassignedOnly) {
-      filtered = filtered.filter((r) => !r.user_id);
+      // Gerente: pool dele sem captador. Admin: sem gerente e sem captador.
+      filtered = filtered.filter((r) => {
+        if (r.user_id) return false;
+        if (isGerente) return true;
+        return !r.gerente_id;
+      });
     }
 
     const total = filtered.length;
@@ -753,8 +880,12 @@ export async function GET(req: NextRequest) {
         gerente_name: gerente ? (gerente.full_name || gerente.email) : null,
         occurrence: occ?.n || 1,
         occurrence_total: occ?.total || 1,
-        unassigned: !r.user_id,
-        assignment_status: r.user_id ? 'atribuido' : 'nao_atribuido',
+        unassigned: !r.user_id && !r.gerente_id,
+        assignment_status: r.user_id
+          ? 'atribuido'
+          : r.gerente_id
+            ? 'com_gerente'
+            : 'nao_atribuido',
       };
     });
 
@@ -773,7 +904,21 @@ export async function GET(req: NextRequest) {
       nameById.set(userId, profile.full_name || profile.email || 'Captador');
     }
 
-    const sales = includeSales ? await countWonSales(salesScopeIds, nameById) : undefined;
+    const sales = includeSales
+      ? await countWonSales(
+          salesScopeIds,
+          nameById,
+          await countUnassignedLeads({
+            isCaptador,
+            isGerente,
+            userId,
+            zaplotoId,
+            fromIso,
+            toIso,
+          }),
+          { fromIso, toIso }
+        )
+      : undefined;
 
     return successResponse({
       leads,
