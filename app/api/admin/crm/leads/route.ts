@@ -17,6 +17,8 @@ const IN_CHUNK = 80;
 const STAGE_UPSERT_CHUNK = 200;
 /** Coluna padrão ao atribuir lead ao captador. */
 const DEFAULT_ASSIGN_COLUMN = 'novo';
+/** Filtro especial: leads sem captador (pool / não atribuídos). */
+const UNASSIGNED_COLUMN_FILTER = '__unassigned__';
 
 function normalizePhone(v: string | null | undefined): string {
   return String(v || '').replace(/\D/g, '');
@@ -473,11 +475,15 @@ async function scanLeads(params: {
   gerenteId?: string;
   captadorId?: string;
   fromIso?: string;
+  /** Pool sem captador (user_id null). */
+  unassignedOnly?: boolean;
   /** Quando definido, restringe a leads do gerente (pool + equipe). */
   scopeGerenteId?: string;
   scopeTeamIds?: string[];
   /** Captador: só leads atribuídos a ele. */
   scopeCaptadorId?: string;
+  /** Para listagem rápida: para o scan após N linhas (total ainda aproximado se truncated). */
+  maxRows?: number;
 }) {
   const {
     tenantUserIds,
@@ -487,18 +493,22 @@ async function scanLeads(params: {
     gerenteId,
     captadorId,
     fromIso,
+    unassignedOnly,
     scopeGerenteId,
     scopeTeamIds,
     scopeCaptadorId,
+    maxRows = SCAN_MAX,
   } = params;
   const rows: any[] = [];
   let from = 0;
-  while (rows.length < SCAN_MAX) {
+  const limit = Math.min(SCAN_MAX, Math.max(1, maxRows));
+  while (rows.length < limit) {
+    const pageEnd = Math.min(from + SCAN_PAGE - 1, from + (limit - rows.length) - 1);
     let query = supabaseServiceRole
       .from('crm_leads')
       .select('id, external_id, user_id, gerente_id, name, last_name, phone, email, capture_status, source, created_at, zaploto_id')
       .order('created_at', { ascending: false })
-      .range(from, from + SCAN_PAGE - 1);
+      .range(from, pageEnd);
 
     // Escopo: leads de usuários do tenant OU pendentes (sem dono) do tenant/legado
     const idsList = tenantUserIds.join(',');
@@ -506,17 +516,34 @@ async function scanLeads(params: {
       query = query.eq('user_id', scopeCaptadorId);
     } else if (scopeGerenteId) {
       const teamIds = (scopeTeamIds ?? []).filter(Boolean);
-      if (teamIds.length > 0) {
+      if (unassignedOnly) {
+        // Pool do gerente sem captador
+        query = query.eq('gerente_id', scopeGerenteId).is('user_id', null);
+      } else if (teamIds.length > 0) {
         query = query.or(`gerente_id.eq.${scopeGerenteId},user_id.in.(${teamIds.join(',')})`);
       } else {
         query = query.eq('gerente_id', scopeGerenteId);
       }
     } else {
       // Admin: todos os leads do tenant (por zaploto_id), leads de usuários do tenant e legado sem dono
-      const parts = [`zaploto_id.eq.${zaplotoId}`];
-      if (idsList) parts.push(`user_id.in.(${idsList})`);
-      parts.push('and(user_id.is.null,zaploto_id.is.null)');
-      query = query.or(parts.join(','));
+      if (unassignedOnly) {
+        query = query.is('user_id', null).or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+      } else {
+        const parts = [`zaploto_id.eq.${zaplotoId}`];
+        if (idsList) parts.push(`user_id.in.(${idsList})`);
+        parts.push('and(user_id.is.null,zaploto_id.is.null)');
+        query = query.or(parts.join(','));
+      }
+    }
+
+    if (unassignedOnly && scopeCaptadorId) {
+      // Captador não tem pool — resultado vazio
+      return [];
+    }
+    if (unassignedOnly && !scopeGerenteId && !scopeCaptadorId) {
+      // já aplicado acima no branch admin
+    } else if (unassignedOnly && captadorId) {
+      return [];
     }
 
     if (captureStatus && CAPTURE_STATUSES.includes(captureStatus as any)) {
@@ -545,7 +572,8 @@ async function scanLeads(params: {
 
 /**
  * GET /api/admin/crm/leads — lista leads capturados com filtros, paginação e nº de ocorrência por telefone.
- * Query: q, column_key, capture_status, gerente_id, captador_id, period (todos|hoje|7d|30d), duplicates=1, page, page_size, all=1 (export)
+ * Query: q, column_key (__unassigned__ = sem captador), capture_status, gerente_id, captador_id,
+ *        period, duplicates=1, page, page_size, all=1, include_sales=1
  */
 export async function GET(req: NextRequest) {
   try {
@@ -553,12 +581,8 @@ export async function GET(req: NextRequest) {
     const isGerente = profile.status === 'gerente';
     const isCaptador = profile.status === 'captador';
     const zaplotoId = await getEffectiveZaplotoId(req, profile);
-    const profiles = await getTenantProfiles(zaplotoId);
-    const tenantUserIds = profiles.map((p: any) => p.id);
-    const profileById = new Map<string, any>(profiles.map((p: any) => [p.id, p]));
-
-    const teamCaptadores = isGerente ? await getConsultorsByManager(userId) : [];
-    const teamCaptadorIds = new Set(teamCaptadores.map((c) => c.id));
+    const includeSales = req.nextUrl.searchParams.get('include_sales') === '1';
+    const salesOnly = req.nextUrl.searchParams.get('sales_only') === '1';
 
     const sp = req.nextUrl.searchParams;
     const period = sp.get('period') || 'todos';
@@ -573,11 +597,68 @@ export async function GET(req: NextRequest) {
       fromIso = new Date(Date.now() - 30 * 86400000).toISOString();
     }
 
+    const columnFilter = (sp.get('column_key') || '').trim();
+    const unassignedOnly = columnFilter === UNASSIGNED_COLUMN_FILTER;
+
+    // Profiles + colunas em paralelo (sales só sob demanda)
+    const [profiles, columns, teamCaptadores] = await Promise.all([
+      getTenantProfiles(zaplotoId),
+      salesOnly ? Promise.resolve([] as Awaited<ReturnType<typeof listActiveKanbanColumns>>) : listActiveKanbanColumns(zaplotoId),
+      isGerente ? getConsultorsByManager(userId) : Promise.resolve([] as Awaited<ReturnType<typeof getConsultorsByManager>>),
+    ]);
+    const tenantUserIds = profiles.map((p: any) => p.id);
+    const profileById = new Map<string, any>(profiles.map((p: any) => [p.id, p]));
+    const teamCaptadorIds = new Set(teamCaptadores.map((c) => c.id));
+
+    // Card de vendas: só countWonSales (sem scan da tabela)
+    if (salesOnly) {
+      const captadorProfiles = isCaptador
+        ? []
+        : isGerente
+          ? teamCaptadores
+          : profiles.filter((p: any) => p.status === 'captador');
+      const salesScopeIds = isCaptador
+        ? [userId]
+        : captadorProfiles.map((p: any) => p.id as string);
+      const nameById = new Map<string, string>(
+        captadorProfiles.map((p: any) => [p.id as string, (p.full_name || p.email || 'Captador') as string])
+      );
+      if (isCaptador) {
+        nameById.set(userId, profile.full_name || profile.email || 'Captador');
+      }
+      const sales = await countWonSales(salesScopeIds, nameById);
+      return successResponse({ sales });
+    }
+
     const captadorFilter = isCaptador
       ? userId
       : isGerente
         ? (sp.get('captador_id') && teamCaptadorIds.has(sp.get('captador_id')!) ? sp.get('captador_id')! : undefined)
         : sp.get('captador_id') || undefined;
+
+    // Não atribuídos + filtro de captador específico = conjunto vazio
+    if (unassignedOnly && captadorFilter) {
+      return successResponse({
+        leads: [],
+        total: 0,
+        page: 1,
+        page_size: PAGE_SIZE_DEFAULT,
+        sales: includeSales ? { total_leads: 0, total_vendas: 0, taxa: 0, by_captador: [] } : undefined,
+        columns,
+        default_column_key: DEFAULT_ASSIGN_COLUMN,
+        viewer: { status: profile.status, can_edit_column: true, can_assign: !isCaptador },
+        gerentes: isCaptador
+          ? []
+          : isGerente
+            ? [{ id: userId, name: profile.full_name || profile.email || 'Gerente' }]
+            : profiles.filter((p: any) => p.status === 'gerente').map((p: any) => ({ id: p.id, name: p.full_name || p.email })),
+        captadores: isCaptador
+          ? [{ id: userId, name: profile.full_name || profile.email || 'Captador', enroller: profile.enroller }]
+          : (isGerente ? teamCaptadores : profiles.filter((p: any) => p.status === 'captador')).map(
+              (p: any) => ({ id: p.id, name: p.full_name || p.email, enroller: p.enroller })
+            ),
+      });
+    }
 
     const rows = await scanLeads({
       tenantUserIds,
@@ -587,6 +668,7 @@ export async function GET(req: NextRequest) {
       gerenteId: isGerente || isCaptador ? undefined : sp.get('gerente_id') || undefined,
       captadorId: captadorFilter,
       fromIso,
+      unassignedOnly,
       scopeGerenteId: isGerente ? userId : undefined,
       scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
       scopeCaptadorId: isCaptador ? userId : undefined,
@@ -612,8 +694,7 @@ export async function GET(req: NextRequest) {
       filtered = rows.filter((r) => (occurrence.get(r.id)?.total || 1) > 1);
     }
 
-    const columnFilter = (sp.get('column_key') || '').trim();
-    if (columnFilter) {
+    if (columnFilter && !unassignedOnly) {
       const scopeForColumn = isCaptador
         ? [userId]
         : isGerente
@@ -624,6 +705,8 @@ export async function GET(req: NextRequest) {
         if (!r.user_id) return false;
         return inColumn.has(`${String(r.external_id)}:${r.user_id}`);
       });
+    } else if (unassignedOnly) {
+      filtered = filtered.filter((r) => !r.user_id);
     }
 
     const total = filtered.length;
@@ -632,7 +715,6 @@ export async function GET(req: NextRequest) {
     const page = exportAll ? 1 : Math.max(1, parseInt(sp.get('page') || '1', 10) || 1);
     const paged = exportAll ? filtered : filtered.slice((page - 1) * pageSize, page * pageSize);
 
-    const columns = await listActiveKanbanColumns(zaplotoId);
     const columnTitleByKey = new Map(columns.map((c) => [c.key, c.title]));
     const stageMap = await fetchStagesByLeadUser(
       paged
@@ -666,6 +748,7 @@ export async function GET(req: NextRequest) {
         gerente_name: gerente ? (gerente.full_name || gerente.email) : null,
         occurrence: occ?.n || 1,
         occurrence_total: occ?.total || 1,
+        unassigned: !r.user_id,
       };
     });
 
@@ -683,7 +766,8 @@ export async function GET(req: NextRequest) {
     if (isCaptador) {
       nameById.set(userId, profile.full_name || profile.email || 'Captador');
     }
-    const sales = await countWonSales(salesScopeIds, nameById);
+
+    const sales = includeSales ? await countWonSales(salesScopeIds, nameById) : undefined;
 
     return successResponse({
       leads,
@@ -695,7 +779,6 @@ export async function GET(req: NextRequest) {
       default_column_key: DEFAULT_ASSIGN_COLUMN,
       viewer: {
         status: profile.status,
-        // Gerente/admin: qualquer lead com captador. Captador: próprios leads (paridade kanban).
         can_edit_column: true,
         can_assign: !isCaptador,
       },

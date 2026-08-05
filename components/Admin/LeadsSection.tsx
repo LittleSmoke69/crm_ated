@@ -44,6 +44,7 @@ type CapturedLead = {
   gerente_name: string | null;
   occurrence: number;
   occurrence_total: number;
+  unassigned?: boolean;
 };
 
 type PersonOption = { id: string; name: string; enroller?: string | null };
@@ -225,6 +226,8 @@ function CrmColumnSelect({
     </>
   );
 }
+
+const UNASSIGNED_COLUMN_FILTER = '__unassigned__';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
 const SELECT_ALL_PAGE_SIZE = 200;
@@ -476,10 +479,30 @@ export default function LeadsSection({
     return sp.toString();
   }, [q, fColumn, fGerente, fCaptador, fPeriod, onlyDuplicates]);
 
+  const loadSales = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/admin/crm/leads?sales_only=1&include_sales=1`,
+        { headers: headers() }
+      );
+      const json = await res.json();
+      if (!res.ok || !json.success || !json.data?.sales) return;
+      setSales({
+        total_leads: json.data.sales.total_leads || 0,
+        total_vendas: json.data.sales.total_vendas || 0,
+        taxa: json.data.sales.taxa || 0,
+        by_captador: Array.isArray(json.data.sales.by_captador) ? json.data.sales.by_captador : [],
+      });
+    } catch {
+      /* card de vendas é secundário */
+    }
+  }, [headers]);
+
   const loadLeads = useCallback(async (targetPage = 1, opts?: { preserveSelection?: boolean; size?: number }) => {
     setLoading(true);
     const size = opts?.size ?? pageSize;
     try {
+      // Tabela primeiro (sem vendas) — bem mais rápido
       const res = await fetch(
         `/api/admin/crm/leads?${buildQuery({ page: String(targetPage), page_size: String(size) })}`,
         { headers: headers() }
@@ -499,27 +522,14 @@ export default function LeadsSection({
         if (vs) setViewerStatus(vs === 'super_admin' ? 'admin' : vs);
         setCanEditColumn(true);
       }
-      // Heurística: API de gerente devolve só o próprio perfil em `gerentes`
       const gs = json.data.gerentes;
       if (Array.isArray(gs) && gs.length === 1 && gs[0]?.id === userId) {
         setViewerStatus('gerente');
         setCanEditColumn(true);
       }
-      if (!json.data.columns?.length) {
-        await fetchKanbanColumns();
-      }
-      if (json.data.sales) {
-        setSales({
-          total_leads: json.data.sales.total_leads || 0,
-          total_vendas: json.data.sales.total_vendas || 0,
-          taxa: json.data.sales.taxa || 0,
-          by_captador: Array.isArray(json.data.sales.by_captador) ? json.data.sales.by_captador : [],
-        });
-      }
       if (!opts?.preserveSelection) {
         setSelectedMap(new Map());
       } else {
-        // Atualiza objetos já selecionados com dados frescos da página
         setSelectedMap((prev) => {
           if (prev.size === 0) return prev;
           const next = new Map(prev);
@@ -529,16 +539,14 @@ export default function LeadsSection({
           return next;
         });
       }
+      // Vendas em background (não bloqueia a tabela)
+      void loadSales();
     } catch (e: any) {
       showToast(e?.message || 'Erro ao carregar leads', 'error');
     } finally {
       setLoading(false);
     }
-  }, [buildQuery, headers, pageSize, fetchKanbanColumns]);
-
-  useEffect(() => {
-    void fetchKanbanColumns();
-  }, [fetchKanbanColumns]);
+  }, [buildQuery, headers, pageSize, userId, loadSales]);
 
   useEffect(() => {
     setSelectedMap(new Map());
@@ -1162,6 +1170,7 @@ export default function LeadsSection({
             <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Coluna CRM</label>
             <select value={fColumn} onChange={(e) => setFColumn(e.target.value)} className={`${inputClass} min-h-[44px]`}>
               <option value="">Todas</option>
+              <option value={UNASSIGNED_COLUMN_FILTER}>Não atribuídos</option>
               {columns.map((c) => (
                 <option key={c.id} value={c.key}>{c.title}</option>
               ))}
@@ -1430,15 +1439,15 @@ export default function LeadsSection({
                             setAssignLeads([l]);
                             setAssignForm({ gerente_id: userId, captador_id: '' });
                           }}
-                          className="w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-base font-bold border-2 border-dashed border-[#E86A24]/60 text-[#E86A24] bg-[#E86A24]/5 hover:bg-[#E86A24]/10 shadow-sm text-left inline-flex items-center justify-between gap-2"
-                          title="Atribuir captador para liberar a coluna do CRM"
+                          className="w-full min-w-[15rem] px-3.5 py-3 min-h-[48px] rounded-xl text-sm font-bold border-2 border-dashed border-stone-400/50 text-stone-600 dark:text-stone-300 bg-stone-500/5 hover:bg-stone-500/10 shadow-sm text-left inline-flex items-center justify-between gap-2"
+                          title="Lead no pool — atribuir captador"
                         >
-                          <span className="truncate">Atribuir captador</span>
-                          <UserPlus className="w-4 h-4 shrink-0" />
+                          <span className="truncate">Não atribuído</span>
+                          <UserPlus className="w-4 h-4 shrink-0 text-[#E86A24]" />
                         </button>
                       ) : (
-                        <span className="inline-flex px-3.5 py-3 min-h-[48px] items-center rounded-xl text-base font-medium border border-dashed border-stone-300 dark:border-white/15 text-stone-400">
-                          Sem captador
+                        <span className="inline-flex px-3.5 py-3 min-h-[48px] items-center rounded-xl text-sm font-medium border border-dashed border-stone-300 dark:border-white/15 text-stone-500">
+                          Não atribuído
                         </span>
                       )}
                     </td>
@@ -1649,7 +1658,7 @@ export default function LeadsSection({
                     </select>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    Sem captador: o gerente recebe os leads na tabela e atribui aos captadores depois.
+                    Sem captador: o lead fica como Não atribuído na tabela; o gerente atribui aos captadores depois (aí entra em Novo lead no kanban).
                     Se o CSV trouxer a coluna Gerente, ela prevalece por linha.
                   </p>
                 </div>
@@ -1702,7 +1711,7 @@ export default function LeadsSection({
                 <option value="">Selecione o captador...</option>
                 {captadoresForGerente.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">O lead entra automaticamente na coluna Novo lead do kanban do captador.</p>
+              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">O lead entra na coluna Novo lead do kanban só após atribuir o captador. Antes disso fica como Não atribuído.</p>
             </div>
             )}
             <div className="flex justify-end gap-3 pt-2">
