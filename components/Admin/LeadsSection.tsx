@@ -422,7 +422,7 @@ export default function LeadsSection({
   const [fColumn, setFColumn] = useState('');
   const [fGerente, setFGerente] = useState('');
   const [fCaptador, setFCaptador] = useState('');
-  const [fPeriod, setFPeriod] = useState('hoje');
+  const [fPeriod, setFPeriod] = useState('todos');
   const [fDate, setFDate] = useState(localTodayYmd);
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 

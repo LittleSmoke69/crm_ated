@@ -9,6 +9,7 @@ import {
   Link2,
   Plus,
   Shield,
+  Trash2,
   UserCheck,
   UserPlus,
   UserX,
@@ -124,6 +125,7 @@ export default function UsersManagementSection({
   const [managerUser, setManagerUser] = useState<OverviewUser | null>(null);
   const [managerValue, setManagerValue] = useState('');
   const [toggleUser, setToggleUser] = useState<OverviewUser | null>(null);
+  const [deleteInactiveOpen, setDeleteInactiveOpen] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToasts((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, message: msg, type }]);
@@ -285,6 +287,37 @@ export default function UsersManagementSection({
     return true;
   };
 
+  const inactiveManageable = users.filter((u) => !u.is_active && canManage(u));
+
+  const submitDeleteInactive = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/admin/users/delete-inactive', {
+        method: 'POST',
+        headers: headers(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Erro ao remover usuários inativos');
+      const { deletedCount, skipped } = json.data || { deletedCount: 0, skipped: [] };
+      if (deletedCount > 0) {
+        showToast(
+          skipped?.length
+            ? `${deletedCount} usuário${deletedCount === 1 ? '' : 's'} inativo${deletedCount === 1 ? '' : 's'} removido${deletedCount === 1 ? '' : 's'}. ${skipped.length} não puderam ser removidos (possuem subordinados).`
+            : `${deletedCount} usuário${deletedCount === 1 ? '' : 's'} inativo${deletedCount === 1 ? '' : 's'} removido${deletedCount === 1 ? '' : 's'} com sucesso!`,
+          'success'
+        );
+      } else {
+        showToast('Nenhum usuário inativo pôde ser removido.', 'error');
+      }
+      setDeleteInactiveOpen(false);
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.message || 'Erro ao remover usuários inativos', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const tabBtn = (key: TabKey, label: string, count: number) => (
     <button
       key={key}
@@ -317,6 +350,14 @@ export default function UsersManagementSection({
           <p className="text-gray-600 dark:text-gray-400 mt-1">Gerencie administradores, gerentes e captadores</p>
         </div>
         <div className="flex flex-wrap gap-3">
+          <Button
+            variant="danger"
+            onClick={() => setDeleteInactiveOpen(true)}
+            disabled={inactiveManageable.length === 0}
+            icon={<Trash2 className="w-4 h-4" />}
+          >
+            Excluir Inativos {inactiveManageable.length > 0 ? `(${inactiveManageable.length})` : ''}
+          </Button>
           <Button
             variant="secondary"
             onClick={() => { setCreateRole('admin'); setCreateForm({ fullName: '', email: '', password: '', enroller: '' }); }}
@@ -614,6 +655,23 @@ export default function UsersManagementSection({
             >
               {toggleUser.is_active ? 'Desativar' : 'Reativar'}
             </Button>
+          </div>
+        </div>
+      ))}
+
+      {/* Modal: excluir inativos */}
+      {deleteInactiveOpen && modalShell('Excluir usuários inativos', () => setDeleteInactiveOpen(false), (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            Tem certeza que deseja excluir permanentemente{' '}
+            <strong>
+              {inactiveManageable.length} usuário{inactiveManageable.length === 1 ? '' : 's'} inativo{inactiveManageable.length === 1 ? '' : 's'}
+            </strong>
+            ? Essa ação não pode ser desfeita. Usuários inativos com subordinados ainda vinculados não serão removidos.
+          </p>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setDeleteInactiveOpen(false)}>Cancelar</Button>
+            <Button variant="danger" onClick={submitDeleteInactive} loading={busy}>Excluir</Button>
           </div>
         </div>
       ))}
