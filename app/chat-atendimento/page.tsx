@@ -17,6 +17,7 @@ import {
 import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
+import { mergeEvolutionConversationsForAtendimento } from '@/lib/chat/merge-evolution-atendimento-conversations';
 import {
   countConnectedEvolutionInstances,
   resolveActiveAtendimentoChannel,
@@ -116,6 +117,7 @@ interface Conversation {
   unread_count: number;
   is_group: boolean;
   user_id?: string;
+  gerente_id?: string | null;
   whatsapp_config_id?: string | null;
   attendance_status?: 'pendente' | 'resolvido' | null;
   resolved_at?: string | null;
@@ -530,7 +532,16 @@ function MediaRetryButton({
 
 // ─── AudioMessagePlayer (play, duração, waveform) ─────────────────────────────
 
-function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
+function AudioMessagePlayer({
+  src,
+  fromMe,
+  onError,
+}: {
+  src: string;
+  fromMe: boolean;
+  /** Chamado quando o arquivo não carrega — quem renderiza troca pelo fallback/retry. */
+  onError?: () => void;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -620,7 +631,7 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
 
   return (
     <div className="flex items-center gap-2 min-w-[200px] max-w-[280px]">
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={src} preload="metadata" onError={() => onError?.()} />
       <button
         type="button"
         onClick={togglePlay}
@@ -695,7 +706,7 @@ function MessageContent({
 }) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
   const [autoRetried, setAutoRetried] = useState(false);
-  const [failedMedia, setFailedMedia] = useState<'image' | 'video' | null>(null);
+  const [failedMedia, setFailedMedia] = useState<'image' | 'video' | 'audio' | null>(null);
   const mediaUrl = resolvedUrl || msg.media_url;
   const displayMediaUrl = mediaUrl
     ? `/api/chat/messages/download-media?chat_message_id=${encodeURIComponent(msg.id)}`
@@ -766,8 +777,8 @@ function MessageContent({
         )
       )}
       {msg.media_type === 'audio' && (
-        displayMediaUrl && failedMedia !== 'video' ? (
-          <AudioMessagePlayer src={displayMediaUrl} fromMe={fromMe} />
+        displayMediaUrl && failedMedia !== 'audio' ? (
+          <AudioMessagePlayer src={displayMediaUrl} fromMe={fromMe} onError={() => setFailedMedia('audio')} />
         ) : (
           retryFallback('audio') || <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
@@ -1231,7 +1242,16 @@ export default function ChatPage() {
               if (res.success) {
                 conversationsCacheRef.current[id] = res.data || [];
                 setSelectedChannel((ch) => {
-                  if (ch?.id === id) setConversations(res.data || []);
+                  if (ch?.type === 'evolution' && (userStatus === 'gerente' || userStatus === 'admin' || userStatus === 'super_admin')) {
+                    const lists = new Map<string, Conversation[]>();
+                    for (const evoChannel of evo) {
+                      const cached = conversationsCacheRef.current[evoChannel.id];
+                      if (cached) lists.set(evoChannel.id, cached);
+                    }
+                    setConversations(mergeEvolutionConversationsForAtendimento(lists, ch.id));
+                  } else if (ch?.id === id) {
+                    setConversations(res.data || []);
+                  }
                   return ch;
                 });
               }
@@ -1709,15 +1729,27 @@ export default function ChatPage() {
             console.warn('[Chat Atendimento] Sincronização Evolution:', meta.evolution_sync_error);
           }
           conversationsCacheRef.current[selectedChannel.id] = list;
-          setConversations(list);
+          const visibleList =
+            selectedChannel.type === 'evolution' &&
+            (userStatus === 'gerente' || userStatus === 'admin' || userStatus === 'super_admin')
+              ? mergeEvolutionConversationsForAtendimento(
+                  new Map(
+                    channels.evolution
+                      .map((channel) => [channel.id, conversationsCacheRef.current[channel.id]] as const)
+                      .filter((entry): entry is readonly [string, Conversation[]] => Array.isArray(entry[1]))
+                  ),
+                  selectedChannel.id
+                )
+              : list;
+          setConversations(visibleList);
           setSelectedConversationId(() => {
-            if (prevSelId && list.some((c) => c.id === prevSelId)) return prevSelId;
+            if (prevSelId && visibleList.some((c) => c.id === prevSelId)) return prevSelId;
             if (
               keepSelectionIfPresent &&
               prevRemoteJid &&
               selectedChannel.type === 'evolution'
             ) {
-              const next = list.find((c) => !c.is_group && c.remote_jid === prevRemoteJid);
+              const next = visibleList.find((c) => !c.is_group && c.remote_jid === prevRemoteJid);
               if (next) return next.id;
             }
             return '';
@@ -4245,7 +4277,12 @@ export default function ChatPage() {
     const resolved = conv.attendance_status === 'resolvido';
     switch (conversationFilter) {
       case 'mine':
-        return conv.user_id === userId && conv.attendance_status !== 'resolvido';
+        return (
+          (isAdminOrSuperAdmin ||
+            conv.user_id === userId ||
+            (userStatus === 'gerente' && conv.gerente_id === userId)) &&
+          conv.attendance_status !== 'resolvido'
+        );
       case 'unassigned':
       default:
         // Histórico: template (fora 24h) ou resolvidas
@@ -4271,7 +4308,12 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const mineCount = conversationsWithBroadcast.filter((c) => c.user_id === userId).length;
+  const mineCount = conversationsWithBroadcast.filter(
+    (c) =>
+      isAdminOrSuperAdmin ||
+      c.user_id === userId ||
+      (userStatus === 'gerente' && c.gerente_id === userId)
+  ).length;
   const historyCount = conversationsWithBroadcast.filter(
     (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
   ).length;

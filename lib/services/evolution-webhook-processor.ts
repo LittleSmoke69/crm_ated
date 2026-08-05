@@ -15,6 +15,10 @@ import {
 } from '@/lib/server/evolution-chat-webhook-config';
 import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
 import {
+  extractEvolutionMediaSource,
+  persistEvolutionMedia,
+} from '@/lib/services/evolution-media-persist';
+import {
   ensurePendingLeadForConversation,
   resolveTenantIdForChatLead,
 } from '@/lib/services/chat-crm-integration';
@@ -52,7 +56,9 @@ function extractMediaType(message: Record<string, unknown>): string {
   if (message.imageMessage) return 'image';
   if (message.videoMessage) return 'video';
   if (message.audioMessage) return 'audio';
-  if (message.documentMessage) return 'document';
+  if (message.documentMessage || message.documentWithCaptionMessage) return 'document';
+  // O chat não tem branch de sticker; renderiza como imagem (é sempre webp).
+  if (message.stickerMessage) return 'image';
   return 'text';
 }
 
@@ -77,7 +83,7 @@ function pickSendWebhookStatus(data: Record<string, unknown>): unknown {
 }
 
 async function handleMessageUpsert(
-  instance: { id: string; workspace_id: string | null; user_id: string | null },
+  instance: { id: string; instance_name?: string | null; workspace_id: string | null; user_id: string | null },
   data: Record<string, unknown>,
   fromMe: boolean
 ) {
@@ -86,6 +92,27 @@ async function handleMessageUpsert(
   const remoteJid = (key.remoteJid || data.remoteJid) as string | undefined;
 
   if (!remoteJid) return;
+  // Grupos pertencem aos fluxos específicos de grupos/maturação, não ao atendimento 1:1.
+  // Interromper antes de resolver usuário evita criar conversa, mensagem ou lead.
+  if (remoteJid.toLowerCase().endsWith('@g.us')) return;
+
+  const messageFromMe = Boolean((key.fromMe as boolean | undefined) || fromMe);
+  const phone = remoteJid.split('@')[0];
+
+  // Em mensagens de saída, pushName é o nome da própria conta conectada (ex.:
+  // "Roberta S"), não o nome do destinatário. Mantém o título já conhecido.
+  let contactTitle = phone;
+  if (messageFromMe) {
+    const { data: existingConversation } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('title')
+      .eq('instance_id', instance.id)
+      .eq('remote_jid', remoteJid)
+      .maybeSingle();
+    contactTitle = String(existingConversation?.title || phone).trim();
+  } else {
+    contactTitle = pickFirstString(data.pushName, data.name, phone) ?? phone;
+  }
 
   const resolvedUserId = await resolveEvolutionConversationUserIdForUpsert(
     supabaseServiceRole,
@@ -99,8 +126,8 @@ async function handleMessageUpsert(
     workspace_id: instance.workspace_id ?? undefined,
     user_id: resolvedUserId,
     remote_jid: remoteJid,
-    title: String(data.pushName ?? remoteJid.split('@')[0]),
-    is_group: remoteJid.endsWith('@g.us'),
+    title: contactTitle,
+    is_group: false,
     last_message_at: new Date().toISOString(),
     last_message_preview: extractText(message).substring(0, 100),
   };
@@ -108,31 +135,30 @@ async function handleMessageUpsert(
   const conversation = await chatService.upsertConversation(conversationData);
 
   // Contato 1:1 → cria/vincula lead pendente sem gerente/captador (nome + telefone) na tela Leads.
-  if (!conversationData.is_group) {
-    try {
-      const tenantId = await resolveTenantIdForChatLead({
-        workspaceId: instance.workspace_id,
-        ownerUserId: instance.user_id,
-      });
-      await ensurePendingLeadForConversation({
-        conversationId: conversation.id,
-        tenantId,
-        phone: remoteJid.split('@')[0],
-        name: conversationData.title,
-        source: 'evolution',
-      });
-    } catch (err) {
-      console.error('[EvolutionChat] ensurePendingLead:', err);
-    }
+  try {
+    const tenantId = await resolveTenantIdForChatLead({
+      workspaceId: instance.workspace_id,
+      ownerUserId: instance.user_id,
+    });
+    await ensurePendingLeadForConversation({
+      conversationId: conversation.id,
+      tenantId,
+      phone,
+      name: conversationData.title,
+      source: 'evolution',
+    });
+  } catch (err) {
+    console.error('[EvolutionChat] ensurePendingLead:', err);
   }
 
-  const messageFromMe = (key.fromMe as boolean | undefined) || fromMe;
-  await chatService.saveMessage({
+  const messageId = String(key.id ?? data.id ?? data.messageId ?? '');
+  const mediaSource = extractEvolutionMediaSource(message, data.base64);
+  const savedMessage = await chatService.saveMessage({
     instance_id: instance.id,
     workspace_id: instance.workspace_id ?? undefined,
     user_id: resolvedUserId,
     conversation_id: conversation.id,
-    message_id: String(key.id ?? data.id ?? data.messageId ?? ''),
+    message_id: messageId,
     direction: messageFromMe ? 'out' : 'in',
     from_me: messageFromMe,
     sender_jid: String(key.participant ?? key.remoteJid ?? data.sender ?? remoteJid),
@@ -143,6 +169,21 @@ async function handleMessageUpsert(
     status: messageFromMe ? 'sent' : 'received',
     timestamp: Number(data.messageTimestamp ?? Math.floor(Date.now() / 1000)),
   });
+
+  // A `url` do nó de mídia vem cifrada (.enc) do CDN do WhatsApp; a base64 do payload é a
+  // única fonte utilizável. Sem este upload a mensagem fica sem media_url e o chat mostra
+  // "Áudio/Imagem não disponível". Nunca lança — mídia não derruba a ingestão.
+  if (mediaSource) {
+    await persistEvolutionMedia({
+      chatMessageId: savedMessage?.id ?? null,
+      messageId,
+      instanceId: instance.id,
+      instanceName: instance.instance_name ?? null,
+      message,
+      data,
+      source: mediaSource,
+    });
+  }
 
   if (!messageFromMe) {
     try {
@@ -157,7 +198,7 @@ async function handleMessageUpsert(
 }
 
 async function handleSendMessageWebhook(
-  instance: { id: string; workspace_id: string | null; user_id: string | null },
+  instance: { id: string; instance_name?: string | null; workspace_id: string | null; user_id: string | null },
   data: Record<string, unknown>
 ) {
   const message = (data.message ?? data) as Record<string, unknown>;
@@ -233,7 +274,7 @@ export async function processEvolutionPayloadToChat(
 
   const { data: dbInstance, error: instError } = await supabaseServiceRole
     .from('evolution_instances')
-    .select('id, workspace_id, user_id')
+    .select('id, instance_name, workspace_id, user_id')
     .eq('instance_name', instanceName)
     .eq('is_active', true)
     .maybeSingle();

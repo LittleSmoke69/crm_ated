@@ -428,7 +428,16 @@ function MediaRetryButton({
 
 // ─── AudioMessagePlayer (play, duração, waveform) ─────────────────────────────
 
-function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
+function AudioMessagePlayer({
+  src,
+  fromMe,
+  onError,
+}: {
+  src: string;
+  fromMe: boolean;
+  /** Chamado quando o arquivo não carrega — quem renderiza troca pelo fallback/retry. */
+  onError?: () => void;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -540,7 +549,7 @@ function AudioMessagePlayer({ src, fromMe }: { src: string; fromMe: boolean }) {
 
   return (
     <div className="flex items-center gap-2 min-w-[200px] max-w-[280px]">
-      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
+      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" onError={() => onError?.()} />
       <button
         type="button"
         onClick={togglePlay}
@@ -620,7 +629,7 @@ function MessageContent({
   onMediaResolved?: (messageId: string, url: string) => void;
 }) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
-  const [failedMedia, setFailedMedia] = useState<'image' | 'video' | null>(null);
+  const [failedMedia, setFailedMedia] = useState<'image' | 'video' | 'audio' | null>(null);
   const mediaUrl = resolvedUrl || msg.media_url;
   const displayMediaUrl = mediaUrl
     ? `/api/chat/messages/download-media?chat_message_id=${encodeURIComponent(msg.id)}`
@@ -707,8 +716,8 @@ function MessageContent({
         )
       )}
       {msg.media_type === 'audio' && (
-        displayMediaUrl && failedMedia !== 'video' ? (
-          <AudioMessagePlayer src={displayMediaUrl} fromMe={fromMe} />
+        displayMediaUrl && failedMedia !== 'audio' ? (
+          <AudioMessagePlayer src={displayMediaUrl} fromMe={fromMe} onError={() => setFailedMedia('audio')} />
         ) : (
           retryFallback('audio') || <span className={`text-sm italic ${textClass}`}>🎵 Áudio não disponível</span>
         )
@@ -831,6 +840,7 @@ export default function ChatPage() {
   const [savingEditInstance, setSavingEditInstance] = useState(false);
   const [editInstanceError, setEditInstanceError] = useState<string | null>(null);
   const [deletingInstanceId, setDeletingInstanceId] = useState<string | null>(null);
+  const [reconnectingInstanceId, setReconnectingInstanceId] = useState<string | null>(null);
 
   // Conversas
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -1491,6 +1501,50 @@ export default function ChatPage() {
       alert('Falha de conexão ao deletar instância.');
     } finally {
       setDeletingInstanceId(null);
+    }
+  };
+
+  const handleReconnectEvolutionInstance = async (ch: ChannelEvolution) => {
+    if (!userId || reconnectingInstanceId) return;
+    setReconnectingInstanceId(ch.id);
+    setEvolutionInstanceNotice(null);
+    try {
+      const res = await fetch(`/api/instances/${encodeURIComponent(ch.instance_name)}/status`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error || data.message || 'Não foi possível reconectar a instância.');
+      }
+
+      const payload = data.data as {
+        status?: string;
+        state?: string;
+        evolutionState?: string;
+        qrCode?: string | null;
+      };
+      const status = String(payload.status || '').toLowerCase();
+      const evolutionState = String(payload.evolutionState || payload.state || '').toLowerCase();
+      const connected = status === 'connected' || ['connected', 'open', 'ready', 'online'].includes(evolutionState);
+      if (connected) {
+        await loadChannels();
+        return;
+      }
+
+      const qrCode = String(payload.qrCode || '')
+        .replace(/^data:image\/[^;]+;base64,/i, '')
+        .replace(/\s/g, '');
+      if (qrCode) {
+        setPendingInstanceQr({ instanceName: ch.instance_name, qrCode });
+      } else {
+        setEvolutionInstanceNotice('Reconexão iniciada. Aguarde alguns segundos e atualize o status da instância.');
+        await loadChannels();
+      }
+    } catch (error) {
+      setEvolutionInstanceNotice(error instanceof Error ? error.message : 'Falha ao reconectar a instância.');
+    } finally {
+      setReconnectingInstanceId(null);
     }
   };
 
@@ -3190,7 +3244,7 @@ export default function ChatPage() {
     }
     switch (conversationFilter) {
       case 'mine':
-        return conv.user_id === userId;
+        return conv.user_id === userId || (userStatus === 'gerente' && conv.gerente_id === userId);
       case 'unassigned':
         // Histórico: resolvidas, ou WA Oficial fora da janela 24h
         return !isActiveConversation(conv);
@@ -3207,7 +3261,9 @@ export default function ChatPage() {
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
   const allCount = conversations.filter((c) => isActiveConversation(c)).length;
-  const mineCount = conversations.filter((c) => c.user_id === userId).length;
+  const mineCount = conversations.filter(
+    (c) => c.user_id === userId || (userStatus === 'gerente' && c.gerente_id === userId)
+  ).length;
   const historyCount = conversations.filter((c) => !isActiveConversation(c)).length;
 
   useEffect(() => {
@@ -3343,6 +3399,25 @@ export default function ChatPage() {
               </p>
             </div>
 
+            {evolutionInstanceNotice && (
+              <div
+                role="alert"
+                aria-live="polite"
+                className="mb-4 flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="min-w-0 flex-1">{evolutionInstanceNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setEvolutionInstanceNotice(null)}
+                  className="rounded-md p-0.5 text-amber-700 hover:bg-amber-500/15 dark:text-amber-200"
+                  aria-label="Fechar aviso"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             <div className="zap-panel border border-gray-200 dark:border-[#404040] rounded-2xl shadow-sm overflow-hidden">
               <div className="px-5 pt-5 pb-3 border-b border-gray-100 dark:border-[#3a3a3a]">
                 <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
@@ -3415,6 +3490,20 @@ export default function ChatPage() {
                           Evolution
                         </span>
                       </div>
+                      {sc.label === 'Desconectado' && (
+                        <button
+                          type="button"
+                          disabled={reconnectingInstanceId === ch.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleReconnectEvolutionInstance(ch);
+                          }}
+                          className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-[#E86A24]/50 bg-[#E86A24]/10 px-3 py-2 text-xs font-semibold text-[#E86A24] hover:bg-[#E86A24]/20 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${reconnectingInstanceId === ch.id ? 'animate-spin' : ''}`} />
+                          {reconnectingInstanceId === ch.id ? 'Reconectando…' : 'Reconectar instância'}
+                        </button>
+                      )}
                     </div>
                   );
                 })}

@@ -3,9 +3,9 @@
 -- o gerente então atribui a um CAPTADOR do seu próprio time (enroller = gerente),
 -- exatamente como já funcionava antes desta migration.
 --
--- Delegação para o gerente: fica na fila dele (gerente_id = assignee, user_id = NULL),
--- sem tocar em crm_leads/crm_lead_stage/Kanban ainda — isso só acontece quando o
--- gerente, numa segunda atribuição, escolhe um captador do time.
+-- Delegação para o gerente: fica na fila dele (gerente_id = assignee, user_id = NULL)
+-- e o lead vinculado passa para a tela Leads do gerente. O Kanban só é criado quando
+-- o gerente, numa segunda atribuição, escolhe um captador do time.
 -- A conversa aparece automaticamente na fila do gerente porque a query de listagem
 -- em app/api/chat/conversations/route.ts já filtra por `gerente_id = <gerente>`
 -- independentemente de `user_id` (não precisou de nenhuma mudança nessa rota).
@@ -87,6 +87,17 @@ BEGIN
     SELECT id, p_assignee_user_id, 'transferred',
            jsonb_build_object('assigned_by', p_actor_user_id, 'gerente_id', p_assignee_user_id)
     FROM chat_conversations WHERE id = ANY(p_conversation_ids);
+
+    UPDATE crm_leads l
+       SET user_id = NULL,
+           gerente_id = p_assignee_user_id,
+           capture_status = 'pendente',
+           assigned_by = p_actor_user_id,
+           assigned_at = now(),
+           updated_at = now()
+      FROM chat_conversations c
+     WHERE c.id = ANY(p_conversation_ids)
+       AND c.lead_id = l.id;
 
     RETURN v_count;
   END IF;

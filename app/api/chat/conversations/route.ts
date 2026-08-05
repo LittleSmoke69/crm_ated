@@ -200,6 +200,8 @@ export async function GET(req: NextRequest) {
         .from('chat_conversations')
         .select('*')
         .eq('instance_id', instance_id)
+        .eq('is_group', false)
+        .not('remote_jid', 'like', '%@g.us')
         .order('last_message_at', { ascending: false });
 
       if (error) {

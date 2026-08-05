@@ -75,7 +75,6 @@ async function buildAdminEvolutionChannels(
   let query = supabaseServiceRole
     .from('evolution_instances')
     .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number, user_id, zaploto_id')
-    .eq('is_active', true)
     .order('created_at', { ascending: false });
 
   // Super admin / suporte: visão global.
@@ -113,8 +112,7 @@ async function buildEvolutionChannels(
     const { data: ownedRows } = await supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
-      .eq('user_id', userId)
-      .eq('is_active', true);
+      .eq('user_id', userId);
 
     const { data: assignRows } = await supabaseServiceRole
       .from('atendimento_chat_assignments')
@@ -129,16 +127,24 @@ async function buildEvolutionChannels(
       )
     );
 
+    const { data: conversationRows } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('instance_id')
+      .eq('gerente_id', userId)
+      .not('instance_id', 'is', null);
+    const conversationInstanceIds = (conversationRows || [])
+      .map((row) => row.instance_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
     const ownedIds = new Set((ownedRows || []).map((r) => r.id));
-    const extraIds = assignIds.filter((id) => !ownedIds.has(id));
+    const extraIds = [...new Set([...assignIds, ...conversationInstanceIds])].filter((id) => !ownedIds.has(id));
 
     let extraRows: EvolutionChannelRow[] = [];
     if (extraIds.length > 0) {
       const { data: fetched } = await supabaseServiceRole
         .from('evolution_instances')
         .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
-        .in('id', extraIds)
-        .eq('is_active', true);
+        .in('id', extraIds);
       extraRows = (fetched || []) as EvolutionChannelRow[];
     }
 
@@ -160,7 +166,7 @@ async function buildEvolutionChannels(
       .select('evolution_instance_id')
       .contains('consultor_user_ids', [userId]);
 
-    const assignedInstanceIds = Array.from(
+    const assignmentInstanceIds = Array.from(
       new Set(
         (assignments || [])
           .map((assignment) => assignment.evolution_instance_id)
@@ -168,13 +174,24 @@ async function buildEvolutionChannels(
       )
     );
 
+    const { data: conversationRows } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('instance_id')
+      .eq('user_id', userId)
+      .not('instance_id', 'is', null);
+    const assignedInstanceIds = [...new Set([
+      ...assignmentInstanceIds,
+      ...(conversationRows || [])
+        .map((row) => row.instance_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ])];
+
     if (assignedInstanceIds.length === 0) return [];
 
     const { data: rows } = await supabaseServiceRole
       .from('evolution_instances')
       .select('id, instance_name, status, created_at, is_master, is_chat_instance, phone_number')
       .in('id', assignedInstanceIds)
-      .eq('is_active', true)
       .order('created_at', { ascending: false });
 
     return mapEvolutionRows(rows as EvolutionChannelRow[]);

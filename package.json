@@ -15,6 +15,7 @@
     "setup:scheduled-function": "tsx scripts/setup-scheduled-function.ts",
     "anti-spam:worker": "tsx scripts/anti-spam-worker.ts",
     "backfill:transfer-balances": "tsx scripts/backfill-transfer-balances.ts",
+    "backfill:evolution-media": "tsx scripts/backfill-evolution-chat-media.ts",
     "cron:install": "tsx scripts/linux/install-linux-cron.ts",
     "cron:list": "tsx scripts/linux/list-scheduled-jobs.ts",
     "cron:run": "tsx scripts/linux/run-scheduled-job.ts",

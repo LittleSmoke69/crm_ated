@@ -34,6 +34,20 @@ export async function canUserAccessEvolutionChatInstance(
     return true;
   }
 
+  // A atribuição da conversa é autorização suficiente para abrir a instância no
+  // atendimento, mesmo que o vínculo operacional da instância ainda não exista.
+  const conversationField = status === 'gerente' ? 'gerente_id' : 'user_id';
+  if (status === 'gerente' || status === 'captador' || status === 'consultor') {
+    const { data: assignedConversation } = await supabaseServiceRole
+      .from('chat_conversations')
+      .select('id')
+      .eq('instance_id', instanceId)
+      .eq(conversationField, userId)
+      .limit(1)
+      .maybeSingle();
+    if (assignedConversation) return true;
+  }
+
   const { data: row } = await supabaseServiceRole
     .from('atendimento_chat_assignments')
     .select('gerente_user_id, consultor_user_ids')

@@ -198,12 +198,14 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
     const jid = pickRemoteJid(row);
     if (!jid) continue;
     const prev = merged.get(jid);
-    merged.set(jid, prev ? { ...prev, ...row } : row);
+    // Dados do contato têm precedência para nome/pushName. Em chats com última
+    // mensagem enviada por nós, pushName pode ser o nome da própria instância.
+    merged.set(jid, prev ? { ...row, ...prev } : row);
   }
 
   const { data: existingRows, error: existingErr } = await supabaseServiceRole
     .from('chat_conversations')
-    .select('id, remote_jid, last_message_at, title, last_message_preview')
+    .select('id, remote_jid, last_message_at, title, last_message_preview, lead_id')
     .eq('instance_id', instanceId);
 
   if (existingErr) {
@@ -217,16 +219,16 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
   }
 
   const existingByJid = new Map(
-    (existingRows ?? []).map((r) => [r.remote_jid as string, r as { id: string; last_message_at?: string | null; title?: string | null; last_message_preview?: string | null }])
+    (existingRows ?? []).map((r) => [r.remote_jid as string, r as { id: string; lead_id?: string | null; last_message_at?: string | null; title?: string | null; last_message_preview?: string | null }])
   );
 
   let upserted = 0;
 
   for (const [remoteJid, entry] of merged) {
     if (remoteJid.includes('status@broadcast')) continue;
+    if (remoteJid.toLowerCase().endsWith('@g.us')) continue;
 
     const title = pickTitle(entry, remoteJid);
-    const isGroup = remoteJid.endsWith('@g.us');
     const fromEvolution = pickLastMessageAtIso(entry);
     const preview = pickPreview(entry);
     const prev = existingByJid.get(remoteJid);
@@ -239,7 +241,7 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         remote_jid: remoteJid,
         title,
         profile_pic_url: pickProfilePicUrl(entry) ?? undefined,
-        is_group: isGroup,
+        is_group: false,
         last_message_at: fromEvolution ?? new Date().toISOString(),
         last_message_preview: preview ?? undefined,
       });
@@ -268,7 +270,24 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         .from('chat_conversations')
         .update(updates)
         .eq('id', prev.id);
-      if (!upErr) upserted += 1;
+      if (!upErr) {
+        upserted += 1;
+        // Repara apenas nomes que eram automáticos (título anterior ou telefone),
+        // preservando qualquer nome editado manualmente no CRM.
+        if (updates.title && prev.lead_id) {
+          const phone = remoteJid.split('@')[0];
+          const automaticNames = [prev.title, phone].filter(
+            (value): value is string => typeof value === 'string' && Boolean(value.trim())
+          );
+          if (automaticNames.length > 0) {
+            await supabaseServiceRole
+              .from('crm_leads')
+              .update({ name: updates.title, updated_at: new Date().toISOString() })
+              .eq('id', prev.lead_id)
+              .in('name', automaticNames);
+          }
+        }
+      }
     }
   }
 

@@ -228,6 +228,33 @@ export class ChatService {
   }
 
   async upsertConversation(conversation: ChatConversation) {
+    // Atualizações de atividade (envio/resposta) normalmente não carregam o nome
+    // do contato. Nesses casos, atualiza a conversa existente sem passar por UPSERT,
+    // pois colunas omitidas podem receber NULL/default e nunca devem trocar `title`.
+    if (conversation.title === undefined) {
+      let existingQuery = supabaseServiceRole
+        .from('chat_conversations')
+        .select('id')
+        .eq('remote_jid', conversation.remote_jid);
+      if (conversation.instance_id) {
+        existingQuery = existingQuery.eq('instance_id', conversation.instance_id);
+      } else if (conversation.whatsapp_config_id) {
+        existingQuery = existingQuery.eq('whatsapp_config_id', conversation.whatsapp_config_id);
+      }
+      const { data: existing } = await existingQuery.maybeSingle();
+      if (existing?.id) {
+        const { id: _id, title: _title, ...activityPatch } = conversation;
+        const { data: updated, error: updateError } = await supabaseServiceRole
+          .from('chat_conversations')
+          .update(activityPatch)
+          .eq('id', existing.id)
+          .select()
+          .single();
+        if (updateError) throw updateError;
+        return updated;
+      }
+    }
+
     // conflict_key é coluna gerada (i-{instance_id} ou w-{whatsapp_config_id}); evita índices parciais no ON CONFLICT
     for (let attempt = 1; attempt <= SAVE_MESSAGE_MAX_RETRIES; attempt += 1) {
       const { data, error } = await supabaseServiceRole
