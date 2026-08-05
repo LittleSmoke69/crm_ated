@@ -749,6 +749,7 @@ export async function GET(req: NextRequest) {
         occurrence: occ?.n || 1,
         occurrence_total: occ?.total || 1,
         unassigned: !r.user_id,
+        assignment_status: r.user_id ? 'atribuido' : 'nao_atribuido',
       };
     });
 

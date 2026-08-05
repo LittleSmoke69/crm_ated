@@ -45,6 +45,7 @@ type CapturedLead = {
   occurrence: number;
   occurrence_total: number;
   unassigned?: boolean;
+  assignment_status?: 'nao_atribuido' | 'atribuido';
 };
 
 type PersonOption = { id: string; name: string; enroller?: string | null };
@@ -547,6 +548,13 @@ export default function LeadsSection({
       setLoading(false);
     }
   }, [buildQuery, headers, pageSize, userId, loadSales]);
+
+  useEffect(() => {
+    // Captador não usa o filtro de pool; limpa se veio de sessão antiga
+    if (isCaptador && fColumn === UNASSIGNED_COLUMN_FILTER) {
+      setFColumn('');
+    }
+  }, [isCaptador, fColumn]);
 
   useEffect(() => {
     setSelectedMap(new Map());
@@ -1170,7 +1178,9 @@ export default function LeadsSection({
             <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Coluna CRM</label>
             <select value={fColumn} onChange={(e) => setFColumn(e.target.value)} className={`${inputClass} min-h-[44px]`}>
               <option value="">Todas</option>
-              <option value={UNASSIGNED_COLUMN_FILTER}>Não atribuídos</option>
+              {!isCaptador && (
+                <option value={UNASSIGNED_COLUMN_FILTER}>Não atribuídos</option>
+              )}
               {columns.map((c) => (
                 <option key={c.id} value={c.key}>{c.title}</option>
               ))}
