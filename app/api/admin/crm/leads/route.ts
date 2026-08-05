@@ -600,6 +600,11 @@ export async function GET(req: NextRequest) {
     const columnFilter = (sp.get('column_key') || '').trim();
     const unassignedOnly = columnFilter === UNASSIGNED_COLUMN_FILTER;
 
+    // Pool "Não atribuídos" só para admin/super_admin/gerente
+    if (unassignedOnly && isCaptador) {
+      return errorResponse('Captador não pode filtrar leads não atribuídos.', 403);
+    }
+
     // Profiles + colunas em paralelo (sales só sob demanda)
     const [profiles, columns, teamCaptadores] = await Promise.all([
       getTenantProfiles(zaplotoId),
