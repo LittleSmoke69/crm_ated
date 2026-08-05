@@ -6,6 +6,10 @@
 
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { chatService } from '@/lib/services/chat-service';
+import {
+  ensurePendingLeadForConversation,
+  resolveTenantIdForChatLead,
+} from '@/lib/services/chat-crm-integration';
 
 const EVOLUTION_FETCH_TIMEOUT_MS = 90_000;
 const SYNC_COOLDOWN_MS = 45_000;
@@ -234,7 +238,7 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
     const prev = existingByJid.get(remoteJid);
 
     if (!prev) {
-      await chatService.upsertConversation({
+      const conversation = await chatService.upsertConversation({
         instance_id: instanceId,
         workspace_id: workspaceId ?? undefined,
         user_id: instanceOwnerUserId ?? undefined,
@@ -246,6 +250,28 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         last_message_preview: preview ?? undefined,
       });
       upserted += 1;
+      try {
+        const tenantId = await resolveTenantIdForChatLead({
+          workspaceId,
+          ownerUserId: instanceOwnerUserId,
+        });
+        const phone = remoteJid.split('@')[0];
+        const realName =
+          title && title.replace(/\D/g, '') !== phone.replace(/\D/g, '') && /[A-Za-zÀ-ÿ]/.test(title)
+            ? title
+            : title !== phone
+              ? title
+              : null;
+        await ensurePendingLeadForConversation({
+          conversationId: conversation.id,
+          tenantId,
+          phone,
+          name: realName,
+          source: 'evolution',
+        });
+      } catch {
+        /* lead é secundário ao sync de diretório */
+      }
       continue;
     }
 

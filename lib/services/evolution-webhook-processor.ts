@@ -38,6 +38,38 @@ function pickFirstString(...values: unknown[]): string | null {
   return null;
 }
 
+/** Nome real do contato no payload Evolution (nunca o telefone). */
+function extractEvolutionContactName(
+  data: Record<string, unknown>,
+  message: Record<string, unknown>,
+  phone: string
+): string | null {
+  const nestedContact =
+    (data.contact as Record<string, unknown> | undefined) ||
+    (message.contact as Record<string, unknown> | undefined);
+  const candidates = [
+    data.pushName,
+    data.verifiedBizName,
+    data.verifiedName,
+    data.notify,
+    data.name,
+    message.pushName,
+    message.verifiedBizName,
+    nestedContact?.pushName,
+    nestedContact?.name,
+    nestedContact?.verifiedName,
+  ];
+  const raw = pickFirstString(...candidates);
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  // Ignora "nome" que é só o próprio número / JID
+  if (digits && digits === phone) return null;
+  if (/^\d{8,}$/.test(digits) && digits.length === raw.replace(/\D/g, '').length && !/[A-Za-zÀ-ÿ]/.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
 function extractText(message: Record<string, unknown>): string {
   if (typeof message === 'string') return message as unknown as string;
   const m = message as Record<string, unknown>;
@@ -97,22 +129,31 @@ async function handleMessageUpsert(
   if (remoteJid.toLowerCase().endsWith('@g.us')) return;
 
   const messageFromMe = Boolean((key.fromMe as boolean | undefined) || fromMe);
-  const phone = remoteJid.split('@')[0];
+  const phone = remoteJid.split('@')[0].replace(/\D/g, '') || remoteJid.split('@')[0];
 
-  // Em mensagens de saída, pushName é o nome da própria conta conectada (ex.:
-  // "Roberta S"), não o nome do destinatário. Mantém o título já conhecido.
-  let contactTitle = phone;
-  if (messageFromMe) {
-    const { data: existingConversation } = await supabaseServiceRole
-      .from('chat_conversations')
-      .select('title')
-      .eq('instance_id', instance.id)
-      .eq('remote_jid', remoteJid)
-      .maybeSingle();
-    contactTitle = String(existingConversation?.title || phone).trim();
-  } else {
-    contactTitle = pickFirstString(data.pushName, data.name, phone) ?? phone;
-  }
+  const { data: existingConversation } = await supabaseServiceRole
+    .from('chat_conversations')
+    .select('title')
+    .eq('instance_id', instance.id)
+    .eq('remote_jid', remoteJid)
+    .maybeSingle();
+
+  const existingTitle = String(existingConversation?.title || '').trim();
+  const existingTitleIsPhone =
+    !existingTitle ||
+    existingTitle.replace(/\D/g, '') === phone ||
+    existingTitle === remoteJid.split('@')[0];
+
+  // Em mensagens de saída, pushName é o nome da própria conta conectada — não usar.
+  // Em entrada, usa pushName/nome do payload; senão preserva título já conhecido (ex.: sync de contatos).
+  const payloadName = messageFromMe
+    ? null
+    : extractEvolutionContactName(data, message, phone);
+
+  const contactTitle =
+    payloadName ||
+    (!existingTitleIsPhone ? existingTitle : null) ||
+    phone;
 
   const resolvedUserId = await resolveEvolutionConversationUserIdForUpsert(
     supabaseServiceRole,
@@ -134,7 +175,7 @@ async function handleMessageUpsert(
 
   const conversation = await chatService.upsertConversation(conversationData);
 
-  // Contato 1:1 → cria/vincula lead pendente sem gerente/captador (nome + telefone) na tela Leads.
+  // Contato 1:1 → cria/vincula lead pendente (nome do payload + telefone) na tela Leads.
   try {
     const tenantId = await resolveTenantIdForChatLead({
       workspaceId: instance.workspace_id,
@@ -144,7 +185,8 @@ async function handleMessageUpsert(
       conversationId: conversation.id,
       tenantId,
       phone,
-      name: conversationData.title,
+      // Só envia nome real; telefone vai no campo phone (não duplicar no name)
+      name: payloadName || (!existingTitleIsPhone ? existingTitle : null),
       source: 'evolution',
     });
   } catch (err) {
@@ -267,7 +309,11 @@ export async function processEvolutionPayloadToChat(
   const rawEvent = pickFirstString(p.event, p.eventType, p.event_type, p.type, (p.data as Record<string, unknown>)?.event);
   const event = rawEvent ? normalizeEvolutionChatWebhookEvent(rawEvent) : '';
   const instanceName = extractEvolutionWebhookInstanceName(payload);
-  const data = (p.data ?? p) as Record<string, unknown>;
+  let data = (p.data ?? p) as Record<string, unknown>;
+  // Algumas versões enviam data como array de mensagens
+  if (Array.isArray(data)) {
+    data = (data[0] && typeof data[0] === 'object' ? data[0] : {}) as Record<string, unknown>;
+  }
 
   if (!event || !instanceName) return { processed: false, skipped: true };
   if (!CHAT_EVENT_TYPES.has(event)) return { processed: false, skipped: true };

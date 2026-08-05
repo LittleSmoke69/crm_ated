@@ -8,11 +8,34 @@ function externalId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
 }
 
+/** Nome útil do contato (não é o próprio telefone / só dígitos). */
+function resolveContactDisplayName(
+  name: string | null | undefined,
+  phone: string
+): string | null {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+  const digits = phoneDigits(raw);
+  if (digits && digits === phone) return null;
+  if (/^\d{8,}$/.test(digits) && !/[A-Za-zÀ-ÿ]/.test(raw)) return null;
+  return raw;
+}
+
+function isPhoneLikeName(name: string | null | undefined, phone: string): boolean {
+  const raw = String(name || '').trim();
+  if (!raw) return true;
+  const digits = phoneDigits(raw);
+  if (digits && digits === phone) return true;
+  if (/^\d{8,}$/.test(digits) && !/[A-Za-zÀ-ÿ]/.test(raw)) return true;
+  return false;
+}
+
 export type ChatLeadSource = 'whatsapp_official' | 'evolution' | 'chat';
 
 /**
  * Vincula idempotentemente uma conversa de chat a um lead pendente do mesmo tenant.
  * Novos leads entram sem gerente/captador (user_id e gerente_id null) com nome + telefone.
+ * Se o payload trouxer nome, grava no campo name e o telefone em phone (ambos na tela Leads).
  */
 export async function ensurePendingLeadForConversation(input: {
   conversationId: string;
@@ -27,23 +50,44 @@ export async function ensurePendingLeadForConversation(input: {
 
   const { data: conversation } = await supabaseServiceRole
     .from('chat_conversations')
-    .select('lead_id')
+    .select('lead_id, title')
     .eq('id', input.conversationId)
     .single();
 
-  const displayName = input.name?.trim() || phone;
+  const displayName =
+    resolveContactDisplayName(input.name, phone) ||
+    resolveContactDisplayName(conversation?.title as string | undefined, phone);
+
   if (conversation?.lead_id) {
     const leadId = conversation.lead_id as string;
     // O contato do chat é a fonte do nome para leads criados pela integração.
     // Não altera responsável/status: enquanto não houver gerente nem captador,
     // o lead continua como "Não atribuído" na tela Leads. Após delegação no chat
     // (gerente_id preenchido), passa a "Aguardando captador".
-    if (displayName && displayName !== phone) {
+    const { data: current } = await supabaseServiceRole
+      .from('crm_leads')
+      .select('name, phone, source')
+      .eq('id', leadId)
+      .maybeSingle();
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const currentPhone = phoneDigits(current?.phone || '');
+    if (!currentPhone || currentPhone !== phone) {
+      patch.phone = phone;
+    }
+    if (displayName && isPhoneLikeName(current?.name as string | undefined, phone)) {
+      patch.name = displayName;
+    } else if (displayName && current?.source && ['evolution', 'whatsapp_official', 'chat'].includes(String(current.source))) {
+      // Atualiza nome do payload quando o lead veio do chat (mantém edição manual de outras fontes)
+      const cur = String(current?.name || '').trim();
+      if (!cur || isPhoneLikeName(cur, phone)) patch.name = displayName;
+    }
+
+    if (Object.keys(patch).length > 1) {
       const { error: nameError } = await supabaseServiceRole
         .from('crm_leads')
-        .update({ name: displayName, updated_at: new Date().toISOString() })
-        .eq('id', leadId)
-        .in('source', ['evolution', 'whatsapp_official', 'chat']);
+        .update(patch)
+        .eq('id', leadId);
       if (nameError) throw nameError;
     }
     return leadId;
@@ -86,12 +130,12 @@ export async function ensurePendingLeadForConversation(input: {
     const existing = (candidates ?? []).find((row) => row.id === leadId);
     const patch: Record<string, unknown> = {
       chat_conversation_id: input.conversationId,
+      phone,
       updated_at: new Date().toISOString(),
     };
-    // Preenche nome se o lead só tinha o telefone
-    if (displayName && displayName !== phone) {
-      const currentName = String(existing?.name || '').trim();
-      if (!currentName || currentName === phone) patch.name = displayName;
+    // Preenche nome se o lead só tinha o telefone / estava vazio
+    if (displayName && isPhoneLikeName(existing?.name as string | undefined, phone)) {
+      patch.name = displayName;
     }
     await supabaseServiceRole.from('crm_leads').update(patch).eq('id', leadId);
   }
