@@ -17,6 +17,8 @@ interface SupportRow {
   user_id: string;
   name: string;
   email: string | null;
+  role: 'admin' | 'gerente' | 'captador';
+  role_label: string;
   online: boolean;
   last_seen_at: string | null;
   atendimentos_periodo: number;
@@ -27,6 +29,7 @@ interface SupportRow {
 
 interface SupportData {
   byUser: SupportRow[];
+  byRole?: { admin: number; gerente: number; captador: number };
   summary: {
     totalSupport: number;
     onlineNow: number;
@@ -51,11 +54,25 @@ function todayLocalISODate(): string {
   return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10);
 }
 
+function roleBadgeClass(role: SupportRow['role']): string {
+  switch (role) {
+    case 'admin':
+      return 'border-sky-500/40 bg-sky-500/10 text-sky-300';
+    case 'gerente':
+      return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
+    case 'captador':
+      return 'border-[#E86A24]/40 bg-[#E86A24]/10 text-[#E86A24]';
+    default:
+      return 'border-white/15 bg-white/5 text-gray-400';
+  }
+}
+
 export default function ChatGestaoAtendimentosSection({ userId }: { userId: string }) {
   const [support, setSupport] = useState<SupportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [from, setFrom] = useState(() => todayLocalISODate());
   const [to, setTo] = useState(() => todayLocalISODate());
+  const [roleFilter, setRoleFilter] = useState<'all' | SupportRow['role']>('all');
 
   const fetchSupport = useCallback(async () => {
     setLoading(true);
@@ -80,6 +97,9 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
     fetchSupport();
   }, [fetchSupport]);
 
+  const visibleRows =
+    support?.byUser.filter((row) => (roleFilter === 'all' ? true : row.role === roleFilter)) || [];
+
   return (
     <ZapCard className="mb-8">
       <section className="space-y-6">
@@ -89,9 +109,9 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
               <Users className="h-5 w-5 text-[#E86A24]" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">Atendimentos realizados</h2>
+              <h2 className="text-xl font-bold text-white">Equipe do chat</h2>
               <p className="text-sm text-gray-400">
-                Métricas da equipe de atendimento no período selecionado.
+                Admin, gerente e captador — sem super_admin. Métricas do período selecionado.
               </p>
             </div>
           </div>
@@ -123,9 +143,34 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
           </div>
         </div>
 
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['all', 'Todos'],
+              ['admin', 'Admin'],
+              ['gerente', 'Gerente'],
+              ['captador', 'Captador'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setRoleFilter(id)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition-colors ${
+                roleFilter === id
+                  ? 'border-[#E86A24] bg-[#E86A24]/15 text-[#E86A24]'
+                  : 'border-white/10 bg-white/5 text-gray-400 hover:border-white/20'
+              }`}
+            >
+              {label}
+              {support?.byRole && id !== 'all' ? ` (${support.byRole[id]})` : ''}
+            </button>
+          ))}
+        </div>
+
         <p className="text-xs text-gray-400">
-          Usuários com cargo <strong className="text-gray-300">Atendente</strong>. &quot;Online&quot; = heartbeat nos últimos 2 minutos.
-          &quot;Atendimentos&quot; = conversas distintas em que o atendente enviou mensagem no período.
+          Online = heartbeat nos últimos 2 min. Atendimentos = conversas com mensagem enviada no período.
+          Em atendimento do gerente inclui fila aguardando captador.
         </p>
 
         {loading && !support ? (
@@ -139,9 +184,9 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
               ))}
             </div>
             <div className={zapTableWrap}>
-              <table className="w-full min-w-[720px] text-sm">
+              <table className="w-full min-w-[780px] text-sm">
                 <tbody>
-                  <TableSkeletonRows rows={5} cols={7} />
+                  <TableSkeletonRows rows={5} cols={8} />
                 </tbody>
               </table>
             </div>
@@ -150,7 +195,7 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               <div className={zapStatCard}>
-                <p className="text-xs text-gray-400">Atendentes</p>
+                <p className="text-xs text-gray-400">Na equipe</p>
                 <p className="text-2xl font-semibold text-white">{support.summary.totalSupport}</p>
               </div>
               <div className={zapStatCard}>
@@ -171,19 +216,20 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
               </div>
             </div>
 
-            {support.byUser.length === 0 ? (
+            {visibleRows.length === 0 ? (
               <EmptyState
                 compact
                 icon={<Users className="w-5 h-5" />}
-                title="Nenhum atendente encontrado"
-                description="Cadastre usuários com cargo Atendente para acompanhar as métricas aqui."
+                title="Ninguém neste filtro"
+                description="Cadastre admin, gerente ou captador no tenant para acompanhar aqui."
               />
             ) : (
               <div className={zapTableWrap}>
-                <table className="w-full min-w-[720px] text-sm">
+                <table className="w-full min-w-[780px] text-sm">
                   <thead>
                     <tr className={zapTableHead}>
-                      <th className="px-4 py-3 font-medium">Atendente</th>
+                      <th className="px-4 py-3 font-medium">Pessoa</th>
+                      <th className="px-4 py-3 font-medium">Cargo</th>
                       <th className="px-4 py-3 font-medium">Situação</th>
                       <th className="px-4 py-3 font-medium">Último acesso</th>
                       <th className="px-4 py-3 text-right font-medium">Em atendimento</th>
@@ -193,11 +239,18 @@ export default function ChatGestaoAtendimentosSection({ userId }: { userId: stri
                     </tr>
                   </thead>
                   <tbody>
-                    {support.byUser.map((row) => (
+                    {visibleRows.map((row) => (
                       <tr key={row.user_id} className={zapTableRow}>
                         <td className="px-4 py-3">
                           <div className="font-medium text-white">{row.name}</div>
                           {row.email && <div className="text-xs text-gray-500">{row.email}</div>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-md border px-2 py-0.5 text-[11px] font-semibold ${roleBadgeClass(row.role)}`}
+                          >
+                            {row.role_label}
+                          </span>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">

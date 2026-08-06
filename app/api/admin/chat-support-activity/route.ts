@@ -1,8 +1,7 @@
 /**
  * GET /api/admin/chat-support-activity
- * Relatório operacional da equipe de suporte: quais usuários do cargo "suporte" estão
- * acessando (online / último acesso) e quantos atendimentos cada um fez no período.
- * Acesso: admin (escopo do tenant) e super_admin (todos).
+ * Relatório da equipe do chat: admin, gerente e captador (sem super_admin).
+ * Acesso: admin (tenant) e super_admin (todos).
  */
 
 import { NextRequest } from 'next/server';
@@ -10,16 +9,25 @@ import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
-/** Considerado "online" se o heartbeat ocorreu nos últimos 2 minutos (mesmo critério do painel admin). */
 const ONLINE_WINDOW_MS = 120_000;
 
-/** Linha agregada da RPC chat_support_activity. */
+/** Cargos exibidos na gestão — super_admin fica de fora de propósito. */
+const TEAM_STATUSES = ['admin', 'gerente', 'captador'] as const;
+
+type TeamStatus = (typeof TEAM_STATUSES)[number];
+
 type ActivityRow = {
   user_id: string;
   atendimentos: number;
   mensagens: number;
   em_atendimento: number;
   fora_janela: number;
+};
+
+const ROLE_LABEL: Record<TeamStatus, string> = {
+  admin: 'Admin',
+  gerente: 'Gerente',
+  captador: 'Captador',
 };
 
 export async function GET(req: NextRequest) {
@@ -36,42 +44,37 @@ export async function GET(req: NextRequest) {
     const isSuper = status === 'super_admin';
     const isAdmin = status === 'admin';
     if (!isSuper && !isAdmin) {
-      return errorResponse('Acesso negado. Apenas admin e super_admin.', 403);
+      return errorResponse('Acesso negado. Apenas administradores.', 403);
     }
 
     const { searchParams } = new URL(req.url);
-    const fromDate = searchParams.get('from'); // YYYY-MM-DD
-    const toDate = searchParams.get('to'); // YYYY-MM-DD
+    const fromDate = searchParams.get('from');
+    const toDate = searchParams.get('to');
     const fromMs = fromDate ? new Date(`${fromDate}T00:00:00.000Z`).getTime() : null;
     const toMs = toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : null;
-    // chat_messages.timestamp é unix em segundos
     const fromSec = fromMs !== null ? Math.floor(fromMs / 1000) : null;
     const toSec = toMs !== null ? Math.floor(toMs / 1000) : null;
 
-    // 1) Equipe de atendimento: admins (o cargo "suporte" foi aposentado e remapeado para admin)
-    let supportQuery = supabaseServiceRole
+    let teamQuery = supabaseServiceRole
       .from('profiles')
-      .select('id, full_name, email, status, last_seen_at, last_login_at, total_online_time')
-      .in('status', ['admin', 'suporte']);
+      .select('id, full_name, email, status, last_seen_at, last_login_at, total_online_time, enroller')
+      .in('status', [...TEAM_STATUSES]);
 
     if (isAdmin && profile?.zaploto_id) {
-      supportQuery = supportQuery.eq('zaploto_id', profile.zaploto_id);
+      teamQuery = teamQuery.eq('zaploto_id', profile.zaploto_id);
     }
 
-    const { data: supportUsers, error: supErr } = await supportQuery;
-    if (supErr) {
-      console.error('[chat-support-activity] support users', supErr.message);
-      return errorResponse(`Erro ao buscar equipe de suporte: ${supErr.message}`, 500);
+    const { data: teamUsers, error: teamErr } = await teamQuery;
+    if (teamErr) {
+      console.error('[chat-support-activity] team users', teamErr.message);
+      return errorResponse(`Erro ao buscar equipe: ${teamErr.message}`, 500);
     }
 
-    const users = supportUsers || [];
+    const users = (teamUsers || []).filter((u) =>
+      TEAM_STATUSES.includes(String(u.status || '') as TeamStatus)
+    );
     const userIds = users.map((u) => u.id);
 
-    // 2) Atendimentos agregados no banco (RPC) — evita o limite de 1000 linhas do PostgREST.
-    //    Conta pelo histórico de mensagens (from_me=true, chat_messages.user_id = usuário do suporte):
-    //    atendimentos = conversas distintas no período; mensagens = mensagens enviadas no período;
-    //    em_atendimento = aberta e ativa (dentro da janela de 24h p/ WhatsApp Oficial);
-    //    fora_janela = WhatsApp Oficial cuja última mensagem do cliente passou de 24h.
     const counts = new Map<string, ActivityRow>();
     if (userIds.length > 0) {
       const { data: actRows, error: actErr } = await supabaseServiceRole.rpc('chat_support_activity', {
@@ -91,6 +94,7 @@ export async function GET(req: NextRequest) {
     const now = Date.now();
     const byUser = users
       .map((u) => {
+        const role = String(u.status || '') as TeamStatus;
         const c = counts.get(u.id);
         const lastSeen = u.last_seen_at as string | null;
         const online = lastSeen ? now - new Date(lastSeen).getTime() < ONLINE_WINDOW_MS : false;
@@ -98,6 +102,8 @@ export async function GET(req: NextRequest) {
           user_id: u.id,
           name: u.full_name || u.email || u.id,
           email: u.email || null,
+          role,
+          role_label: ROLE_LABEL[role] || role,
           online,
           last_seen_at: lastSeen,
           last_login_at: (u.last_login_at as string | null) ?? null,
@@ -109,15 +115,24 @@ export async function GET(req: NextRequest) {
         };
       })
       .sort((a, b) => {
-        // Online primeiro, depois por atendimentos no período, depois nome
+        const roleOrder = { admin: 0, gerente: 1, captador: 2 } as Record<string, number>;
+        const ro = (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9);
+        if (ro !== 0) return ro;
         if (a.online !== b.online) return a.online ? -1 : 1;
         if (b.atendimentos_periodo !== a.atendimentos_periodo)
           return b.atendimentos_periodo - a.atendimentos_periodo;
         return a.name.localeCompare(b.name, 'pt-BR');
       });
 
+    const byRole = {
+      admin: byUser.filter((u) => u.role === 'admin').length,
+      gerente: byUser.filter((u) => u.role === 'gerente').length,
+      captador: byUser.filter((u) => u.role === 'captador').length,
+    };
+
     return successResponse({
       byUser,
+      byRole,
       summary: {
         totalSupport: byUser.length,
         onlineNow: byUser.filter((u) => u.online).length,

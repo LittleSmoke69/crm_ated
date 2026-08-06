@@ -6,6 +6,7 @@ import { useRequireAuth } from '@/utils/useRequireAuth';
 import { Headphones, ShieldAlert } from 'lucide-react';
 import { EmptyState, StatCardSkeleton, CardSkeleton, Skeleton } from '@/components/ui';
 import ChatGestaoAtendimentosSection from '@/components/Admin/chat-gestao/ChatGestaoAtendimentosSection';
+import ChatGestaoTrilhaSection from '@/components/Admin/chat-gestao/ChatGestaoTrilhaSection';
 import ChatGestaoTagsSection from '@/components/Admin/chat-gestao/ChatGestaoTagsSection';
 
 function PageSkeleton() {
@@ -61,11 +62,12 @@ function ChatGestaoContent() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Gestão do Chat</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Acompanhe os atendimentos realizados pela equipe e gerencie etiquetas do chat.
+              Trilha do cliente (admin → gerente → captador), equipe do chat e etiquetas.
             </p>
           </div>
         </div>
 
+        <ChatGestaoTrilhaSection userId={userId} />
         <ChatGestaoAtendimentosSection userId={userId} />
         <ChatGestaoTagsSection userId={userId} secondary />
       </div>
