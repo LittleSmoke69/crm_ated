@@ -106,6 +106,18 @@ jobs:
               upsert_env SUPER_ADMIN_USERNAMES "$merged"
             fi
 
+            # Trilha do chat: rótulo e usernames que contam como admin da 1ª etapa
+            upsert_env CHAT_TRAIL_ADMIN_LABEL "Administrador"
+            current_trail_admin="$(sed -n 's/^CHAT_TRAIL_ADMIN_USERNAMES=//p' .env | tr -d '\r' | tr -d ' ')"
+            if [ -z "$current_trail_admin" ]; then
+              upsert_env CHAT_TRAIL_ADMIN_USERNAMES "administrador,franklin"
+            else
+              trail_merged="$current_trail_admin"
+              echo ",${trail_merged}," | grep -qi ',administrador,' || trail_merged="administrador,${trail_merged}"
+              echo ",${trail_merged}," | grep -qi ',franklin,' || trail_merged="${trail_merged},franklin"
+              upsert_env CHAT_TRAIL_ADMIN_USERNAMES "$trail_merged"
+            fi
+
             SCOPE="$(sed -n 's/^ZAPLOTO_APP_SCOPE=//p' .env | tr -d '\r')"
             test "$SCOPE" = "full"
             docker compose config --quiet

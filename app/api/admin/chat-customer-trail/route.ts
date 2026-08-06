@@ -11,6 +11,11 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import {
+  getChatTrailAdminLabel,
+  getChatTrailAdminUsernames,
+  profileMatchesTrailAdmin,
+} from '@/lib/server/env-chat-trail-admin';
 
 export type TrailStage = 'novo' | 'gerente' | 'captador' | 'resolvido';
 
@@ -52,15 +57,32 @@ function parseMetaAssignedBy(meta: unknown): string | null {
   return typeof assignedBy === 'string' && assignedBy.length > 0 ? assignedBy : null;
 }
 
-/** IDs de todos admin/super_admin do tenant (ou global). */
+/** IDs de admin/super_admin + usernames da env (CHAT_TRAIL_ADMIN_USERNAMES / SUPER_ADMIN). */
 async function listAdminProfileIds(zaplotoId: string | null): Promise<string[]> {
+  const ids = new Set<string>();
+
   let q = supabaseServiceRole
     .from('profiles')
     .select('id')
     .in('status', ['admin', 'super_admin']);
   if (zaplotoId) q = q.or(`zaploto_id.eq.${zaplotoId},status.eq.super_admin`);
   const { data } = await q;
-  return (data || []).map((p) => p.id as string);
+  for (const p of data || []) ids.add(p.id as string);
+
+  const usernames = getChatTrailAdminUsernames();
+  if (usernames.length > 0) {
+    // Match exato case-insensitive por username
+    const orUsername = usernames.map((u) => `username.ilike.${u}`).join(',');
+    const { data: byUser } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, username, email')
+      .or(orUsername);
+    for (const p of byUser || []) {
+      if (profileMatchesTrailAdmin(p.username, p.email)) ids.add(p.id as string);
+    }
+  }
+
+  return [...ids];
 }
 
 async function resolveAdminIdsByConversation(
@@ -72,6 +94,7 @@ async function resolveAdminIdsByConversation(
   if (conversationIds.length === 0) return adminByConv;
 
   const missingAfterPrefill = () => conversationIds.filter((id) => !adminByConv.has(id));
+  const trailAdminIds = new Set(await listAdminProfileIds(zaplotoId));
 
   // 1) Eventos
   for (let i = 0; i < conversationIds.length; i += 100) {
@@ -105,17 +128,20 @@ async function resolveAdminIdsByConversation(
       const convId = ev.conversation_id as string;
       if (adminByConv.has(convId)) continue;
       const assignedBy = parseMetaAssignedBy(ev.meta);
-      if (assignedBy && isAdminStatus(statusById.get(assignedBy))) {
+      if (
+        assignedBy &&
+        (isAdminStatus(statusById.get(assignedBy)) || trailAdminIds.has(assignedBy))
+      ) {
         adminByConv.set(convId, assignedBy);
       }
     }
   }
 
-  // 2) Mensagens outbound de admin/super_admin (filtra por user_id — sem limit global enganoso)
+  // 2) Mensagens outbound de admin (filtra por user_id — sem limit global enganoso)
   const stillMissing = missingAfterPrefill();
   if (stillMissing.length === 0) return adminByConv;
 
-  const adminIds = await listAdminProfileIds(zaplotoId);
+  const adminIds = [...trailAdminIds];
   if (adminIds.length > 0) {
     for (let i = 0; i < stillMissing.length; i += 50) {
       const chunk = stillMissing.slice(i, i + 50).filter((id) => !adminByConv.has(id));
@@ -279,8 +305,11 @@ export async function GET(req: NextRequest) {
       if (!adminId && c.assigned_by && isAdminStatus(assignedBy?.status)) {
         adminId = c.assigned_by;
       }
-      // Sempre "Administrador" na UI (não expor nome de super_admin como Franklin)
-      const adminName = adminId ? 'Administrador' : null;
+      // Saiu da fila do admin (gerente/captador) ⇒ sempre o rótulo da env (Administrador)
+      const passedFirst =
+        stage === 'gerente' || stage === 'captador' || stage === 'resolvido';
+      const adminLabel = getChatTrailAdminLabel();
+      const adminName = adminId || passedFirst ? adminLabel : null;
 
       return {
         conversation_id: c.id,
@@ -288,7 +317,7 @@ export async function GET(req: NextRequest) {
         phone: String(c.remote_jid || '').replace(/@s\.whatsapp\.net$/i, ''),
         stage,
         stage_label: stageLabel(stage),
-        passed_first_stage: stage === 'gerente' || stage === 'captador' || stage === 'resolvido',
+        passed_first_stage: passedFirst,
         admin_name: adminName,
         gerente_name: gerente?.name || null,
         captador_name: captador?.name || null,
