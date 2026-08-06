@@ -46,9 +46,10 @@ async function main() {
     .is('acquisition_tag', null)
     .select('id');
   if (e3) throw e3;
-  console.log('leads import → campanha:', imports?.length ?? 0);
+  console.log('leads import → campanha (UI: Importado):', imports?.length ?? 0);
 
-  // 2) conversas sem lead (@s.whatsapp.net)
+  // 2) conversas recentes sem lead (@s.whatsapp.net) — não backfillar histórico antigo/@lid
+  const recentSince = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   let from = 0;
   let created = 0;
   let skipped = 0;
@@ -56,9 +57,10 @@ async function main() {
   for (;;) {
     const { data, error } = await sb
       .from('chat_conversations')
-      .select('id, remote_jid, title, workspace_id, instance_id, user_id, lead_id')
+      .select('id, remote_jid, title, workspace_id, instance_id, user_id, lead_id, last_message_at, created_at')
       .is('lead_id', null)
       .ilike('remote_jid', '%@s.whatsapp.net')
+      .gte('last_message_at', recentSince)
       .range(from, from + 199);
     if (error) throw error;
     const batch = data || [];
@@ -66,12 +68,13 @@ async function main() {
 
     for (const conv of batch) {
       const jid = String(conv.remote_jid || '');
-      if (jid.toLowerCase().endsWith('@g.us')) {
+      if (jid.toLowerCase().includes('@lid') || jid.toLowerCase().endsWith('@g.us')) {
         skipped++;
         continue;
       }
       const phone = jid.split('@')[0] || '';
-      if (!phone || phone.replace(/\D/g, '').length < 8) {
+      const digits = phone.replace(/\D/g, '');
+      if (!digits || digits.length < 8 || digits.length > 13) {
         skipped++;
         continue;
       }
@@ -123,12 +126,12 @@ async function main() {
   const { count: camp } = await sb
     .from('crm_leads')
     .select('id', { count: 'exact', head: true })
-    .eq('acquisition_tag', 'campanha');
+    .in('acquisition_tag', ['importado', 'campanha']);
   const { count: disp } = await sb
     .from('crm_leads')
     .select('id', { count: 'exact', head: true })
     .eq('acquisition_tag', 'disparo');
-  console.log('totais tags', { ads, campanha: camp, disparo: disp });
+  console.log('totais tags', { ads, importado: camp, disparo: disp });
 }
 
 main().catch((e) => {

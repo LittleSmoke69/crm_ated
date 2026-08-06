@@ -18,6 +18,8 @@ import { normalizeBroadcastPhoneDigits } from '@/lib/chat/broadcast-phone';
 import { getSequenceDelaySeconds, getRotationSize, parseBroadcastSteps, type BroadcastStepConfig } from '@/lib/chat/broadcast-sequence';
 import { resolveEvolutionSendMediaMeta } from '@/lib/crm/evolution-send-media-meta';
 import { mergeEvolutionConversationsForAtendimento } from '@/lib/chat/merge-evolution-atendimento-conversations';
+import { captadorMaySeeRealtimeMessage } from '@/lib/chat/message-visibility';
+import { conversationAssignedToViewer } from '@/lib/services/chat-visibility';
 import {
   countConnectedEvolutionInstances,
   resolveActiveAtendimentoChannel,
@@ -81,6 +83,7 @@ interface Message {
   timestamp: number;
   created_at: string;
   from_me: boolean;
+  user_id?: string | null;
   media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'template' | null;
   media_url?: string | null;
   caption?: string | null;
@@ -2835,6 +2838,7 @@ export default function ChatPage() {
               timestamp:
                 typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
+            if (!captadorMaySeeRealtimeMessage(userStatus, userId, msg)) return;
             setMessages((prev) => {
               if (prev.some((m) => m.id === msg.id)) return prev;
               const mid = msg.message_id;
@@ -2868,7 +2872,7 @@ export default function ChatPage() {
       });
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedConversationId]);
+  }, [selectedConversationId, userStatus, userId]);
 
   // ── Realtime: webhook_events (WhatsApp Oficial) ────────────────────────────
   useEffect(() => {
@@ -2929,6 +2933,10 @@ export default function ChatPage() {
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
               const newConv = payload.new as Conversation;
               const isNew = payload.eventType === 'INSERT';
+              const inScope = conversationAssignedToViewer(
+                { id: userId || '', status: userStatus },
+                newConv
+              );
 
               setConversations((prev) => {
                 const w24 = (c: Conversation) =>
@@ -2942,6 +2950,11 @@ export default function ChatPage() {
                     if (!a24 && b24) return 1;
                     return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
                   });
+                if (!inScope) {
+                  const next = sort24(prev.filter((c) => c.id !== newConv.id));
+                  conversationsCacheRef.current[filterVal] = next;
+                  return next;
+                }
                 const updated = prev.findIndex((c) => c.id === newConv.id) >= 0
                   ? prev.map((c) => (c.id === newConv.id ? newConv : c))
                   : [newConv, ...prev];
@@ -2950,7 +2963,7 @@ export default function ChatPage() {
                 return next;
               });
 
-              if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+              if (isNew && inScope && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
                 const convTitle = newConv.title || 'Nova conversa';
                 const preview = (newConv.last_message_preview || '').slice(0, 60);
                 if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
@@ -3003,8 +3016,17 @@ export default function ChatPage() {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const newConv = payload.new as Conversation;
             const isNew = payload.eventType === 'INSERT';
+            const inScope = conversationAssignedToViewer(
+              { id: userId || '', status: userStatus },
+              newConv
+            );
 
             setConversations((prev) => {
+              if (!inScope) {
+                const next = sortByLastMessage(prev.filter((c) => c.id !== newConv.id));
+                conversationsCacheRef.current[filterVal] = next;
+                return next;
+              }
               const updated =
                 prev.findIndex((c) => c.id === newConv.id) >= 0
                   ? prev.map((c) => (c.id === newConv.id ? newConv : c))
@@ -3014,7 +3036,7 @@ export default function ChatPage() {
               return next;
             });
 
-            if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+            if (isNew && inScope && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
               const convTitle = newConv.title || 'Nova conversa';
               const preview = (newConv.last_message_preview || '').slice(0, 60);
               if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
@@ -3044,7 +3066,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedChannel, userStatus]);
+  }, [selectedChannel, userStatus, userId]);
 
   // ── Permissão de notificação ───────────────────────────────────────────────
   useEffect(() => {
@@ -4278,15 +4300,20 @@ export default function ChatPage() {
     switch (conversationFilter) {
       case 'mine':
         return (
-          (isAdminOrSuperAdmin ||
-            conv.user_id === userId ||
-            (userStatus === 'gerente' && conv.gerente_id === userId)) &&
+          conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv) &&
           conv.attendance_status !== 'resolvido'
         );
       case 'unassigned':
+        // Histórico: só conversas do escopo do usuário (fora 24h ou resolvidas)
+        return (
+          conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv) &&
+          (!in24h || resolved)
+        );
       default:
-        // Histórico: template (fora 24h) ou resolvidas
-        return !in24h || resolved;
+        return (
+          conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv) &&
+          (!in24h || resolved)
+        );
     }
   });
 
@@ -4308,14 +4335,13 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const mineCount = conversationsWithBroadcast.filter(
-    (c) =>
-      isAdminOrSuperAdmin ||
-      c.user_id === userId ||
-      (userStatus === 'gerente' && c.gerente_id === userId)
+  const mineCount = conversationsWithBroadcast.filter((c) =>
+    conversationAssignedToViewer({ id: userId || '', status: userStatus }, c)
   ).length;
   const historyCount = conversationsWithBroadcast.filter(
-    (c) => !isWithin24hWindow(c) || c.attendance_status === 'resolvido'
+    (c) =>
+      conversationAssignedToViewer({ id: userId || '', status: userStatus }, c) &&
+      (!isWithin24hWindow(c) || c.attendance_status === 'resolvido')
   ).length;
 
   useEffect(() => {

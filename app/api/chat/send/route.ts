@@ -151,10 +151,12 @@ export async function POST(req: NextRequest) {
       
       const conversation = await chatService.upsertConversation(conversationData);
 
+      // Grava o usuário autenticado (admin/gerente/captador), nunca o dono da
+      // instância — senão a mensagem da admin aparece como se fosse do captador.
       const messageData = {
         instance_id: instance.id,
         workspace_id: instance.workspace_id,
-        user_id: instance.user_id,
+        user_id: userId,
         conversation_id: conversation.id,
         message_id: messageId,
         direction: 'out' as const,

@@ -11,6 +11,7 @@ import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 import { canUserAccessEvolutionChatInstance } from '@/lib/services/atendimento-chat-access';
 import { gerenteCanSeeOfficialConversation } from '@/lib/services/chat-visibility';
+import { filterChatMessagesForViewer } from '@/lib/chat/message-visibility';
 
 /**
  * GET /api/chat/messages
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
     // 1. Validar acesso à conversa
     const { data: conversation, error: convError } = await supabaseServiceRole
       .from('chat_conversations')
-      .select('instance_id, whatsapp_config_id, user_id, gerente_id, workspace_id')
+      .select('instance_id, whatsapp_config_id, user_id, gerente_id, workspace_id, assigned_at, assigned_by')
       .eq('id', conversation_id)
       .single();
 
@@ -59,6 +60,11 @@ export async function GET(req: NextRequest) {
     if (conversation.instance_id) {
       if (isAdminOrSuporte) {
         canAccessEvolution = true;
+      } else if (profile?.status === 'captador') {
+        // Vínculo com a instância NÃO libera todas as conversas — só as atribuídas.
+        canAccessEvolution = conversation.user_id === userId;
+      } else if (profile?.status === 'gerente') {
+        canAccessEvolution = await gerenteCanSeeOfficialConversation(userId, conversation);
       } else if (conversation.user_id === userId) {
         canAccessEvolution = true;
       } else {
@@ -128,7 +134,13 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao buscar mensagens: ${error.message}`);
     }
 
-    const result = (messages || []).reverse(); // ordem cronológica para exibição
+    const chronological = (messages || []).reverse(); // ordem cronológica para exibição
+    const result = await filterChatMessagesForViewer({
+      messages: chronological,
+      viewerId: userId,
+      viewerStatus: profile?.status,
+      conversation,
+    });
     const hasMore = conversationIds.length === 1 && (messages || []).length === limit;
 
     // 3. Zerar contador de não lidas ao abrir a conversa (apenas na carga inicial, sem cursor)
@@ -194,7 +206,14 @@ export async function DELETE(req: NextRequest) {
       profile?.status === 'suporte';
 
     if (conversation.instance_id) {
-      if (!isAdminOrSuporte) {
+      if (isAdminOrSuporte) {
+        // ok
+      } else if (profile?.status === 'captador') {
+        if (conversation.user_id !== userId) return errorResponse('Acesso negado.', 403);
+      } else if (profile?.status === 'gerente') {
+        const gerenteVisible = await gerenteCanSeeOfficialConversation(userId, conversation);
+        if (!gerenteVisible) return errorResponse('Acesso negado.', 403);
+      } else {
         const allowed = await canUserAccessEvolutionChatInstance(userId, profile || {}, conversation.instance_id);
         if (!allowed) return errorResponse('Acesso negado.', 403);
       }

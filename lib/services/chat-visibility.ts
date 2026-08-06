@@ -41,3 +41,24 @@ export async function gerenteCanSeeOfficialConversation(
     .maybeSingle();
   return !!data;
 }
+
+/**
+ * Escopo por conversa (Evolution e Oficial).
+ * Captador: só as atribuídas a ele (user_id).
+ * Gerente: fila dele (gerente_id) + captadores do time.
+ */
+export function conversationAssignedToViewer(
+  viewer: { id: string; status?: string | null },
+  conv: { user_id?: string | null; gerente_id?: string | null },
+  teamCaptadorIds: string[] = []
+): boolean {
+  const status = String(viewer.status || '').trim().toLowerCase();
+  if (status === 'super_admin' || status === 'admin' || status === 'suporte') return true;
+  if (status === 'captador') return conv.user_id === viewer.id;
+  if (status === 'gerente') {
+    if (conv.gerente_id === viewer.id) return true;
+    if (conv.user_id && teamCaptadorIds.includes(conv.user_id)) return true;
+    return false;
+  }
+  return conv.user_id === viewer.id;
+}

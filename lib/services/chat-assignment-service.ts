@@ -16,6 +16,69 @@ export async function getChatActor(userId: string): Promise<ChatActor> {
   if (error || !data) throw new Error('Perfil não encontrado.');
   return data as ChatActor;
 }
+
+/**
+ * Preenche workspace_id nulo a partir da instância/config — evita "fora do seu escopo"
+ * em conversas listadas no chat mas sem tenant gravado.
+ * Não exige gerente/captador online.
+ */
+async function healConversationWorkspaces(
+  conversationIds: string[],
+  actorZaplotoId: string | null
+): Promise<void> {
+  const { data: conversations } = await supabaseServiceRole
+    .from('chat_conversations')
+    .select('id, workspace_id, instance_id, whatsapp_config_id')
+    .in('id', conversationIds);
+
+  const missing = (conversations ?? []).filter((c) => !c.workspace_id);
+  if (missing.length === 0) return;
+
+  const instanceIds = [
+    ...new Set(missing.map((c) => c.instance_id).filter((id): id is string => !!id)),
+  ];
+  const configIds = [
+    ...new Set(missing.map((c) => c.whatsapp_config_id).filter((id): id is string => !!id)),
+  ];
+
+  const instanceWorkspace = new Map<string, string | null>();
+  const configWorkspace = new Map<string, string | null>();
+
+  if (instanceIds.length > 0) {
+    const { data: instances } = await supabaseServiceRole
+      .from('evolution_instances')
+      .select('id, workspace_id')
+      .in('id', instanceIds);
+    for (const row of instances ?? []) {
+      instanceWorkspace.set(row.id, row.workspace_id ?? null);
+    }
+  }
+  if (configIds.length > 0) {
+    const { data: configs } = await supabaseServiceRole
+      .from('whatsapp_official_configs')
+      .select('id, zaploto_id')
+      .in('id', configIds);
+    for (const row of configs ?? []) {
+      configWorkspace.set(row.id, row.zaploto_id ?? null);
+    }
+  }
+
+  await Promise.all(
+    missing.map(async (c) => {
+      const workspace =
+        (c.instance_id ? instanceWorkspace.get(c.instance_id) : null) ||
+        (c.whatsapp_config_id ? configWorkspace.get(c.whatsapp_config_id) : null) ||
+        actorZaplotoId;
+      if (!workspace) return;
+      await supabaseServiceRole
+        .from('chat_conversations')
+        .update({ workspace_id: workspace, updated_at: new Date().toISOString() })
+        .eq('id', c.id)
+        .is('workspace_id', null);
+    })
+  );
+}
+
 export async function assignConversations(input: {
   actorUserId: string;
   conversationIds: string[];
@@ -23,6 +86,10 @@ export async function assignConversations(input: {
 }): Promise<number> {
   const ids = [...new Set(input.conversationIds)].slice(0, 101);
   if (ids.length === 0 || ids.length > 100) throw new Error('Informe entre 1 e 100 conversas.');
+
+  const actor = await getChatActor(input.actorUserId);
+  await healConversationWorkspaces(ids, actor.zaploto_id);
+
   const { data, error } = await supabaseServiceRole.rpc('chat_assign_conversations', {
     p_actor_user_id: input.actorUserId,
     p_conversation_ids: ids,
@@ -35,7 +102,7 @@ export async function assignConversations(input: {
 /**
  * Destinatários possíveis para o modal de atribuição, respeitando a hierarquia:
  * admin/super_admin só atribuem para gerente; gerente só atribui para captador do seu time
- * (enroller = gerente). Um gerente então repassa a conversa a um captador com uma segunda atribuição.
+ * (enroller = gerente). Online/offline é só indicador visual — atribuição é permitida offline.
  */
 export async function listAssignmentTargets(actor: ChatActor) {
   if (!['super_admin', 'admin', 'gerente'].includes(actor.status)) return [];

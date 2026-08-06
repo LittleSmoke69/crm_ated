@@ -228,6 +228,9 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
 
   let upserted = 0;
 
+  const recentLeadWindowMs = 48 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+
   for (const [remoteJid, entry] of merged) {
     if (remoteJid.includes('status@broadcast')) continue;
     if (remoteJid.toLowerCase().endsWith('@g.us')) continue;
@@ -236,6 +239,10 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
     const fromEvolution = pickLastMessageAtIso(entry);
     const preview = pickPreview(entry);
     const prev = existingByJid.get(remoteJid);
+    const jidLower = remoteJid.toLowerCase();
+    const isWhatsAppPhoneJid =
+      jidLower.endsWith('@s.whatsapp.net') || jidLower.endsWith('@c.us');
+    const isLidJid = jidLower.includes('@lid');
 
     if (!prev) {
       const conversation = await chatService.upsertConversation({
@@ -250,27 +257,32 @@ export async function syncEvolutionDirectoryToChatConversations(params: {
         last_message_preview: preview ?? undefined,
       });
       upserted += 1;
-      try {
-        const tenantId = await resolveTenantIdForChatLead({
-          workspaceId,
-          ownerUserId: instanceOwnerUserId,
-        });
-        const phone = remoteJid.split('@')[0];
-        const realName =
-          title && title.replace(/\D/g, '') !== phone.replace(/\D/g, '') && /[A-Za-zÀ-ÿ]/.test(title)
-            ? title
-            : title !== phone
+      // Lead só para JID com telefone real e atividade recente (não @lid / histórico).
+      const lastTs = fromEvolution ? new Date(fromEvolution).getTime() : 0;
+      const isRecent = lastTs > 0 && nowMs - lastTs <= recentLeadWindowMs;
+      if (!isLidJid && isWhatsAppPhoneJid && isRecent) {
+        try {
+          const tenantId = await resolveTenantIdForChatLead({
+            workspaceId,
+            ownerUserId: instanceOwnerUserId,
+          });
+          const phone = remoteJid.split('@')[0];
+          const realName =
+            title && title.replace(/\D/g, '') !== phone.replace(/\D/g, '') && /[A-Za-zÀ-ÿ]/.test(title)
               ? title
-              : null;
-        await ensurePendingLeadForConversation({
-          conversationId: conversation.id,
-          tenantId,
-          phone,
-          name: realName,
-          source: 'evolution',
-        });
-      } catch {
-        /* lead é secundário ao sync de diretório */
+              : title !== phone
+                ? title
+                : null;
+          await ensurePendingLeadForConversation({
+            conversationId: conversation.id,
+            tenantId,
+            phone,
+            name: realName,
+            source: 'evolution',
+          });
+        } catch {
+          /* lead é secundário ao sync de diretório */
+        }
       }
       continue;
     }

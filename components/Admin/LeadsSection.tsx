@@ -25,7 +25,7 @@ import {
   assignNamePhoneEmail,
   parseCrmImportContacts,
 } from '@/lib/utils/crm-import-contacts';
-import { ACQUISITION_TAG_LABELS, type AcquisitionTag } from '@/lib/crm/acquisition-tags';
+import { acquisitionTagLabel } from '@/lib/crm/acquisition-tags';
 
 /** Tela Admin > CRM > Leads: gerenciamento de leads capturados, interligada ao kanban (atribuição via crm_move_lead). */
 
@@ -39,7 +39,7 @@ type CapturedLead = {
   column_key: string | null;
   column_title: string | null;
   source: string | null;
-  acquisition_tag?: 'ads' | 'disparo' | 'campanha' | null;
+  acquisition_tag?: 'ads' | 'disparo' | 'importado' | 'campanha' | null;
   created_at: string;
   captador_id: string | null;
   captador_name: string | null;
@@ -956,7 +956,7 @@ export default function LeadsSection({
           l.gerente_name || '',
           l.captador_name || '',
           l.acquisition_tag
-            ? ACQUISITION_TAG_LABELS[l.acquisition_tag as AcquisitionTag] || l.acquisition_tag
+            ? acquisitionTagLabel(l.acquisition_tag)
             : '',
           l.source || '',
           l.occurrence_total > 1 ? `${l.occurrence}ª vez` : '',
@@ -1413,7 +1413,7 @@ export default function LeadsSection({
               <option value="">Todas</option>
               <option value="ads">ADS</option>
               <option value="disparo">Disparo</option>
-              <option value="campanha">Campanha</option>
+              <option value="importado">Importado</option>
             </select>
           </div>
         </div>
@@ -1680,7 +1680,7 @@ export default function LeadsSection({
                                 : 'border-emerald-500/40 text-emerald-800 dark:text-emerald-200 bg-emerald-500/10'
                           }`}
                         >
-                          {ACQUISITION_TAG_LABELS[l.acquisition_tag as AcquisitionTag] || l.acquisition_tag}
+                          {acquisitionTagLabel(l.acquisition_tag)}
                         </span>
                       ) : (
                         <span className="text-stone-400">—</span>
@@ -1996,7 +1996,7 @@ export default function LeadsSection({
               [
                 'TAG',
                 viewLead.acquisition_tag
-                  ? ACQUISITION_TAG_LABELS[viewLead.acquisition_tag as AcquisitionTag] || viewLead.acquisition_tag
+                  ? acquisitionTagLabel(viewLead.acquisition_tag)
                   : '—',
               ],
               ['Origem', viewLead.source || '—'],

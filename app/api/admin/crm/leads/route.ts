@@ -593,7 +593,7 @@ async function scanLeads(params: {
   scopeTeamIds?: string[];
   /** Captador: só leads atribuídos a ele. */
   scopeCaptadorId?: string;
-  /** Filtro TAG: ads | disparo | campanha */
+  /** Filtro TAG: ads | disparo | importado */
   acquisitionTag?: string;
   /** Para listagem rápida: para o scan após N linhas (total ainda aproximado se truncated). */
   maxRows?: number;
@@ -673,7 +673,12 @@ async function scanLeads(params: {
     if (captadorId) query = query.eq('user_id', captadorId);
     if (fromIso) query = query.gte('created_at', fromIso);
     if (toIso) query = query.lt('created_at', toIso);
-    if (acquisitionTag) query = query.eq('acquisition_tag', acquisitionTag);
+    if (acquisitionTag === 'importado') {
+      // legado: campanha → importado (até migration 33 concluir em todos os ambientes)
+      query = query.in('acquisition_tag', ['importado', 'campanha']);
+    } else if (acquisitionTag) {
+      query = query.eq('acquisition_tag', acquisitionTag);
+    }
     if (q) {
       const safe = q.replace(/[%,()]/g, ' ').trim();
       const digits = normalizePhone(q);

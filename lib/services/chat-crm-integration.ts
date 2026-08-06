@@ -68,16 +68,21 @@ export async function ensurePendingLeadForConversation(input: {
 }): Promise<string | null> {
   const tenantId = input.tenantId?.trim();
   const phone = phoneDigits(input.phone);
-  if (!tenantId || !phone || phone.length < 8) return null;
+  // Telefone WhatsApp BR típico: 12–13 dígitos. IDs @lid costumam ter 14+.
+  if (!tenantId || !phone || phone.length < 8 || phone.length > 13) return null;
 
   const acquisitionTag: AcquisitionTag =
     input.acquisitionTag && isAcquisitionTag(input.acquisitionTag) ? input.acquisitionTag : 'ads';
 
   const { data: conversation } = await supabaseServiceRole
     .from('chat_conversations')
-    .select('lead_id, title')
+    .select('lead_id, title, remote_jid')
     .eq('id', input.conversationId)
     .single();
+
+  const remoteJid = String(conversation?.remote_jid || '').toLowerCase();
+  // Não criar lead a partir de JID interno @lid (sem telefone real).
+  if (remoteJid.endsWith('@lid') || remoteJid.includes('@lid')) return null;
 
   const displayName =
     resolveContactDisplayName(input.name, phone) ||

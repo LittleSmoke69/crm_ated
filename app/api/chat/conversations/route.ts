@@ -140,8 +140,14 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      // Sync de diretório (todos os chats da instância) é só para admin/gerente —
+      // captador nunca deve materializar conversas alheias via findChats.
+      const maySyncDirectory =
+        syncFromEvolution &&
+        (isAdminOrSuporte || profile?.status === 'gerente');
+
       let evolutionSyncMeta: Record<string, unknown> | undefined;
-      if (syncFromEvolution) {
+      if (maySyncDirectory) {
         const { data: fullInstance, error: fullInstError } = await supabaseServiceRole
           .from('evolution_instances')
           .select(
@@ -196,20 +202,33 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      const { data: conversations, error } = await supabaseServiceRole
+      let evolutionQuery = supabaseServiceRole
         .from('chat_conversations')
         .select('*')
         .eq('instance_id', instance_id)
         .eq('is_group', false)
-        .not('remote_jid', 'like', '%@g.us')
-        .order('last_message_at', { ascending: false });
+        .not('remote_jid', 'like', '%@g.us');
+
+      // Mesma hierarquia do WhatsApp Oficial: captador só vê as suas;
+      // gerente vê a fila dele + captadores do time.
+      if (profile?.status === 'captador') {
+        evolutionQuery = evolutionQuery.eq('user_id', userId);
+      } else if (profile?.status === 'gerente') {
+        const teamCaptadorIds = await getGerenteTeamCaptadorIds(userId);
+        evolutionQuery = evolutionQuery.or(gerenteOfficialOrFilter(userId, teamCaptadorIds));
+      }
+
+      const { data: conversations, error } = await evolutionQuery.order('last_message_at', {
+        ascending: false,
+      });
 
       if (error) {
         console.error('[Zaploto Chat] conversations GET — instance_id:', instance_id, '| erro:', error.message);
         return errorResponse(`Erro ao buscar conversas: ${error.message}`);
       }
+      const enriched = await enrichConversationAssignees(conversations ?? []);
       const list = sortConversationsForInbox(
-        (conversations ?? []) as Array<{
+        enriched as Array<{
           id: string;
           whatsapp_config_id?: string | null;
           last_message_at?: string | null;

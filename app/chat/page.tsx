@@ -14,6 +14,8 @@ import {
   isWithin24hWindow as isWithin24hWindowInbox,
   sortConversationsForInbox,
 } from '@/lib/chat/conversation-inbox';
+import { captadorMaySeeRealtimeMessage } from '@/lib/chat/message-visibility';
+import { conversationAssignedToViewer } from '@/lib/services/chat-visibility';
 import {
   countConnectedEvolutionInstances,
   resolveActiveAtendimentoChannel,
@@ -76,6 +78,7 @@ interface Message {
   timestamp: number;
   created_at: string;
   from_me: boolean;
+  user_id?: string | null;
   instance_id?: string | null;
   media_type?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'template' | null;
   media_url?: string | null;
@@ -1858,6 +1861,7 @@ export default function ChatPage() {
               timestamp:
                 typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
+            if (!captadorMaySeeRealtimeMessage(userStatus, userId, msg)) return;
             setMessages((prev) => {
               if (prev.some((m) => m.id === msg.id)) return prev;
               return [...prev, msg];
@@ -1889,7 +1893,7 @@ export default function ChatPage() {
       });
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedConversationId]);
+  }, [selectedConversationId, userStatus, userId]);
 
   // ── Realtime: webhook_events (WhatsApp Oficial) ────────────────────────────
   // Processa eventos brutos da tabela webhook_events em tempo real.
@@ -2002,8 +2006,18 @@ export default function ChatPage() {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const newConv = payload.new as Conversation;
             const isNew = payload.eventType === 'INSERT';
+            const inScope = conversationAssignedToViewer(
+              { id: userId || '', status: userStatus },
+              newConv
+            );
 
             setConversations((prev) => {
+              if (!inScope) {
+                const next = prev.filter((c) => c.id !== newConv.id);
+                conversationsCacheRef.current[filterVal] = next;
+                writeSessionConversations(filterVal, next);
+                return next;
+              }
               const existingIdx = prev.findIndex((c) => c.id === newConv.id);
               let result: Conversation[];
               if (existingIdx >= 0) {
@@ -2018,7 +2032,7 @@ export default function ChatPage() {
               return result;
             });
 
-            if (isNew && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
+            if (isNew && inScope && canNotify && typeof window !== 'undefined' && 'Notification' in window) {
               const convTitle = newConv.title || 'Nova conversa';
               const preview = (newConv.last_message_preview || '').slice(0, 60);
               if (document.visibilityState === 'hidden' && Notification.permission === 'granted') {
@@ -2038,7 +2052,7 @@ export default function ChatPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedChannel, userStatus]);
+  }, [selectedChannel, userStatus, userId]);
 
   // ── Agente IA: carrega flows e config da instância ao abrir o painel ────────
   useEffect(() => {
@@ -3244,14 +3258,20 @@ export default function ChatPage() {
     }
     switch (conversationFilter) {
       case 'mine':
-        return conv.user_id === userId || (userStatus === 'gerente' && conv.gerente_id === userId);
+        return conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv);
       case 'unassigned':
-        // Histórico: resolvidas, ou WA Oficial fora da janela 24h
-        return !isActiveConversation(conv);
+        // Histórico: resolvidas, ou WA Oficial fora da janela 24h — só no escopo do usuário
+        return (
+          conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv) &&
+          !isActiveConversation(conv)
+        );
       case 'all':
       default:
-        // Todos: ativas e não resolvidas
-        return isActiveConversation(conv);
+        // Todos: ativas e não resolvidas no escopo do usuário
+        return (
+          conversationAssignedToViewer({ id: userId || '', status: userStatus }, conv) &&
+          isActiveConversation(conv)
+        );
     }
   });
 
@@ -3260,11 +3280,19 @@ export default function ChatPage() {
   const displayedConversations = sortedConversations.slice(0, visibleConversationsCount);
   const hasMoreConversations = visibleConversationsCount < sortedConversations.length;
 
-  const allCount = conversations.filter((c) => isActiveConversation(c)).length;
-  const mineCount = conversations.filter(
-    (c) => c.user_id === userId || (userStatus === 'gerente' && c.gerente_id === userId)
+  const allCount = conversations.filter(
+    (c) =>
+      conversationAssignedToViewer({ id: userId || '', status: userStatus }, c) &&
+      isActiveConversation(c)
   ).length;
-  const historyCount = conversations.filter((c) => !isActiveConversation(c)).length;
+  const mineCount = conversations.filter((c) =>
+    conversationAssignedToViewer({ id: userId || '', status: userStatus }, c)
+  ).length;
+  const historyCount = conversations.filter(
+    (c) =>
+      conversationAssignedToViewer({ id: userId || '', status: userStatus }, c) &&
+      !isActiveConversation(c)
+  ).length;
 
   useEffect(() => {
     setVisibleConversationsCount(CONVERSATIONS_PAGE_SIZE);
@@ -3804,7 +3832,7 @@ export default function ChatPage() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-white">{userStatus === 'gerente' ? 'Atribuir ao captador' : 'Atribuir ao gerente'}</h3>
-                <p className="text-xs text-gray-400">{assignmentIds.length} conversa(s) selecionada(s)</p>
+                <p className="text-xs text-gray-400">{assignmentIds.length} conversa(s) selecionada(s) · pode atribuir mesmo offline</p>
               </div>
               <button onClick={() => setAssignmentOpen(false)} className="p-1 text-gray-400"><X className="h-5 w-5" /></button>
             </div>
