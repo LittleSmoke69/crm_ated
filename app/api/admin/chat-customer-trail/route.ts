@@ -1,16 +1,10 @@
 /**
  * GET /api/admin/chat-customer-trail
- * Funil + trilha do cliente no chat de atendimento:
- *   1) Novo (sem gerente/captador) — primeira etapa
- *   2) Com gerente — passou da 1ª etapa (admin → gerente)
- *   3) Com captador — passou para o time de captura
- *   4) Resolvido
- *
- * O admin da 1ª etapa é recuperado de forma robusta:
- *   - chat_attendance_events.meta.assigned_by (transferência inicial)
- *   - primeira mensagem outbound de um admin
- *   - fallback: assigned_by atual se ainda for admin
- * (ao atribuir ao captador, assigned_by vira o gerente e apaga o admin da coluna).
+ * Funil + trilha do cliente. Admin da 1ª etapa vem de:
+ *   1) chat_conversations.first_admin_id (persistido)
+ *   2) eventos transferred/assigned (meta.assigned_by)
+ *   3) mensagem outbound de admin/super_admin
+ *   4) assigned_by atual se ainda for admin
  */
 
 import { NextRequest } from 'next/server';
@@ -50,26 +44,51 @@ function isAdminStatus(status: string | null | undefined): boolean {
   return ADMIN_STATUSES.has(String(status || '').toLowerCase());
 }
 
-async function resolveAdminIdsByConversation(conversationIds: string[]): Promise<Map<string, string>> {
-  const adminByConv = new Map<string, string>();
+function parseMetaAssignedBy(meta: unknown): string | null {
+  if (!meta) return null;
+  const obj = typeof meta === 'string' ? (() => { try { return JSON.parse(meta); } catch { return null; } })() : meta;
+  if (!obj || typeof obj !== 'object') return null;
+  const assignedBy = (obj as { assigned_by?: unknown }).assigned_by;
+  return typeof assignedBy === 'string' && assignedBy.length > 0 ? assignedBy : null;
+}
+
+/** IDs de todos admin/super_admin do tenant (ou global). */
+async function listAdminProfileIds(zaplotoId: string | null): Promise<string[]> {
+  let q = supabaseServiceRole
+    .from('profiles')
+    .select('id')
+    .in('status', ['admin', 'super_admin']);
+  if (zaplotoId) q = q.or(`zaploto_id.eq.${zaplotoId},status.eq.super_admin`);
+  const { data } = await q;
+  return (data || []).map((p) => p.id as string);
+}
+
+async function resolveAdminIdsByConversation(
+  conversationIds: string[],
+  prefilled: Map<string, string>,
+  zaplotoId: string | null
+): Promise<Map<string, string>> {
+  const adminByConv = new Map<string, string>(prefilled);
   if (conversationIds.length === 0) return adminByConv;
 
-  // 1) Eventos de transferência/atribuição — meta.assigned_by da 1ª delegação
-  for (let i = 0; i < conversationIds.length; i += 80) {
-    const chunk = conversationIds.slice(i, i + 80);
+  const missingAfterPrefill = () => conversationIds.filter((id) => !adminByConv.has(id));
+
+  // 1) Eventos
+  for (let i = 0; i < conversationIds.length; i += 100) {
+    const chunk = conversationIds.slice(i, i + 100);
+    const still = chunk.filter((id) => !adminByConv.has(id));
+    if (still.length === 0) continue;
+
     const { data: events } = await supabaseServiceRole
       .from('chat_attendance_events')
       .select('conversation_id, event_type, meta, created_at')
-      .in('conversation_id', chunk)
+      .in('conversation_id', still)
       .in('event_type', ['transferred', 'assigned'])
       .order('created_at', { ascending: true });
 
     const pendingIds = new Set<string>();
     for (const ev of events || []) {
-      const convId = ev.conversation_id as string;
-      if (adminByConv.has(convId)) continue;
-      const meta = (ev.meta || {}) as { assigned_by?: string };
-      const assignedBy = typeof meta.assigned_by === 'string' ? meta.assigned_by : null;
+      const assignedBy = parseMetaAssignedBy(ev.meta);
       if (assignedBy) pendingIds.add(assignedBy);
     }
 
@@ -85,45 +104,33 @@ async function resolveAdminIdsByConversation(conversationIds: string[]): Promise
     for (const ev of events || []) {
       const convId = ev.conversation_id as string;
       if (adminByConv.has(convId)) continue;
-      const meta = (ev.meta || {}) as { assigned_by?: string };
-      const assignedBy = typeof meta.assigned_by === 'string' ? meta.assigned_by : null;
+      const assignedBy = parseMetaAssignedBy(ev.meta);
       if (assignedBy && isAdminStatus(statusById.get(assignedBy))) {
         adminByConv.set(convId, assignedBy);
       }
     }
   }
 
-  // 2) Fallback: primeira mensagem outbound de um admin na conversa
-  const missing = conversationIds.filter((id) => !adminByConv.has(id));
-  if (missing.length === 0) return adminByConv;
+  // 2) Mensagens outbound de admin/super_admin (filtra por user_id — sem limit global enganoso)
+  const stillMissing = missingAfterPrefill();
+  if (stillMissing.length === 0) return adminByConv;
 
-  for (let i = 0; i < missing.length; i += 40) {
-    const chunk = missing.slice(i, i + 40);
-    const { data: msgs } = await supabaseServiceRole
-      .from('chat_messages')
-      .select('conversation_id, user_id, timestamp, created_at')
-      .in('conversation_id', chunk)
-      .eq('from_me', true)
-      .not('user_id', 'is', null)
-      .order('timestamp', { ascending: true })
-      .limit(2000);
+  const adminIds = await listAdminProfileIds(zaplotoId);
+  if (adminIds.length > 0) {
+    for (let i = 0; i < stillMissing.length; i += 50) {
+      const chunk = stillMissing.slice(i, i + 50).filter((id) => !adminByConv.has(id));
+      if (chunk.length === 0) continue;
+      const { data: msgs } = await supabaseServiceRole
+        .from('chat_messages')
+        .select('conversation_id, user_id')
+        .in('conversation_id', chunk)
+        .in('user_id', adminIds)
+        .eq('from_me', true);
 
-    const senderIds = [...new Set((msgs || []).map((m) => m.user_id).filter(Boolean))] as string[];
-    const statusById = new Map<string, string>();
-    if (senderIds.length > 0) {
-      const { data: people } = await supabaseServiceRole
-        .from('profiles')
-        .select('id, status')
-        .in('id', senderIds);
-      for (const p of people || []) statusById.set(p.id, String(p.status || ''));
-    }
-
-    for (const m of msgs || []) {
-      const convId = m.conversation_id as string;
-      if (adminByConv.has(convId)) continue;
-      const uid = m.user_id as string | null;
-      if (uid && isAdminStatus(statusById.get(uid))) {
-        adminByConv.set(convId, uid);
+      for (const m of msgs || []) {
+        const convId = m.conversation_id as string;
+        if (adminByConv.has(convId)) continue;
+        if (m.user_id) adminByConv.set(convId, m.user_id as string);
       }
     }
   }
@@ -154,37 +161,88 @@ export async function GET(req: NextRequest) {
     const toIso = toDate ? `${toDate}T23:59:59.999Z` : null;
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '40', 10) || 40, 1), 100);
 
-    let query = supabaseServiceRole
-      .from('chat_conversations')
-      .select(
-        'id, title, remote_jid, user_id, gerente_id, assigned_by, assigned_at, assignment_status, attendance_status, last_message_at, last_message_preview, created_at, workspace_id, instance_id, whatsapp_config_id'
-      )
-      .eq('is_group', false)
-      .order('last_message_at', { ascending: false })
-      .limit(800);
+    const selectWithAdmin =
+      'id, title, remote_jid, user_id, gerente_id, assigned_by, first_admin_id, assigned_at, assignment_status, attendance_status, last_message_at, last_message_preview, created_at, workspace_id, instance_id, whatsapp_config_id';
+    const selectWithoutAdmin =
+      'id, title, remote_jid, user_id, gerente_id, assigned_by, assigned_at, assignment_status, attendance_status, last_message_at, last_message_preview, created_at, workspace_id, instance_id, whatsapp_config_id';
 
-    if (isAdmin && profile?.zaploto_id) {
-      query = query.eq('workspace_id', profile.zaploto_id);
+    const buildQuery = (selectCols: string) => {
+      let q = supabaseServiceRole
+        .from('chat_conversations')
+        .select(selectCols)
+        .eq('is_group', false)
+        .order('last_message_at', { ascending: false })
+        .limit(800);
+      if (isAdmin && profile?.zaploto_id) {
+        q = q.eq('workspace_id', profile.zaploto_id);
+      }
+      if (fromIso) q = q.gte('last_message_at', fromIso);
+      if (toIso) q = q.lte('last_message_at', toIso);
+      return q;
+    };
+
+    let hasFirstAdminCol = true;
+    let { data: conversations, error } = await buildQuery(selectWithAdmin);
+    if (error && /first_admin_id/i.test(error.message)) {
+      hasFirstAdminCol = false;
+      ({ data: conversations, error } = await buildQuery(selectWithoutAdmin));
     }
-    if (fromIso) query = query.gte('last_message_at', fromIso);
-    if (toIso) query = query.lte('last_message_at', toIso);
-
-    const { data: conversations, error } = await query;
     if (error) {
       console.error('[chat-customer-trail]', error.message);
       return errorResponse(`Erro ao carregar trilha: ${error.message}`, 500);
     }
 
-    const rows = conversations || [];
+    const rows = (conversations || []) as Array<Record<string, unknown> & {
+      id: string;
+      user_id?: string | null;
+      gerente_id?: string | null;
+      assigned_by?: string | null;
+      first_admin_id?: string | null;
+      attendance_status?: string | null;
+      title?: string | null;
+      remote_jid?: string | null;
+      assigned_at?: string | null;
+      last_message_at?: string | null;
+      last_message_preview?: string | null;
+    }>;
     const convIds = rows.map((c) => c.id as string);
-    const adminByConv = await resolveAdminIdsByConversation(convIds);
+
+    const prefilled = new Map<string, string>();
+    for (const c of rows) {
+      if (c.first_admin_id) prefilled.set(c.id, c.first_admin_id as string);
+    }
+
+    const adminByConv = await resolveAdminIdsByConversation(
+      convIds,
+      prefilled,
+      isAdmin ? profile?.zaploto_id || null : null
+    );
+
+    // Persiste o que descobrimos (best-effort) para as próximas cargas
+    if (hasFirstAdminCol) {
+      const toPersist = [...adminByConv.entries()].filter(([id]) => {
+        const row = rows.find((r) => r.id === id);
+        return row && !row.first_admin_id;
+      });
+      if (toPersist.length > 0) {
+        await Promise.all(
+          toPersist.slice(0, 100).map(([id, adminId]) =>
+            supabaseServiceRole
+              .from('chat_conversations')
+              .update({ first_admin_id: adminId, updated_at: new Date().toISOString() })
+              .eq('id', id)
+              .is('first_admin_id', null)
+          )
+        );
+      }
+    }
 
     const personIds = new Set<string>();
     for (const c of rows) {
       if (c.user_id) personIds.add(c.user_id);
       if (c.gerente_id) personIds.add(c.gerente_id);
       if (c.assigned_by) personIds.add(c.assigned_by);
-      const adminId = adminByConv.get(c.id);
+      const adminId = adminByConv.get(c.id) || (c.first_admin_id as string | null);
       if (adminId) personIds.add(adminId);
     }
 
@@ -217,8 +275,7 @@ export async function GET(req: NextRequest) {
       const gerente = c.gerente_id ? nameById.get(c.gerente_id) : null;
       const captador = c.user_id ? nameById.get(c.user_id) : null;
 
-      // Admin da 1ª etapa (não o assigned_by atual, que vira gerente após 2ª atribuição)
-      let adminId = adminByConv.get(c.id) || null;
+      let adminId = adminByConv.get(c.id) || (c.first_admin_id as string | null) || null;
       if (!adminId && c.assigned_by && isAdminStatus(assignedBy?.status)) {
         adminId = c.assigned_by;
       }
