@@ -1751,7 +1751,7 @@ export default function LeadsSection({
                             <MessageCircle className="w-5 h-5" />
                           </a>
                         )}
-                        {canManage && !isGerente && (
+                        {canManage && !isGerente && !!l.gerente_id && (
                         <button
                           type="button"
                           onClick={() => {
@@ -1762,7 +1762,7 @@ export default function LeadsSection({
                             });
                           }}
                           className="inline-flex items-center gap-2 px-5 py-3 min-h-[48px] rounded-xl text-base font-bold text-white bg-[#E86A24] hover:bg-[#D95E1B] shadow-sm"
-                          title="Vincular ao gerente"
+                          title="Reatribuir gerente/captador"
                         >
                           <UserPlus className="w-5 h-5" />
                           <span className="hidden sm:inline">Atribuir</span>
