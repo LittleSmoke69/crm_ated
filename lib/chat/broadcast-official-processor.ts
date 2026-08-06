@@ -13,6 +13,9 @@ import * as whatsappOfficial from '@/lib/services/whatsapp-official-service';
 import { computeNextDelaySeconds } from './broadcast-delay';
 import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from './broadcast-step-claim';
 import { resolveWhatsAppOfficialConversationUserIdForUpsert } from './resolve-evolution-conversation-user-id';
+import {
+  ensurePendingLeadForConversation,
+} from '@/lib/services/chat-crm-integration';
 
 interface OfficialBroadcastMessageConfig {
   template_name: string;
@@ -180,6 +183,18 @@ export async function processOfficialBroadcastStep(
         last_message_at: new Date().toISOString(),
         last_message_preview: `Template: ${msgConfig.template_name}`,
       });
+      try {
+        await ensurePendingLeadForConversation({
+          conversationId: conversation.id,
+          tenantId: (job.workspace_id as string | undefined) ?? null,
+          phone: normalizedPhone,
+          name: contact?.name || null,
+          source: 'whatsapp_official',
+          acquisitionTag: 'disparo',
+        });
+      } catch {
+        /* lead secundário */
+      }
       await chatService.saveMessage({
         instance_id: null,
         whatsapp_config_id: config.id,

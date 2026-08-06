@@ -1,4 +1,6 @@
 import { supabaseServiceRole } from './supabase-service';
+import type { AcquisitionTag } from '@/lib/crm/acquisition-tags';
+import { isAcquisitionTag } from '@/lib/crm/acquisition-tags';
 
 function phoneDigits(value: string): string {
   return String(value || '').replace(/\D/g, '');
@@ -53,6 +55,7 @@ export type ChatLeadSource = 'whatsapp_official' | 'evolution' | 'chat';
  * Vincula idempotentemente uma conversa de chat a um lead pendente do mesmo tenant.
  * Novos leads entram sem gerente/captador (user_id e gerente_id null) com nome + telefone.
  * Se o payload trouxer nome, grava no campo name e o telefone em phone (ambos na tela Leads).
+ * Tag padrão: ADS (chat atendimento). Disparo passa acquisitionTag='disparo'.
  */
 export async function ensurePendingLeadForConversation(input: {
   conversationId: string;
@@ -60,10 +63,15 @@ export async function ensurePendingLeadForConversation(input: {
   phone: string;
   name?: string | null;
   source?: ChatLeadSource;
+  /** ads (padrão) | disparo */
+  acquisitionTag?: AcquisitionTag;
 }): Promise<string | null> {
   const tenantId = input.tenantId?.trim();
   const phone = phoneDigits(input.phone);
   if (!tenantId || !phone || phone.length < 8) return null;
+
+  const acquisitionTag: AcquisitionTag =
+    input.acquisitionTag && isAcquisitionTag(input.acquisitionTag) ? input.acquisitionTag : 'ads';
 
   const { data: conversation } = await supabaseServiceRole
     .from('chat_conversations')
@@ -84,7 +92,7 @@ export async function ensurePendingLeadForConversation(input: {
     // (gerente_id preenchido), passa a "Aguardando captador".
     const { data: current } = await supabaseServiceRole
       .from('crm_leads')
-      .select('name, phone, source')
+      .select('name, phone, source, acquisition_tag')
       .eq('id', leadId)
       .maybeSingle();
 
@@ -100,6 +108,13 @@ export async function ensurePendingLeadForConversation(input: {
       const cur = String(current?.name || '').trim();
       if (!cur || isPhoneLikeName(cur, phone)) patch.name = displayName;
     }
+    // Tag: preenche se vazia; disparo não é sobrescrito por ads
+    const currentTag = String(current?.acquisition_tag || '').trim();
+    if (!currentTag) {
+      patch.acquisition_tag = acquisitionTag;
+    } else if (acquisitionTag === 'disparo' && currentTag !== 'disparo') {
+      patch.acquisition_tag = 'disparo';
+    }
 
     if (Object.keys(patch).length > 1) {
       const { error: nameError } = await supabaseServiceRole
@@ -113,7 +128,7 @@ export async function ensurePendingLeadForConversation(input: {
 
   const { data: candidates, error: findError } = await supabaseServiceRole
     .from('crm_leads')
-    .select('id, phone, chat_conversation_id, name')
+    .select('id, phone, chat_conversation_id, name, acquisition_tag')
     .eq('zaploto_id', tenantId)
     .limit(5000);
   if (findError) throw findError;
@@ -135,6 +150,7 @@ export async function ensurePendingLeadForConversation(input: {
         status: 'novo',
         capture_status: 'pendente',
         source: input.source || 'chat',
+        acquisition_tag: acquisitionTag,
         zaploto_id: tenantId,
         chat_conversation_id: input.conversationId,
         created_at: now,
@@ -154,6 +170,12 @@ export async function ensurePendingLeadForConversation(input: {
     // Preenche nome se o lead só tinha o telefone / estava vazio
     if (displayName && isPhoneLikeName(existing?.name as string | undefined, phone)) {
       patch.name = displayName;
+    }
+    const currentTag = String(existing?.acquisition_tag || '').trim();
+    if (!currentTag) {
+      patch.acquisition_tag = acquisitionTag;
+    } else if (acquisitionTag === 'disparo' && currentTag !== 'disparo') {
+      patch.acquisition_tag = 'disparo';
     }
     await supabaseServiceRole.from('crm_leads').update(patch).eq('id', leadId);
   }

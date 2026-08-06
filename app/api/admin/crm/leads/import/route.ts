@@ -170,6 +170,7 @@ export async function POST(req: NextRequest) {
         status: normalizeLabel(r.statusLabel).replace(/\s+/g, '_') || 'pendente',
         capture_status: r.mappedStatus!.captureStatus,
         source: 'import',
+        acquisition_tag: 'campanha',
         zaploto_id: zaplotoId,
         assigned_by: null,
         assigned_at: null,

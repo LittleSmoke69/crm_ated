@@ -593,6 +593,8 @@ async function scanLeads(params: {
   scopeTeamIds?: string[];
   /** Captador: só leads atribuídos a ele. */
   scopeCaptadorId?: string;
+  /** Filtro TAG: ads | disparo | campanha */
+  acquisitionTag?: string;
   /** Para listagem rápida: para o scan após N linhas (total ainda aproximado se truncated). */
   maxRows?: number;
 }) {
@@ -609,6 +611,7 @@ async function scanLeads(params: {
     scopeGerenteId,
     scopeTeamIds,
     scopeCaptadorId,
+    acquisitionTag,
     maxRows = SCAN_MAX,
   } = params;
   const rows: any[] = [];
@@ -618,7 +621,7 @@ async function scanLeads(params: {
     const pageEnd = Math.min(from + SCAN_PAGE - 1, from + (limit - rows.length) - 1);
     let query = supabaseServiceRole
       .from('crm_leads')
-      .select('id, external_id, user_id, gerente_id, name, last_name, phone, email, capture_status, source, created_at, zaploto_id')
+      .select('id, external_id, user_id, gerente_id, name, last_name, phone, email, capture_status, source, acquisition_tag, created_at, zaploto_id')
       .order('created_at', { ascending: false })
       .range(from, pageEnd);
 
@@ -670,6 +673,7 @@ async function scanLeads(params: {
     if (captadorId) query = query.eq('user_id', captadorId);
     if (fromIso) query = query.gte('created_at', fromIso);
     if (toIso) query = query.lt('created_at', toIso);
+    if (acquisitionTag) query = query.eq('acquisition_tag', acquisitionTag);
     if (q) {
       const safe = q.replace(/[%,()]/g, ' ').trim();
       const digits = normalizePhone(q);
@@ -799,6 +803,7 @@ export async function GET(req: NextRequest) {
       scopeGerenteId: isGerente ? userId : undefined,
       scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
       scopeCaptadorId: isCaptador ? userId : undefined,
+      acquisitionTag: (sp.get('acquisition_tag') || '').trim() || undefined,
     });
 
     // Nº de ocorrência por telefone (1ª, 2ª, 3ª vez...) — mais antigo = 1ª vez
@@ -881,6 +886,7 @@ export async function GET(req: NextRequest) {
         column_key: columnKey,
         column_title: columnKey ? columnTitleByKey.get(columnKey) || columnKey : null,
         source: r.source,
+        acquisition_tag: r.acquisition_tag || null,
         created_at: r.created_at,
         captador_id: r.user_id,
         captador_name: captador ? (captador.full_name || captador.email) : null,

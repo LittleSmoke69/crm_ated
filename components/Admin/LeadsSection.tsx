@@ -25,6 +25,7 @@ import {
   assignNamePhoneEmail,
   parseCrmImportContacts,
 } from '@/lib/utils/crm-import-contacts';
+import { ACQUISITION_TAG_LABELS, type AcquisitionTag } from '@/lib/crm/acquisition-tags';
 
 /** Tela Admin > CRM > Leads: gerenciamento de leads capturados, interligada ao kanban (atribuição via crm_move_lead). */
 
@@ -38,6 +39,7 @@ type CapturedLead = {
   column_key: string | null;
   column_title: string | null;
   source: string | null;
+  acquisition_tag?: 'ads' | 'disparo' | 'campanha' | null;
   created_at: string;
   captador_id: string | null;
   captador_name: string | null;
@@ -424,6 +426,7 @@ export default function LeadsSection({
   const [fCaptador, setFCaptador] = useState('');
   const [fPeriod, setFPeriod] = useState('todos');
   const [fDate, setFDate] = useState(localTodayYmd);
+  const [fTag, setFTag] = useState('');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   // Seleção persistente entre páginas (Map id → lead)
@@ -505,10 +508,11 @@ export default function LeadsSection({
     if (fCaptador) sp.set('captador_id', fCaptador);
     sp.set('period', fPeriod || 'hoje');
     if ((fPeriod === 'hoje' || fPeriod === 'dia') && fDate) sp.set('date', fDate);
+    if (fTag) sp.set('acquisition_tag', fTag);
     if (onlyDuplicates) sp.set('duplicates', '1');
     Object.entries(extra).forEach(([k, v]) => sp.set(k, v));
     return sp.toString();
-  }, [q, fColumn, fGerente, fCaptador, fPeriod, fDate, onlyDuplicates]);
+  }, [q, fColumn, fGerente, fCaptador, fPeriod, fDate, fTag, onlyDuplicates]);
 
   const loadSales = useCallback(async () => {
     try {
@@ -589,7 +593,7 @@ export default function LeadsSection({
     setSelectedMap(new Map());
     loadLeads(1, { preserveSelection: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyDuplicates, fColumn, fGerente, fCaptador, fPeriod, fDate, pageSize]);
+  }, [onlyDuplicates, fColumn, fGerente, fCaptador, fPeriod, fDate, fTag, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const selected = useMemo(() => new Set(selectedMap.keys()), [selectedMap]);
@@ -941,7 +945,7 @@ export default function LeadsSection({
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || 'Erro ao exportar');
       const all: CapturedLead[] = json.data.leads || [];
-      const header = ['ID', 'Nome', 'WhatsApp', 'Email', 'Coluna CRM', 'Gerente', 'Captador', 'Origem', 'Ocorrência', 'Data/Hora'];
+      const header = ['ID', 'Nome', 'WhatsApp', 'Email', 'Coluna CRM', 'Gerente', 'Captador', 'TAG', 'Origem', 'Ocorrência', 'Data/Hora'];
       const lines = all.map((l) =>
         [
           l.external_id,
@@ -951,6 +955,9 @@ export default function LeadsSection({
           l.column_title || l.column_key || '',
           l.gerente_name || '',
           l.captador_name || '',
+          l.acquisition_tag
+            ? ACQUISITION_TAG_LABELS[l.acquisition_tag as AcquisitionTag] || l.acquisition_tag
+            : '',
           l.source || '',
           l.occurrence_total > 1 ? `${l.occurrence}ª vez` : '',
           formatDateTime(l.created_at),
@@ -1400,6 +1407,15 @@ export default function LeadsSection({
               />
             </div>
           )}
+          <div>
+            <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">TAG</label>
+            <select value={fTag} onChange={(e) => setFTag(e.target.value)} className={inputClass}>
+              <option value="">Todas</option>
+              <option value="ads">ADS</option>
+              <option value="disparo">Disparo</option>
+              <option value="campanha">Campanha</option>
+            </select>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -1579,6 +1595,7 @@ export default function LeadsSection({
                   />
                 </th>
                 <th className="px-4 py-3.5">Coluna CRM</th>
+                <th className="px-4 py-3.5">TAG</th>
                 <th className="px-4 py-3.5">Nome</th>
                 <th className="px-4 py-3.5">WhatsApp</th>
                 <th className="px-4 py-3.5">Gerente</th>
@@ -1592,7 +1609,7 @@ export default function LeadsSection({
                 <TableSkeletonRows rows={6} cols={8} />
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <EmptyState
                       icon={<UserPlus className="w-7 h-7" />}
                       title="Nenhum lead encontrado"
@@ -1653,6 +1670,23 @@ export default function LeadsSection({
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      {l.acquisition_tag ? (
+                        <span
+                          className={`inline-flex px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wide border ${
+                            l.acquisition_tag === 'ads'
+                              ? 'border-sky-500/40 text-sky-800 dark:text-sky-200 bg-sky-500/10'
+                              : l.acquisition_tag === 'disparo'
+                                ? 'border-violet-500/40 text-violet-800 dark:text-violet-200 bg-violet-500/10'
+                                : 'border-emerald-500/40 text-emerald-800 dark:text-emerald-200 bg-emerald-500/10'
+                          }`}
+                        >
+                          {ACQUISITION_TAG_LABELS[l.acquisition_tag as AcquisitionTag] || l.acquisition_tag}
+                        </span>
+                      ) : (
+                        <span className="text-stone-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-stone-900 dark:text-stone-50">{l.name || '—'}</span>
                         <span className="text-[11px] text-stone-400">(#{l.external_id.slice(-6)})</span>
@@ -1663,7 +1697,7 @@ export default function LeadsSection({
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-medium text-stone-800 dark:text-stone-200">{l.phone || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-stone-800 dark:text-stone-200 tabular-nums">{l.phone || '—'}</td>
                     <td className="px-4 py-3">
                       {l.gerente_name ? (
                         <span className={badgeGerente}>{l.gerente_name}</span>
@@ -1959,6 +1993,12 @@ export default function LeadsSection({
               ['Coluna CRM', viewLead.column_title || viewLead.column_key || '—'],
               ['Gerente', viewLead.gerente_name || '—'],
               ['Captador', viewLead.captador_name || '—'],
+              [
+                'TAG',
+                viewLead.acquisition_tag
+                  ? ACQUISITION_TAG_LABELS[viewLead.acquisition_tag as AcquisitionTag] || viewLead.acquisition_tag
+                  : '—',
+              ],
               ['Origem', viewLead.source || '—'],
               ['Ocorrência', viewLead.occurrence_total > 1 ? `${viewLead.occurrence}ª de ${viewLead.occurrence_total} capturas deste telefone` : 'Única captura'],
               ['Capturado em', formatDateTime(viewLead.created_at)],

@@ -32,6 +32,10 @@ import { publicBroadcastSendErrorMessage } from '@/lib/chat/broadcast-send-user-
 import { releaseBroadcastStepClaim, tryClaimBroadcastStep } from '@/lib/chat/broadcast-step-claim';
 import { processOfficialBroadcastStep } from '@/lib/chat/broadcast-official-processor';
 import { resolveEvolutionConversationUserIdForUpsert } from '@/lib/chat/resolve-evolution-conversation-user-id';
+import {
+  ensurePendingLeadForConversation,
+  resolveTenantIdForChatLead,
+} from '@/lib/services/chat-crm-integration';
 
 function normalizePhone(phone: string): string {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -449,6 +453,24 @@ export async function POST(
         last_message_at: new Date().toISOString(),
         last_message_preview: previewText,
       });
+
+      // Lead na tela Leads com TAG Disparo
+      try {
+        const tenantId = await resolveTenantIdForChatLead({
+          workspaceId: instance.workspace_id,
+          ownerUserId: instance.user_id ?? job.user_id,
+        });
+        await ensurePendingLeadForConversation({
+          conversationId: conversation.id,
+          tenantId,
+          phone: contact.phone,
+          name: contact.name || null,
+          source: 'evolution',
+          acquisitionTag: 'disparo',
+        });
+      } catch {
+        /* lead é secundário ao disparo */
+      }
 
       const returnedMessageId =
         (evolutionRes as Record<string, Record<string, string>> | null)?.key?.id ||
