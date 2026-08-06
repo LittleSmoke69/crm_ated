@@ -128,6 +128,7 @@ export async function ensurePendingLeadForConversation(input: {
         .eq('id', leadId);
       if (nameError) throw nameError;
     }
+    await ensureLeadAcquisitionTag(leadId, acquisitionTag);
     return leadId;
   }
 
@@ -141,6 +142,16 @@ export async function ensurePendingLeadForConversation(input: {
   let leadId = (candidates ?? []).find((row) => phoneDigits(row.phone || '') === phone)?.id as
     | string
     | undefined;
+
+  // Match também por telefone com/sem 55 (evita lead duplicado sem TAG).
+  if (!leadId) {
+    const phoneAlt =
+      phone.startsWith('55') && phone.length >= 12 ? phone.slice(2) : `55${phone}`;
+    leadId = (candidates ?? []).find((row) => {
+      const d = phoneDigits(row.phone || '');
+      return d === phoneAlt || d === phone;
+    })?.id as string | undefined;
+  }
 
   if (!leadId) {
     const now = new Date().toISOString();
@@ -161,10 +172,13 @@ export async function ensurePendingLeadForConversation(input: {
         created_at: now,
         updated_at: now,
       })
-      .select('id')
+      .select('id, acquisition_tag')
       .single();
     if (error || !created) throw error || new Error('Falha ao criar lead da conversa.');
     leadId = created.id;
+    if (!created.acquisition_tag) {
+      await ensureLeadAcquisitionTag(leadId, acquisitionTag);
+    }
   } else {
     const existing = (candidates ?? []).find((row) => row.id === leadId);
     const patch: Record<string, unknown> = {
@@ -182,7 +196,12 @@ export async function ensurePendingLeadForConversation(input: {
     } else if (acquisitionTag === 'disparo' && currentTag !== 'disparo') {
       patch.acquisition_tag = 'disparo';
     }
-    await supabaseServiceRole.from('crm_leads').update(patch).eq('id', leadId);
+    const { error: patchError } = await supabaseServiceRole
+      .from('crm_leads')
+      .update(patch)
+      .eq('id', leadId);
+    if (patchError) throw patchError;
+    await ensureLeadAcquisitionTag(leadId, acquisitionTag);
   }
 
   if (!leadId) throw new Error('Não foi possível vincular o lead à conversa.');
@@ -198,6 +217,32 @@ export async function ensurePendingLeadForConversation(input: {
     .eq('id', input.conversationId);
   if (linkError) throw linkError;
   return leadId;
+}
+
+/** Garante TAG de aquisição quando o insert/update parcial deixar o campo vazio. */
+async function ensureLeadAcquisitionTag(leadId: string, acquisitionTag: AcquisitionTag): Promise<void> {
+  const { data, error } = await supabaseServiceRole
+    .from('crm_leads')
+    .select('acquisition_tag')
+    .eq('id', leadId)
+    .maybeSingle();
+  if (error) throw error;
+  const current = String(data?.acquisition_tag || '').trim();
+  if (current) {
+    if (acquisitionTag === 'disparo' && current !== 'disparo') {
+      const { error: upErr } = await supabaseServiceRole
+        .from('crm_leads')
+        .update({ acquisition_tag: 'disparo', updated_at: new Date().toISOString() })
+        .eq('id', leadId);
+      if (upErr) throw upErr;
+    }
+    return;
+  }
+  const { error: upErr } = await supabaseServiceRole
+    .from('crm_leads')
+    .update({ acquisition_tag: acquisitionTag, updated_at: new Date().toISOString() })
+    .eq('id', leadId);
+  if (upErr) throw upErr;
 }
 
 /** Alias usado pelo webhook do WhatsApp Oficial (Meta). */
