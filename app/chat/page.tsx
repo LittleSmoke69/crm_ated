@@ -1842,6 +1842,8 @@ export default function ChatPage() {
   // ── Realtime: mensagens ────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedConversationId) return;
+    const selectedAssignedAt =
+      conversations.find((c) => c.id === selectedConversationId)?.assigned_at ?? null;
 
     const channel = supabase
       .channel(`chat_messages_${selectedConversationId}`)
@@ -1861,7 +1863,7 @@ export default function ChatPage() {
               timestamp:
                 typeof raw.timestamp === 'string' ? parseInt(raw.timestamp, 10) : raw.timestamp,
             };
-            if (!captadorMaySeeRealtimeMessage(userStatus, userId, msg)) return;
+            if (!captadorMaySeeRealtimeMessage(userStatus, userId, msg, selectedAssignedAt)) return;
             setMessages((prev) => {
               if (prev.some((m) => m.id === msg.id)) return prev;
               return [...prev, msg];
@@ -1893,7 +1895,7 @@ export default function ChatPage() {
       });
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedConversationId, userStatus, userId]);
+  }, [selectedConversationId, userStatus, userId, conversations]);
 
   // ── Realtime: webhook_events (WhatsApp Oficial) ────────────────────────────
   // Processa eventos brutos da tabela webhook_events em tempo real.

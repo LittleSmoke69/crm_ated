@@ -20,6 +20,7 @@ import {
   ENRICH_ROWS_PER_BATCH,
   sortConversationsForInbox,
 } from '@/lib/chat/conversation-inbox';
+import { sanitizeCaptadorConversationList } from '@/lib/chat/message-visibility';
 
 /** Preenche last_customer_message_at (lote por conversa — evita pegar só msgs das conversas mais recentes). */
 async function enrichWhatsAppOfficialConversations(
@@ -227,14 +228,20 @@ export async function GET(req: NextRequest) {
         return errorResponse(`Erro ao buscar conversas: ${error.message}`);
       }
       const enriched = await enrichConversationAssignees(conversations ?? []);
-      const list = sortConversationsForInbox(
-        enriched as Array<{
-          id: string;
-          whatsapp_config_id?: string | null;
-          last_message_at?: string | null;
-          last_customer_message_at?: string | null;
-          attendance_status?: 'pendente' | 'resolvido' | null;
-        }>
+      const list = sanitizeCaptadorConversationList(
+        sortConversationsForInbox(
+          enriched as Array<{
+            id: string;
+            whatsapp_config_id?: string | null;
+            last_message_at?: string | null;
+            last_customer_message_at?: string | null;
+            attendance_status?: 'pendente' | 'resolvido' | null;
+            assigned_at?: string | null;
+            last_message_preview?: string | null;
+            unread_count?: number | null;
+          }>
+        ),
+        profile?.status
       );
       return successResponse(list, evolutionSyncMeta ? { meta: evolutionSyncMeta } : undefined);
     }
@@ -277,14 +284,20 @@ export async function GET(req: NextRequest) {
     }
     const enrichedWindow = await enrichWhatsAppOfficialConversations(conversations ?? []);
     const enriched = await enrichConversationAssignees(enrichedWindow);
-    const list = sortConversationsForInbox(
-      enriched as Array<{
-        id: string;
-        whatsapp_config_id?: string | null;
-        last_message_at?: string | null;
-        last_customer_message_at?: string | null;
-        attendance_status?: 'pendente' | 'resolvido' | null;
-      }>
+    const list = sanitizeCaptadorConversationList(
+      sortConversationsForInbox(
+        enriched as Array<{
+          id: string;
+          whatsapp_config_id?: string | null;
+          last_message_at?: string | null;
+          last_customer_message_at?: string | null;
+          attendance_status?: 'pendente' | 'resolvido' | null;
+          assigned_at?: string | null;
+          last_message_preview?: string | null;
+          unread_count?: number | null;
+        }>
+      ),
+      profile?.status
     );
     return successResponse(list);
   } catch (err: any) {
