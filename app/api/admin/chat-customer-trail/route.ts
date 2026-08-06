@@ -279,7 +279,8 @@ export async function GET(req: NextRequest) {
       if (!adminId && c.assigned_by && isAdminStatus(assignedBy?.status)) {
         adminId = c.assigned_by;
       }
-      const adminName = adminId ? nameById.get(adminId)?.name || null : null;
+      // Sempre "Administrador" na UI (não expor nome de super_admin como Franklin)
+      const adminName = adminId ? 'Administrador' : null;
 
       return {
         conversation_id: c.id,
