@@ -8,6 +8,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth } from '@/lib/middleware/auth';
 import { successResponse, errorResponse, serverErrorResponse } from '@/lib/utils/response';
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
+import { isEnvSuperAdmin } from '@/lib/server/env-super-admins';
 
 const ONLINE_WINDOW_MS = 120_000;
 
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest) {
 
     let teamQuery = supabaseServiceRole
       .from('profiles')
-      .select('id, full_name, email, status, last_seen_at, last_login_at, total_online_time, enroller')
+      .select('id, full_name, email, username, status, last_seen_at, last_login_at, total_online_time, enroller')
       .in('status', [...TEAM_STATUSES]);
 
     if (isAdmin && profile?.zaploto_id) {
@@ -70,9 +71,13 @@ export async function GET(req: NextRequest) {
       return errorResponse(`Erro ao buscar equipe: ${teamErr.message}`, 500);
     }
 
-    const users = (teamUsers || []).filter((u) =>
-      TEAM_STATUSES.includes(String(u.status || '') as TeamStatus)
-    );
+    const users = (teamUsers || []).filter((u) => {
+      const st = String(u.status || '') as TeamStatus;
+      if (!TEAM_STATUSES.includes(st)) return false;
+      // SUPER_ADMIN_USERNAMES: oculto da gestão mesmo se o cargo no banco ainda for admin
+      if (isEnvSuperAdmin(u.username as string | null, u.email as string | null)) return false;
+      return true;
+    });
     const userIds = users.map((u) => u.id);
 
     const counts = new Map<string, ActivityRow>();

@@ -95,6 +95,17 @@ jobs:
             sed -i '/^EVOLUTION_WEBHOOK_ALLOW_NO_TOKEN=/d' .env || true
             sed -i '/^EVOLUTION_WEBHOOK_ALLOW_LOCALHOST=/d' .env || true
 
+            # Garante franklin (e carlinhosbig) em SUPER_ADMIN_USERNAMES — fora da equipe na Gestão do Chat
+            current_sa="$(sed -n 's/^SUPER_ADMIN_USERNAMES=//p' .env | tr -d '\r' | tr -d ' ')"
+            if [ -z "$current_sa" ]; then
+              upsert_env SUPER_ADMIN_USERNAMES "carlinhosbig,franklin"
+            else
+              merged="$current_sa"
+              echo ",${merged}," | grep -qi ',franklin,' || merged="${merged},franklin"
+              echo ",${merged}," | grep -qi ',carlinhosbig,' || merged="carlinhosbig,${merged}"
+              upsert_env SUPER_ADMIN_USERNAMES "$merged"
+            fi
+
             SCOPE="$(sed -n 's/^ZAPLOTO_APP_SCOPE=//p' .env | tr -d '\r')"
             test "$SCOPE" = "full"
             docker compose config --quiet

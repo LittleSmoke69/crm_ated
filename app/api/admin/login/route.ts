@@ -90,16 +90,16 @@ export async function POST(req: NextRequest) {
       return errorResponse('Conta desativada. Fale com o administrador.', 403);
     }
 
-    await supabaseServiceRole
-      .from('profiles')
-      .update({ last_login_at: new Date().toISOString() })
-      .eq('id', user.id);
-
     const effectiveStatus = applyEnvSuperAdminStatus(
       normalizeStatus(user.status),
       user.username,
       user.email
     );
+    const loginPatch: Record<string, unknown> = { last_login_at: new Date().toISOString() };
+    if (effectiveStatus === 'super_admin' && user.status !== 'super_admin') {
+      loginPatch.status = 'super_admin';
+    }
+    await supabaseServiceRole.from('profiles').update(loginPatch).eq('id', user.id);
 
     const res = successResponse({
       userId: user.id,

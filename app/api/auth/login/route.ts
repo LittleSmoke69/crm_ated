@@ -95,17 +95,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Atualiza último login (ignora erro para não falhar o login)
-    await supabaseServiceRole
-      .from('profiles')
-      .update({ last_login_at: new Date().toISOString() })
-      .eq('id', user.id);
-
+    // Atualiza último login; se listado em SUPER_ADMIN_USERNAMES, persiste o cargo.
     const effectiveStatus = applyEnvSuperAdminStatus(
       normalizeStatus(user.status),
       user.username,
       user.email
     );
+    const loginPatch: Record<string, unknown> = { last_login_at: new Date().toISOString() };
+    if (effectiveStatus === 'super_admin' && user.status !== 'super_admin') {
+      loginPatch.status = 'super_admin';
+    }
+    await supabaseServiceRole.from('profiles').update(loginPatch).eq('id', user.id);
 
     const res = successResponse({
       userId: user.id,
