@@ -17,6 +17,8 @@ export const maxDuration = 120;
 const PAGE_SIZE = 1000;
 /** PostgREST coloca o .in() na querystring; chunks grandes geram 414 no nginx. */
 const IN_CHUNK = 80;
+/** Limite ao abrir "Todos" — evita payload gigante; filtro por captador traz o restante. */
+const ALL_ATTENDANTS_CLIENT_CAP = 600;
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (items.length === 0) return [];
@@ -86,12 +88,87 @@ async function getSuperAdminUserIds(): Promise<string[]> {
   return (data ?? []).map((row) => row.id as string);
 }
 
+type AttendantLite = { id: string; name: string };
+
+async function loadAttendantsForFilter(leadsFilter: {
+  mode: 'eq' | 'in' | 'not_in' | 'gerente_scope' | 'none';
+  values?: string[];
+  gerenteId?: string;
+}): Promise<AttendantLite[]> {
+  let ownerIds: string[] = [];
+  if (leadsFilter.mode === 'eq' && leadsFilter.values?.[0]) {
+    ownerIds = [leadsFilter.values[0]];
+  } else if (leadsFilter.mode === 'in' && leadsFilter.values?.length) {
+    ownerIds = leadsFilter.values;
+  } else if (leadsFilter.mode === 'gerente_scope') {
+    ownerIds = [...(leadsFilter.values ?? [])];
+  } else if (leadsFilter.mode === 'not_in' || leadsFilter.mode === 'none') {
+    // Escopo amplo: attendants vindos dos leads (caro) — limita aos profiles captador do tenant depois.
+    return [];
+  }
+
+  const attendants: AttendantLite[] = [];
+  for (const ids of chunkArray(ownerIds, IN_CHUNK)) {
+    const { data: owners } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, full_name, email, status')
+      .in('id', ids);
+    for (const o of owners ?? []) {
+      const row = o as { id: string; full_name?: string | null; email?: string | null; status?: string };
+      const st = String(row.status || '').toLowerCase();
+      if (st && st !== 'captador' && st !== 'consultor' && st !== 'gerente') continue;
+      attendants.push({
+        id: row.id,
+        name: row.full_name?.trim() || row.email?.trim() || row.id,
+      });
+    }
+  }
+  return attendants.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+
+async function countLeadsForFilter(leadsFilter: {
+  mode: 'eq' | 'in' | 'not_in' | 'gerente_scope' | 'none';
+  values?: string[];
+  gerenteId?: string;
+}): Promise<number> {
+  let query = supabaseServiceRole
+    .from('crm_leads')
+    .select('external_id', { count: 'exact', head: true });
+
+  if (leadsFilter.mode === 'eq' && leadsFilter.values?.[0]) {
+    query = query.eq('user_id', leadsFilter.values[0]);
+  } else if (leadsFilter.mode === 'gerente_scope' && leadsFilter.gerenteId) {
+    const teamIds = (leadsFilter.values ?? []).filter(Boolean);
+    if (teamIds.length > 0) {
+      query = query.or(`gerente_id.eq.${leadsFilter.gerenteId},user_id.in.(${teamIds.join(',')})`);
+    } else {
+      query = query.eq('gerente_id', leadsFilter.gerenteId);
+    }
+  } else if (leadsFilter.mode === 'in' && leadsFilter.values?.length) {
+    query = query.in('user_id', leadsFilter.values);
+  } else if (leadsFilter.mode === 'not_in' && leadsFilter.values?.length) {
+    query = query.not('user_id', 'in', `(${leadsFilter.values.join(',')})`);
+  }
+
+  const { count, error } = await query;
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 // GET /api/crm/board — colunas + clientes com estágio atual
+// Query opcional:
+//   target_user_id / userId — restringe a um captador (admin/gerente)
+//   meta_only=1 — só colunas + attendants + total (sem cards)
+//   limit — teto de clients retornados (default: sem teto se filtrado; ALL_ATTENDANTS_CLIENT_CAP se "todos")
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await requireAuth(req);
     const viewer = await getViewerContext(userId);
-    const targetUserId = req.nextUrl.searchParams.get('target_user_id') || req.nextUrl.searchParams.get('userId');
+    const sp = req.nextUrl.searchParams;
+    const targetUserId = sp.get('target_user_id') || sp.get('userId');
+    const metaOnly = sp.get('meta_only') === '1';
+    const limitParam = sp.get('limit');
+    const parsedLimit = limitParam ? Math.min(5000, Math.max(1, parseInt(limitParam, 10) || 0)) : null;
 
     const { data: columns } = await supabaseServiceRole
       .from('crm_columns')
@@ -114,13 +191,20 @@ export async function GET(req: NextRequest) {
         }
         leadsFilter = { mode: 'eq', values: [targetUserId] };
       } else {
-        // Paridade com /api/admin/crm/leads: pool do gerente (gerente_id) + leads dos captadores.
         leadsFilter = { mode: 'gerente_scope', values: teamIds, gerenteId: userId };
       }
     } else if (!viewer.canViewAll) {
       leadsFilter = { mode: 'eq', values: [userId] };
-    } else if (viewer.status === 'admin') {
-      if (viewer.tenantId) {
+    } else if (viewer.status === 'admin' || viewer.status === 'super_admin') {
+      if (targetUserId) {
+        if (viewer.tenantId) {
+          const tenantUserIds = await getTenantUserIds(viewer.tenantId, { excludeSuperAdmin: true });
+          if (!tenantUserIds.includes(targetUserId)) {
+            return errorResponse('Sem permissão para ver o kanban deste captador.', 403);
+          }
+        }
+        leadsFilter = { mode: 'eq', values: [targetUserId] };
+      } else if (viewer.tenantId) {
         const tenantUserIds = await getTenantUserIds(viewer.tenantId, { excludeSuperAdmin: true });
         if (tenantUserIds.length === 0) {
           return successResponse({
@@ -132,6 +216,7 @@ export async function GET(req: NextRequest) {
               can_reorder_columns: viewer.canReorderColumns,
               attendants: [],
               total_clients: 0,
+              clients_capped: false,
             },
           });
         }
@@ -144,14 +229,53 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Attendants: lista de captadores do escopo (sem precisar carregar todos os leads)
+    let attendants: AttendantLite[] = [];
+    if (viewer.canViewAll) {
+      if (viewer.status === 'gerente') {
+        attendants = await loadAttendantsForFilter({
+          mode: 'in',
+          values: viewer.teamUserIds ?? [],
+        });
+      } else if (viewer.tenantId) {
+        const tenantUserIds = await getTenantUserIds(viewer.tenantId, { excludeSuperAdmin: true });
+        attendants = await loadAttendantsForFilter({ mode: 'in', values: tenantUserIds });
+      }
+    }
+
+    const totalClients = await countLeadsForFilter(leadsFilter);
+
+    if (metaOnly) {
+      return successResponse({
+        columns: columns ?? [],
+        clients: [],
+        meta: {
+          can_view_all: viewer.canViewAll,
+          can_edit_columns: viewer.canEditColumns,
+          can_reorder_columns: viewer.canReorderColumns,
+          attendants,
+          total_clients: totalClients,
+          clients_capped: false,
+        },
+      });
+    }
+
+    // Cap quando visão ampla ("todos") — filtro por captador não aplica teto (salvo limit explícito).
+    const isScopedToOneUser = leadsFilter.mode === 'eq';
+    const hardCap = parsedLimit
+      ?? (isScopedToOneUser ? null : ALL_ATTENDANTS_CLIENT_CAP);
+    const fetchCap = hardCap ?? Number.POSITIVE_INFINITY;
+
     const { data: leads, error: leadsError } = await fetchAllSupabasePages<LeadRow>(
       async (from, to) => {
+        if (from >= fetchCap) return { data: [], error: null };
+        const end = Math.min(to, fetchCap - 1);
         let query = supabaseServiceRole
           .from('crm_leads')
           .select('external_id, user_id, name, last_name, phone, email')
           .order('created_at', { ascending: false })
           .order('external_id', { ascending: false })
-          .range(from, to);
+          .range(from, end);
 
         if (leadsFilter.mode === 'eq' && leadsFilter.values?.[0]) {
           query = query.eq('user_id', leadsFilter.values[0]);
@@ -177,7 +301,8 @@ export async function GET(req: NextRequest) {
     );
     if (leadsError) return errorResponse(`Erro ao carregar clientes: ${leadsError.message}`, 500);
 
-    const leadRows = leads ?? [];
+    const leadRows = (leads ?? []).slice(0, Number.isFinite(fetchCap) ? fetchCap : undefined);
+    const clientsCapped = Number.isFinite(fetchCap) && totalClients > leadRows.length;
     const externalIds = leadRows.map((l) => String(l.external_id));
 
     const stageMap = new Map<string, { column_key: string; position: number }>();
@@ -238,7 +363,8 @@ export async function GET(req: NextRequest) {
 
     const ownerIds = [...new Set(leadRows.map((l) => l.user_id).filter(Boolean))] as string[];
     const ownerNameById = new Map<string, string>();
-    for (const ids of chunkArray(ownerIds, IN_CHUNK)) {
+    for (const a of attendants) ownerNameById.set(a.id, a.name);
+    for (const ids of chunkArray(ownerIds.filter((id) => !ownerNameById.has(id)), IN_CHUNK)) {
       const { data: owners } = await supabaseServiceRole
         .from('profiles')
         .select('id, full_name, email')
@@ -267,9 +393,11 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    const attendants = ownerIds
-      .map((id) => ({ id, name: ownerNameById.get(id) ?? id }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    if (attendants.length === 0 && ownerIds.length > 0) {
+      attendants = ownerIds
+        .map((id) => ({ id, name: ownerNameById.get(id) ?? id }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    }
 
     return successResponse({
       columns: columns ?? [],
@@ -279,7 +407,9 @@ export async function GET(req: NextRequest) {
         can_edit_columns: viewer.canEditColumns,
         can_reorder_columns: viewer.canReorderColumns,
         attendants,
-        total_clients: clients.length,
+        total_clients: totalClients,
+        clients_capped: clientsCapped,
+        returned_clients: clients.length,
       },
     });
   } catch (err) {

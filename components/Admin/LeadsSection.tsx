@@ -39,7 +39,7 @@ type CapturedLead = {
   column_key: string | null;
   column_title: string | null;
   source: string | null;
-  acquisition_tag?: 'ads' | 'disparo' | 'importado' | 'campanha' | null;
+  acquisition_tag?: 'ads' | 'disparo' | 'importado' | 'ligacao' | 'campanha' | null;
   created_at: string;
   captador_id: string | null;
   captador_name: string | null;
@@ -424,7 +424,7 @@ export default function LeadsSection({
   const [fColumn, setFColumn] = useState('');
   const [fGerente, setFGerente] = useState('');
   const [fCaptador, setFCaptador] = useState('');
-  const [fPeriod, setFPeriod] = useState('todos');
+  const [fPeriod, setFPeriod] = useState('30d');
   const [fDate, setFDate] = useState(localTodayYmd);
   const [fTag, setFTag] = useState('');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
@@ -482,7 +482,7 @@ export default function LeadsSection({
 
   const fetchKanbanColumns = useCallback(async (): Promise<KanbanColumnOption[]> => {
     try {
-      const boardRes = await fetch('/api/crm/board', { headers: headers() });
+      const boardRes = await fetch('/api/crm/board?meta_only=1', { headers: headers() });
       const boardJson = await boardRes.json();
       const boardCols = boardJson?.data?.columns;
       if (boardRes.ok && boardJson.success && Array.isArray(boardCols) && boardCols.length > 0) {
@@ -1414,6 +1414,7 @@ export default function LeadsSection({
               <option value="ads">ADS</option>
               <option value="disparo">Disparo</option>
               <option value="importado">Importado</option>
+              <option value="ligacao">Ligação</option>
             </select>
           </div>
         </div>
@@ -1423,7 +1424,7 @@ export default function LeadsSection({
             disabled={loading}
             className="flex items-center gap-2 px-6 py-2.5 min-h-[44px] rounded-xl text-sm font-bold text-white bg-[#E86A24] hover:bg-[#D95E1B] transition-colors disabled:opacity-60"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Buscar
+            <Search className="w-4 h-4" /> Buscar
           </button>
           <button
             onClick={() => setOnlyDuplicates((v) => !v)}
@@ -1604,10 +1605,10 @@ export default function LeadsSection({
                 <th className="px-4 py-3.5 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-100 dark:divide-white/5">
-              {loading ? (
+            <tbody className={`divide-y divide-stone-100 dark:divide-white/5 ${loading && leads.length > 0 ? 'opacity-60 pointer-events-none' : ''}`}>
+              {loading && leads.length === 0 ? (
                 <TableSkeletonRows rows={6} cols={8} />
-              ) : leads.length === 0 ? (
+              ) : !loading && leads.length === 0 ? (
                 <tr>
                   <td colSpan={9}>
                     <EmptyState
@@ -1677,7 +1678,9 @@ export default function LeadsSection({
                               ? 'border-sky-500/40 text-sky-800 dark:text-sky-200 bg-sky-500/10'
                               : l.acquisition_tag === 'disparo'
                                 ? 'border-violet-500/40 text-violet-800 dark:text-violet-200 bg-violet-500/10'
-                                : 'border-emerald-500/40 text-emerald-800 dark:text-emerald-200 bg-emerald-500/10'
+                                : l.acquisition_tag === 'ligacao'
+                                  ? 'border-orange-500/40 text-orange-800 dark:text-orange-200 bg-orange-500/10'
+                                  : 'border-emerald-500/40 text-emerald-800 dark:text-emerald-200 bg-emerald-500/10'
                           }`}
                         >
                           {acquisitionTagLabel(l.acquisition_tag)}

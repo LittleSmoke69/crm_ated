@@ -572,11 +572,7 @@ async function getTenantProfiles(zaplotoId: string) {
   return data || [];
 }
 
-/**
- * Varre crm_leads do escopo (tenant) com os filtros básicos aplicados,
- * retornando linhas leves para paginação/duplicados em memória.
- */
-async function scanLeads(params: {
+type LeadListFilterParams = {
   tenantUserIds: string[];
   zaplotoId: string;
   q?: string;
@@ -593,11 +589,15 @@ async function scanLeads(params: {
   scopeTeamIds?: string[];
   /** Captador: só leads atribuídos a ele. */
   scopeCaptadorId?: string;
-  /** Filtro TAG: ads | disparo | importado */
+  /** Filtro TAG: ads | disparo | importado | ligacao */
   acquisitionTag?: string;
-  /** Para listagem rápida: para o scan após N linhas (total ainda aproximado se truncated). */
-  maxRows?: number;
-}) {
+};
+
+const LEAD_LIST_SELECT =
+  'id, external_id, user_id, gerente_id, name, last_name, phone, email, capture_status, source, acquisition_tag, created_at, zaploto_id';
+
+/** Aplica escopo + filtros comuns em uma query de crm_leads. Retorna null se o conjunto for vazio por regra. */
+function applyLeadListFilters(query: any, params: LeadListFilterParams): any | null {
   const {
     tenantUserIds,
     zaplotoId,
@@ -612,8 +612,89 @@ async function scanLeads(params: {
     scopeTeamIds,
     scopeCaptadorId,
     acquisitionTag,
-    maxRows = SCAN_MAX,
   } = params;
+
+  const idsList = tenantUserIds.join(',');
+  if (scopeCaptadorId) {
+    query = query.eq('user_id', scopeCaptadorId);
+  } else if (scopeGerenteId) {
+    const teamIds = (scopeTeamIds ?? []).filter(Boolean);
+    if (unassignedOnly) {
+      query = query.eq('gerente_id', scopeGerenteId).is('user_id', null);
+    } else if (teamIds.length > 0) {
+      query = query.or(`gerente_id.eq.${scopeGerenteId},user_id.in.(${teamIds.join(',')})`);
+    } else {
+      query = query.eq('gerente_id', scopeGerenteId);
+    }
+  } else if (unassignedOnly) {
+    query = query
+      .is('user_id', null)
+      .is('gerente_id', null)
+      .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+  } else {
+    const parts = [`zaploto_id.eq.${zaplotoId}`];
+    if (idsList) parts.push(`user_id.in.(${idsList})`);
+    parts.push('and(user_id.is.null,zaploto_id.is.null)');
+    query = query.or(parts.join(','));
+  }
+
+  if (unassignedOnly && scopeCaptadorId) return null;
+  if (unassignedOnly && captadorId) return null;
+
+  if (captureStatus && CAPTURE_STATUSES.includes(captureStatus as any)) {
+    query = query.eq('capture_status', captureStatus);
+  }
+  if (gerenteId) query = query.eq('gerente_id', gerenteId);
+  if (captadorId) query = query.eq('user_id', captadorId);
+  if (fromIso) query = query.gte('created_at', fromIso);
+  if (toIso) query = query.lt('created_at', toIso);
+  if (acquisitionTag === 'importado') {
+    query = query.in('acquisition_tag', ['importado', 'campanha']);
+  } else if (acquisitionTag) {
+    query = query.eq('acquisition_tag', acquisitionTag);
+  }
+  if (q) {
+    const safe = q.replace(/[%,()]/g, ' ').trim();
+    const digits = normalizePhone(q);
+    const parts = [`name.ilike.%${safe}%`, `email.ilike.%${safe}%`];
+    if (digits.length >= 4) parts.push(`phone.ilike.%${digits}%`);
+    query = query.or(parts.join(','));
+  }
+  return query;
+}
+
+/**
+ * Paginação real no Postgres (count + range). Usar quando não há filtro de
+ * coluna kanban nem duplicados (esses ainda precisam de pós-processamento).
+ */
+async function queryLeadsPage(
+  params: LeadListFilterParams & { page: number; pageSize: number }
+): Promise<{ rows: any[]; total: number }> {
+  const from = (params.page - 1) * params.pageSize;
+  const to = from + params.pageSize - 1;
+  let query = supabaseServiceRole
+    .from('crm_leads')
+    .select(LEAD_LIST_SELECT, { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(from, to);
+  const filtered = applyLeadListFilters(query, params);
+  if (!filtered) return { rows: [], total: 0 };
+  const { data, error, count } = await filtered;
+  if (error) throw new Error(error.message);
+  return { rows: data || [], total: count ?? 0 };
+}
+
+/**
+ * Varre crm_leads do escopo (tenant) com os filtros básicos aplicados.
+ * Usado só para export/all, duplicados ou filtro por coluna do kanban.
+ */
+async function scanLeads(
+  params: LeadListFilterParams & {
+    /** Para listagem rápida: para o scan após N linhas (total ainda aproximado se truncated). */
+    maxRows?: number;
+  }
+) {
+  const { maxRows = SCAN_MAX, ...filters } = params;
   const rows: any[] = [];
   let from = 0;
   const limit = Math.min(SCAN_MAX, Math.max(1, maxRows));
@@ -621,73 +702,14 @@ async function scanLeads(params: {
     const pageEnd = Math.min(from + SCAN_PAGE - 1, from + (limit - rows.length) - 1);
     let query = supabaseServiceRole
       .from('crm_leads')
-      .select('id, external_id, user_id, gerente_id, name, last_name, phone, email, capture_status, source, acquisition_tag, created_at, zaploto_id')
+      .select(LEAD_LIST_SELECT)
       .order('created_at', { ascending: false })
       .range(from, pageEnd);
 
-    // Escopo: leads de usuários do tenant OU pendentes (sem dono) do tenant/legado
-    const idsList = tenantUserIds.join(',');
-    if (scopeCaptadorId) {
-      query = query.eq('user_id', scopeCaptadorId);
-    } else if (scopeGerenteId) {
-      const teamIds = (scopeTeamIds ?? []).filter(Boolean);
-      if (unassignedOnly) {
-        // Pool do gerente sem captador
-        query = query.eq('gerente_id', scopeGerenteId).is('user_id', null);
-      } else if (teamIds.length > 0) {
-        query = query.or(`gerente_id.eq.${scopeGerenteId},user_id.in.(${teamIds.join(',')})`);
-      } else {
-        query = query.eq('gerente_id', scopeGerenteId);
-      }
-    } else {
-      // Admin: todos os leads do tenant (por zaploto_id), leads de usuários do tenant e legado sem dono
-      if (unassignedOnly) {
-        // Admin: só pool livre (sem gerente e sem captador).
-        // Leads do chat já delegados ao gerente têm gerente_id e NÃO entram aqui.
-        query = query
-          .is('user_id', null)
-          .is('gerente_id', null)
-          .or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
-      } else {
-        const parts = [`zaploto_id.eq.${zaplotoId}`];
-        if (idsList) parts.push(`user_id.in.(${idsList})`);
-        parts.push('and(user_id.is.null,zaploto_id.is.null)');
-        query = query.or(parts.join(','));
-      }
-    }
+    const filtered = applyLeadListFilters(query, filters);
+    if (!filtered) return [];
 
-    if (unassignedOnly && scopeCaptadorId) {
-      // Captador não tem pool — resultado vazio
-      return [];
-    }
-    if (unassignedOnly && !scopeGerenteId && !scopeCaptadorId) {
-      // já aplicado acima no branch admin
-    } else if (unassignedOnly && captadorId) {
-      return [];
-    }
-
-    if (captureStatus && CAPTURE_STATUSES.includes(captureStatus as any)) {
-      query = query.eq('capture_status', captureStatus);
-    }
-    if (gerenteId) query = query.eq('gerente_id', gerenteId);
-    if (captadorId) query = query.eq('user_id', captadorId);
-    if (fromIso) query = query.gte('created_at', fromIso);
-    if (toIso) query = query.lt('created_at', toIso);
-    if (acquisitionTag === 'importado') {
-      // legado: campanha → importado (até migration 33 concluir em todos os ambientes)
-      query = query.in('acquisition_tag', ['importado', 'campanha']);
-    } else if (acquisitionTag) {
-      query = query.eq('acquisition_tag', acquisitionTag);
-    }
-    if (q) {
-      const safe = q.replace(/[%,()]/g, ' ').trim();
-      const digits = normalizePhone(q);
-      const parts = [`name.ilike.%${safe}%`, `email.ilike.%${safe}%`];
-      if (digits.length >= 4) parts.push(`phone.ilike.%${digits}%`);
-      query = query.or(parts.join(','));
-    }
-
-    const { data, error } = await query;
+    const { data, error } = await filtered;
     if (error) throw new Error(error.message);
     const batch = data || [];
     rows.push(...batch);
@@ -695,6 +717,30 @@ async function scanLeads(params: {
     from += SCAN_PAGE;
   }
   return rows;
+}
+
+/** Ocorrência leve na página (sem scan completo). Detalhe completo só no filtro "duplicados". */
+function buildPageOccurrences(pageRows: any[]): Map<string, { n: number; total: number }> {
+  const occurrence = new Map<string, { n: number; total: number }>();
+  const byPhone = new Map<string, any[]>();
+  for (const r of pageRows) {
+    const digits = normalizePhone(r.phone);
+    if (!digits) {
+      occurrence.set(r.id, { n: 1, total: 1 });
+      continue;
+    }
+    const arr = byPhone.get(digits) || [];
+    arr.push(r);
+    byPhone.set(digits, arr);
+  }
+  byPhone.forEach((arr) => {
+    const sorted = [...arr].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    // Na página: marca se há repetição visível; total global exige filtro "duplicados"
+    sorted.forEach((r, i) => occurrence.set(r.id, { n: i + 1, total: sorted.length }));
+  });
+  return occurrence;
 }
 
 /**
@@ -795,7 +841,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const rows = await scanLeads({
+    const listFilters: LeadListFilterParams = {
       tenantUserIds,
       zaplotoId,
       q: sp.get('q') || undefined,
@@ -809,53 +855,70 @@ export async function GET(req: NextRequest) {
       scopeTeamIds: isGerente ? [...teamCaptadorIds] : undefined,
       scopeCaptadorId: isCaptador ? userId : undefined,
       acquisitionTag: (sp.get('acquisition_tag') || '').trim() || undefined,
-    });
+    };
 
-    // Nº de ocorrência por telefone (1ª, 2ª, 3ª vez...) — mais antigo = 1ª vez
-    const byPhone = new Map<string, any[]>();
-    rows.forEach((r) => {
-      const digits = normalizePhone(r.phone);
-      if (!digits) return;
-      const arr = byPhone.get(digits) || [];
-      arr.push(r);
-      byPhone.set(digits, arr);
-    });
-    const occurrence = new Map<string, { n: number; total: number }>();
-    byPhone.forEach((arr) => {
-      const sorted = [...arr].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      sorted.forEach((r, i) => occurrence.set(r.id, { n: i + 1, total: sorted.length }));
-    });
-
-    let filtered = rows;
-    if (sp.get('duplicates') === '1') {
-      filtered = rows.filter((r) => (occurrence.get(r.id)?.total || 1) > 1);
-    }
-
-    if (columnFilter && !unassignedOnly) {
-      const scopeForColumn = isCaptador
-        ? [userId]
-        : isGerente
-          ? [...teamCaptadorIds]
-          : profiles.filter((p: any) => p.status === 'captador').map((p: any) => p.id as string);
-      const inColumn = await fetchLeadKeysInColumn(columnFilter, scopeForColumn);
-      filtered = filtered.filter((r) => {
-        if (!r.user_id) return false;
-        return inColumn.has(`${String(r.external_id)}:${r.user_id}`);
-      });
-    } else if (unassignedOnly) {
-      // Gerente: pool dele sem captador. Admin: sem gerente e sem captador.
-      filtered = filtered.filter((r) => {
-        if (r.user_id) return false;
-        if (isGerente) return true;
-        return !r.gerente_id;
-      });
-    }
-
-    const total = filtered.length;
+    const wantDuplicates = sp.get('duplicates') === '1';
     const exportAll = sp.get('all') === '1';
-    const pageSize = exportAll ? total : Math.min(200, Math.max(1, parseInt(sp.get('page_size') || `${PAGE_SIZE_DEFAULT}`, 10) || PAGE_SIZE_DEFAULT));
+    const pageSize = exportAll
+      ? SCAN_MAX
+      : Math.min(200, Math.max(1, parseInt(sp.get('page_size') || `${PAGE_SIZE_DEFAULT}`, 10) || PAGE_SIZE_DEFAULT));
     const page = exportAll ? 1 : Math.max(1, parseInt(sp.get('page') || '1', 10) || 1);
-    const paged = exportAll ? filtered : filtered.slice((page - 1) * pageSize, page * pageSize);
+    // Filtro por coluna kanban / duplicados / export ainda precisam de pós-processamento.
+    const needsFullScan = wantDuplicates || exportAll || (!!columnFilter && !unassignedOnly);
+
+    let paged: any[] = [];
+    let total = 0;
+    let occurrence = new Map<string, { n: number; total: number }>();
+
+    if (!needsFullScan) {
+      const result = await queryLeadsPage({ ...listFilters, page, pageSize });
+      paged = result.rows;
+      total = result.total;
+      occurrence = buildPageOccurrences(paged);
+    } else {
+      const rows = await scanLeads(listFilters);
+
+      // Nº de ocorrência por telefone (1ª, 2ª, 3ª vez...) — mais antigo = 1ª vez
+      const byPhone = new Map<string, any[]>();
+      rows.forEach((r) => {
+        const digits = normalizePhone(r.phone);
+        if (!digits) return;
+        const arr = byPhone.get(digits) || [];
+        arr.push(r);
+        byPhone.set(digits, arr);
+      });
+      byPhone.forEach((arr) => {
+        const sorted = [...arr].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        sorted.forEach((r, i) => occurrence.set(r.id, { n: i + 1, total: sorted.length }));
+      });
+
+      let filtered = rows;
+      if (wantDuplicates) {
+        filtered = rows.filter((r) => (occurrence.get(r.id)?.total || 1) > 1);
+      }
+
+      if (columnFilter && !unassignedOnly) {
+        const scopeForColumn = isCaptador
+          ? [userId]
+          : isGerente
+            ? [...teamCaptadorIds]
+            : profiles.filter((p: any) => p.status === 'captador').map((p: any) => p.id as string);
+        const inColumn = await fetchLeadKeysInColumn(columnFilter, scopeForColumn);
+        filtered = filtered.filter((r) => {
+          if (!r.user_id) return false;
+          return inColumn.has(`${String(r.external_id)}:${r.user_id}`);
+        });
+      } else if (unassignedOnly) {
+        filtered = filtered.filter((r) => {
+          if (r.user_id) return false;
+          if (isGerente) return true;
+          return !r.gerente_id;
+        });
+      }
+
+      total = filtered.length;
+      paged = exportAll ? filtered : filtered.slice((page - 1) * pageSize, page * pageSize);
+    }
 
     const columnTitleByKey = new Map(columns.map((c) => [c.key, c.title]));
     const stageMap = await fetchStagesByLeadUser(

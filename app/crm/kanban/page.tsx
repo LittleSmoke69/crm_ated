@@ -90,19 +90,34 @@ function KanbanBoard() {
   const [attendantFilter, setAttendantFilter] = useState('all');
   const [visibleByColumn, setVisibleByColumn] = useState<Record<string, number>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [clientsCapped, setClientsCapped] = useState(false);
+  const [totalClientsMeta, setTotalClientsMeta] = useState(0);
+  const attendantBootstrapped = useRef(false);
 
   const headers = useMemo(() => ({ 'Content-Type': 'application/json', 'X-User-Id': userId ?? '' }), [userId]);
 
-  const load = useCallback(async () => {
-    if (!userId) return;
+  const load = useCallback(async (filterId: string) => {
+    if (!userId) return null;
     setLoadError(null);
+    setLoading(true);
     try {
+      const qs = new URLSearchParams();
+      if (filterId && filterId !== 'all') qs.set('target_user_id', filterId);
+      const boardUrl = qs.toString() ? `/api/crm/board?${qs}` : '/api/crm/board';
       const [boardRes, tagsRes] = await Promise.all([
-        fetch('/api/crm/board', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
+        fetch(boardUrl, { headers: { 'X-User-Id': userId }, credentials: 'include' }),
         fetch('/api/crm/tags', { headers: { 'X-User-Id': userId }, credentials: 'include' }),
       ]);
       const board = await boardRes.json().catch(() => null);
       const tags = await tagsRes.json().catch(() => null);
+      if (tags?.success) {
+        setAllTags((tags.data ?? []).map((t: Tag) => ({
+          id: t.id,
+          label: t.label,
+          color: t.color,
+          move_to_column_key: t.move_to_column_key ?? null,
+        })));
+      }
       if (board?.success) {
         setColumns(board.data.columns ?? []);
         setClients(board.data.clients ?? []);
@@ -110,40 +125,97 @@ function KanbanBoard() {
         setCanEditColumns(!!board.data.meta?.can_edit_columns);
         setCanReorderColumns(!!board.data.meta?.can_reorder_columns);
         const nextAttendants: Attendant[] = board.data.meta?.attendants ?? [];
-        setAttendants(nextAttendants);
-        // Com muitos leads, "Todos" trava o DOM — inicia no 1º captador quando há filtro.
-        setAttendantFilter((prev) => {
-          if (prev !== 'all') return prev;
-          const total = Number(board.data.meta?.total_clients ?? board.data.clients?.length ?? 0);
-          if (total > 400 && nextAttendants.length > 0) return nextAttendants[0].id;
-          return 'all';
-        });
+        if (nextAttendants.length > 0) setAttendants(nextAttendants);
+        setClientsCapped(!!board.data.meta?.clients_capped);
+        setTotalClientsMeta(Number(board.data.meta?.total_clients ?? board.data.clients?.length ?? 0));
         setVisibleByColumn({});
-      } else {
-        setColumns([]);
-        setClients([]);
-        setLoadError(board?.error || `Falha ao carregar o Kanban (HTTP ${boardRes.status}).`);
-        toast.error(board?.error || 'Não foi possível carregar o Kanban.');
+        return {
+          canViewAll: !!board.data.meta?.can_view_all,
+          attendants: nextAttendants,
+          total: Number(board.data.meta?.total_clients ?? board.data.clients?.length ?? 0),
+        };
       }
-      if (tags?.success) setAllTags((tags.data ?? []).map((t: Tag) => ({ id: t.id, label: t.label, color: t.color, move_to_column_key: t.move_to_column_key ?? null })));
+      setColumns([]);
+      setClients([]);
+      setLoadError(board?.error || `Falha ao carregar o Kanban (HTTP ${boardRes.status}).`);
+      toast.error(board?.error || 'Não foi possível carregar o Kanban.');
+      return null;
     } catch {
       setLoadError('Erro de rede ao carregar o Kanban.');
       toast.error('Erro de rede ao carregar o Kanban.');
+      return null;
     } finally {
       setLoading(false);
     }
   }, [userId, toast]);
 
-  useEffect(() => { load(); }, [load]);
+  // Bootstrap: meta leve → escolhe captador se volume alto → carrega cards filtrados
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const metaRes = await fetch('/api/crm/board?meta_only=1', {
+          headers: { 'X-User-Id': userId },
+          credentials: 'include',
+        });
+        const metaJson = await metaRes.json().catch(() => null);
+        if (cancelled) return;
+        if (!metaJson?.success) {
+          setLoadError(metaJson?.error || `Falha ao carregar o Kanban (HTTP ${metaRes.status}).`);
+          setLoading(false);
+          return;
+        }
+        setColumns(metaJson.data.columns ?? []);
+        setCanViewAll(!!metaJson.data.meta?.can_view_all);
+        setCanEditColumns(!!metaJson.data.meta?.can_edit_columns);
+        setCanReorderColumns(!!metaJson.data.meta?.can_reorder_columns);
+        const nextAttendants: Attendant[] = metaJson.data.meta?.attendants ?? [];
+        setAttendants(nextAttendants);
+        const totalMeta = Number(metaJson.data.meta?.total_clients ?? 0);
+        setTotalClientsMeta(totalMeta);
+
+        let nextFilter = attendantFilter;
+        if (!attendantBootstrapped.current) {
+          attendantBootstrapped.current = true;
+          if (
+            metaJson.data.meta?.can_view_all &&
+            totalMeta > 300 &&
+            nextAttendants.length > 0 &&
+            attendantFilter === 'all'
+          ) {
+            nextFilter = nextAttendants[0].id;
+            setAttendantFilter(nextFilter);
+            // O effect de attendantFilter vai carregar os cards
+            setLoading(false);
+            return;
+          }
+        }
+        await load(nextFilter);
+      } catch {
+        if (!cancelled) {
+          setLoadError('Erro de rede ao carregar o Kanban.');
+          setLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // Troca de captador → busca só os leads dele no servidor
+  useEffect(() => {
+    if (!userId || !attendantBootstrapped.current) return;
+    void load(attendantFilter);
+  }, [attendantFilter, userId, load]);
 
   useEffect(() => {
     setVisibleByColumn({});
   }, [attendantFilter]);
 
-  const visibleClients = useMemo(() => {
-    if (!canViewAll || attendantFilter === 'all') return clients;
-    return clients.filter((c) => c.owner_user_id === attendantFilter);
-  }, [clients, canViewAll, attendantFilter]);
+  const visibleClients = useMemo(() => clients, [clients]);
 
   const byColumn = useMemo(() => {
     const map = new Map<string, Client[]>();
@@ -176,8 +248,8 @@ function KanbanBoard() {
         method: 'PATCH', headers, credentials: 'include',
         body: JSON.stringify({ lead_external_id: externalId, owner_user_id: client.owner_user_id, column_key: columnKey }),
       });
-    } catch { load(); }
-  }, [clients, userId, headers, load]);
+    } catch { void load(attendantFilter); }
+  }, [clients, userId, headers, load, attendantFilter]);
 
   const openAddClient = (columnKey: string) => {
     setAddTargetColumn(columnKey);
@@ -265,11 +337,11 @@ function KanbanBoard() {
     try {
       await fetch(`/api/crm/columns/${colToDelete.id}`, { method: 'DELETE', headers: { 'X-User-Id': userId }, credentials: 'include' });
       setColToDelete(null);
-      load();
+      void load(attendantFilter);
     } catch {
       toast.error('Erro ao remover a coluna. Tente novamente.');
     } finally { setDeletingCol(false); }
-  }, [userId, colToDelete, load, toast]);
+  }, [userId, colToDelete, load, toast, attendantFilter]);
 
   const saveColumnTitle = useCallback(async (col: Column) => {
     const title = editColTitle.trim();
@@ -302,13 +374,13 @@ function KanbanBoard() {
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
         toast.error(json?.error || 'Não foi possível salvar a ordem das colunas.');
-        load();
+        load(attendantFilter);
       }
     } catch {
       toast.error('Erro ao salvar a ordem das colunas.');
-      load();
+      load(attendantFilter);
     }
-  }, [userId, canReorderColumns, columns, headers, toast, load]);
+  }, [userId, canReorderColumns, columns, headers, toast, load, attendantFilter]);
 
   const toggleTag = useCallback(async (client: Client, tag: Tag) => {
     if (!userId) return;
@@ -342,9 +414,9 @@ function KanbanBoard() {
         body: JSON.stringify({ column_key: importColumn || columns[0]?.key, contacts: parsedImport }),
       });
       const json = await res.json();
-      if (json?.success) { setShowImport(false); setImportText(''); load(); }
+      if (json?.success) { setShowImport(false); setImportText(''); void load(attendantFilter); }
     } finally { setImporting(false); }
-  }, [userId, parsedImport, importColumn, columns, headers, load]);
+  }, [userId, parsedImport, importColumn, columns, headers, load, attendantFilter]);
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -414,6 +486,12 @@ function KanbanBoard() {
 
         <CrmSubNav />
 
+        {clientsCapped && attendantFilter === 'all' && (
+          <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            Mostrando os {clients.length} leads mais recentes de {totalClientsMeta}. Selecione um captador para ver a base completa dele.
+          </div>
+        )}
+
         {loading ? (
           <div className="flex flex-1 items-center justify-center text-gray-400"><Loader2 className="h-6 w-6 animate-spin" /></div>
         ) : loadError ? (
@@ -421,7 +499,7 @@ function KanbanBoard() {
             <p className="max-w-md text-sm text-rose-300">{loadError}</p>
             <button
               type="button"
-              onClick={() => { setLoading(true); load(); }}
+              onClick={() => { void load(attendantFilter); }}
               className="rounded-xl bg-[#E86A24] px-4 py-2 text-sm font-bold text-white"
             >
               Tentar de novo

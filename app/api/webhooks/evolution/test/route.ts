@@ -6,6 +6,11 @@ import { normalizationService } from '@/lib/services/normalization-service';
 import { flowExecutorService } from '@/lib/services/flow-executor-service';
 import { participantExitAuditService } from '@/lib/services/participant-exit-audit-service';
 import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
+import {
+  extractLigacaoMetadata,
+  isLigacaoWebhookPayload,
+  processLigacaoWebhookPayload,
+} from '@/lib/services/ligacao-webhook';
 
 /** Janela de deduplicação de eventos group-participants no ambiente de teste: 15 segundos */
 const PARTICIPANT_DEDUP_WINDOW_MS = 15_000;
@@ -38,6 +43,10 @@ function extractFirstParticipantId(payload: any): string | null {
  * Extrai os campos de metadata do payload Evolution de forma síncrona — sem DB.
  */
 function extractMetadata(payload: any) {
+  if (isLigacaoWebhookPayload(payload)) {
+    return extractLigacaoMetadata(payload);
+  }
+
   const eventType =
     payload?.event ||
     payload?.type ||
@@ -167,6 +176,15 @@ async function processEventBackground(payload: any, opts: WebhookTestOpts): Prom
       return;
     }
     console.error('❌ [WEBHOOK TEST] Falha ao inserir evento:', insertError?.message);
+    return;
+  }
+
+  if (isLigacaoWebhookPayload(payload)) {
+    try {
+      await processLigacaoWebhookPayload(payload, { zaplotoId, eventId: event.id });
+    } catch (ligacaoErr: any) {
+      console.error('❌ [WEBHOOK TEST] Falha processamento ligação:', ligacaoErr?.message || ligacaoErr);
+    }
     return;
   }
 

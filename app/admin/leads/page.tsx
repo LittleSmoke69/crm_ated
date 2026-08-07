@@ -5,7 +5,7 @@ import { useTenantRouter } from '@/lib/utils/tenant-href';
 import Layout from '@/components/Layout';
 import { useRequireAuth } from '@/utils/useRequireAuth';
 import LeadsSection from '@/components/Admin/LeadsSection';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 /** Admin > Leads — gerenciamento de leads capturados (item "Leads" do grupo CRM na sidebar). */
 export default function AdminLeadsPage() {
@@ -38,19 +38,15 @@ export default function AdminLeadsPage() {
     loadProfile();
   }, [userId]);
 
-  const canAccess = status === 'super_admin' || status === 'admin' || status === 'gerente' || status === 'captador' || hasLeadsSidebar;
+  const canAccess =
+    status === 'super_admin' ||
+    status === 'admin' ||
+    status === 'gerente' ||
+    status === 'captador' ||
+    hasLeadsSidebar;
 
-  if (checking || loadingStatus) {
-    return (
-      <Layout>
-        <div className="min-h-[60vh] flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-[#E86A24]" />
-        </div>
-      </Layout>
-    );
-  }
-
-  if (!canAccess) {
+  // Só bloqueia a tela quando já sabemos que não tem acesso
+  if (!checking && !loadingStatus && userId && !canAccess) {
     return (
       <Layout>
         <div className="min-h-[60vh] flex items-center justify-center">
@@ -70,6 +66,13 @@ export default function AdminLeadsPage() {
     );
   }
 
+  const role =
+    String(status || '').toLowerCase() === 'gerente'
+      ? 'gerente'
+      : String(status || '').toLowerCase() === 'captador'
+        ? 'captador'
+        : 'admin';
+
   return (
     <Layout>
       <div className="min-h-screen bg-stone-50 dark:bg-[#1a1612]">
@@ -86,16 +89,7 @@ export default function AdminLeadsPage() {
             <span className="text-stone-600 dark:text-stone-400 font-medium">Leads</span>
           </div>
           {userId && (
-            <LeadsSection
-              userId={userId}
-              userRole={
-                String(status || '').toLowerCase() === 'gerente'
-                  ? 'gerente'
-                  : String(status || '').toLowerCase() === 'captador'
-                    ? 'captador'
-                    : 'admin'
-              }
-            />
+            <LeadsSection userId={userId} userRole={role} />
           )}
         </div>
       </div>

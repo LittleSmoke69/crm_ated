@@ -10,6 +10,11 @@ import { participantExitAuditService } from '@/lib/services/participant-exit-aud
 import { EVOLUTION_GROUP_PARTICIPANT_EVENT_TYPES } from '@/lib/utils/evolution-group-participant-event-types';
 import { processEventForAntiSpam } from '@/lib/anti-spam/antiSpamWorker';
 import { processEvolutionPayloadToChat } from '@/lib/services/evolution-webhook-processor';
+import {
+  extractLigacaoMetadata,
+  isLigacaoWebhookPayload,
+  processLigacaoWebhookPayload,
+} from '@/lib/services/ligacao-webhook';
 
 const PARTICIPANT_DEDUP_WINDOW_MS = 30_000;
 const POST_INSERT_DEDUP_LIMIT = 120;
@@ -40,6 +45,10 @@ function extractAllParticipantIds(payload: any): string[] {
 }
 
 export function extractMetadata(payload: any) {
+  if (isLigacaoWebhookPayload(payload)) {
+    return extractLigacaoMetadata(payload);
+  }
+
   const eventType =
     payload?.event || payload?.type || payload?.data?.event || 'unknown';
   const instanceName =
@@ -180,6 +189,16 @@ export async function processWebhookEvent(payload: any, opts: WebhookProcessOpts
         }
       }
     }
+  }
+
+  // Ligação custom: lead + TAG + atribuição CRM (Allan etc.)
+  if (isLigacaoWebhookPayload(payload)) {
+    try {
+      await processLigacaoWebhookPayload(payload, { zaplotoId, eventId: event.id });
+    } catch (ligacaoErr: any) {
+      console.error('❌ [WEBHOOK] Falha processamento ligação:', ligacaoErr?.message || ligacaoErr);
+    }
+    return;
   }
 
   // Chat persistence (chat_conversations + chat_messages).
