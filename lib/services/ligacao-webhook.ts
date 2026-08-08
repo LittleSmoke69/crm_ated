@@ -22,12 +22,15 @@ function getLigacaoDefaultZaplotoId(): string | null {
       '',
   )
     .trim();
-  return fromEnv || null;
+  // Fallback Cap do Sucesso — webhook /prod chega sem slug (sem x-zaploto-slug)
+  return fromEnv || 'ec433182-0431-4a09-b047-ca57116a2127';
 }
 
 /** Mapa case-insensitive: nome do CRM no payload → username, e-mail ou UUID (vazio = pool). */
 function getLigacaoCrmMap(): Map<string, string> {
-  const raw = String(process.env.WEBHOOK_LIGACAO_CRM_MAP || '').trim();
+  const raw = String(
+    process.env.WEBHOOK_LIGACAO_CRM_MAP?.trim() || 'Allan:',
+  ).trim();
   const map = new Map<string, string>();
   if (!raw) return map;
   for (const part of raw.split(',')) {
@@ -494,19 +497,20 @@ export async function processLigacaoWebhookPayload(
   };
 }
 
-/** Reprocessa eventos de ligação ainda sem processed_at (ex.: falha por tenant). */
+/** Reprocessa eventos de ligação. Com force=true, reprocessa mesmo com processed_at. */
 export async function reprocessPendingLigacaoEvents(opts?: {
   limit?: number;
   sinceIso?: string;
+  force?: boolean;
 }): Promise<{ scanned: number; created: number; errors: number }> {
   const limit = Math.min(Math.max(opts?.limit ?? 100, 1), 500);
   let q = supabaseServiceRole
     .from('evolution_webhook_events')
-    .select('id, payload, zaploto_id')
-    .is('processed_at', null)
+    .select('id, payload, zaploto_id, processed_at')
     .or('event_type.eq.ligação,event_type.eq.ligacao,event_type.eq.call')
     .order('created_at', { ascending: true })
     .limit(limit);
+  if (!opts?.force) q = q.is('processed_at', null);
   if (opts?.sinceIso) q = q.gte('created_at', opts.sinceIso);
 
   const { data: events, error } = await q;

@@ -24,8 +24,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const limit = typeof body.limit === 'number' ? body.limit : 200;
     const sinceIso = typeof body.since === 'string' ? body.since : undefined;
+    const force = body.force === true;
 
-    const result = await reprocessPendingLigacaoEvents({ limit, sinceIso });
+    const result = await reprocessPendingLigacaoEvents({ limit, sinceIso, force });
     return successResponse(result);
   } catch (err: unknown) {
     return serverErrorResponse(err as Error);

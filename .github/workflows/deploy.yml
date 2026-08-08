@@ -97,13 +97,14 @@ jobs:
 
             # Webhook ligação → leads (tenant + mapa CRM; Allan sem perfil = pool)
             upsert_env WEBHOOK_LIGACAO_EVENT_TYPE "ligação"
-            current_lig_zap="$(sed -n 's/^WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID=//p' .env | tr -d '\r' | tr -d ' ')"
-            if [ -z "$current_lig_zap" ]; then
-              upsert_env WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID "ec433182-0431-4a09-b047-ca57116a2127"
-            fi
+            upsert_env WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID "ec433182-0431-4a09-b047-ca57116a2127"
             current_lig_map="$(sed -n 's/^WEBHOOK_LIGACAO_CRM_MAP=//p' .env | tr -d '\r')"
             if [ -z "$current_lig_map" ]; then
               upsert_env WEBHOOK_LIGACAO_CRM_MAP "Allan:"
+            else
+              echo ",${current_lig_map}," | grep -qi ',Allan:' || \
+              echo "${current_lig_map}" | grep -qi '^Allan:' || \
+                upsert_env WEBHOOK_LIGACAO_CRM_MAP "Allan:,${current_lig_map}"
             fi
 
             # Garante franklin (e carlinhosbig) em SUPER_ADMIN_USERNAMES — fora da equipe na Gestão do Chat
