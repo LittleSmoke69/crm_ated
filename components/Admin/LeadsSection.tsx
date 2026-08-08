@@ -404,6 +404,7 @@ export default function LeadsSection({
     total_nao_atribuidos: 0,
     by_captador: [],
   });
+  const [salesLoading, setSalesLoading] = useState(true);
   const [showSalesBreakdown, setShowSalesBreakdown] = useState(false);
   const [showAssignedBreakdown, setShowAssignedBreakdown] = useState(false);
   const [showZeroSalesCaptadores, setShowZeroSalesCaptadores] = useState(false);
@@ -515,6 +516,7 @@ export default function LeadsSection({
   }, [q, fColumn, fGerente, fCaptador, fPeriod, fDate, fTag, onlyDuplicates]);
 
   const loadSales = useCallback(async () => {
+    setSalesLoading(true);
     try {
       const qs = buildQuery({ sales_only: '1', include_sales: '1' });
       const res = await fetch(`/api/admin/crm/leads?${qs}`, { headers: headers() });
@@ -529,14 +531,17 @@ export default function LeadsSection({
       });
     } catch {
       /* card de vendas é secundário */
+    } finally {
+      setSalesLoading(false);
     }
   }, [headers, buildQuery]);
 
   const loadLeads = useCallback(async (targetPage = 1, opts?: { preserveSelection?: boolean; size?: number }) => {
     setLoading(true);
+    // Métricas em paralelo com a tabela (não esperar a lista terminar)
+    const salesPromise = loadSales();
     const size = opts?.size ?? pageSize;
     try {
-      // Tabela primeiro (sem vendas) — bem mais rápido
       const res = await fetch(
         `/api/admin/crm/leads?${buildQuery({ page: String(targetPage), page_size: String(size) })}`,
         { headers: headers() }
@@ -573,12 +578,11 @@ export default function LeadsSection({
           return next;
         });
       }
-      // Vendas em background (não bloqueia a tabela)
-      void loadSales();
     } catch (e: any) {
       showToast(e?.message || 'Erro ao carregar leads', 'error');
     } finally {
       setLoading(false);
+      void salesPromise;
     }
   }, [buildQuery, headers, pageSize, userId, loadSales]);
 
@@ -1122,45 +1126,55 @@ export default function LeadsSection({
         )}
       </div>
 
-      {/* Relatório: atribuídos + vendas (escopo por cargo) */}
+      {/* Relatório: não atribuídos em destaque + vendas */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {/* Card: leads atribuídos */}
-        <div className="rounded-2xl border border-sky-500/25 bg-gradient-to-br from-sky-50 to-white dark:from-sky-950/40 dark:to-[#241e19] overflow-hidden">
+        {/* Card: não atribuídos (destaque) / atribuídos para captador */}
+        <div className="rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/40 dark:to-[#241e19] overflow-hidden">
           <div className="p-5 sm:p-6 flex flex-wrap items-center gap-5">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15 text-sky-700 dark:text-sky-300">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-300">
               <UserCheck className="w-6 h-6" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/80 dark:text-sky-300/80">
-                Leads atribuídos
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
+                {isCaptador
+                  ? 'Leads atribuídos'
+                  : isGerente
+                    ? 'Aguardando captador'
+                    : 'Não atribuídos'}
               </p>
-              <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums">
-                {sales.total_leads}
+              <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums min-h-[2.25rem]">
+                {salesLoading ? (
+                  <span className="inline-block h-8 w-20 rounded-md bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                ) : isCaptador ? (
+                  sales.total_leads
+                ) : (
+                  sales.total_nao_atribuidos
+                )}
               </p>
               <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
                 {formatPeriodLabel(fPeriod, fDate)}
-                {' · '}
-                {isCaptador
-                  ? 'Leads com você como captador'
-                  : isGerente
-                    ? 'Captadores da sua equipe'
-                    : 'Todos os captadores do tenant'}
               </p>
             </div>
             {!isCaptador && (
               <div className="flex gap-6 text-sm">
                 <div>
-                  <p className="text-xs text-stone-500 dark:text-stone-400">
-                    {isGerente ? 'Aguardando captador' : 'Não atribuídos'}
-                  </p>
-                  <p className="text-lg font-bold text-amber-700 dark:text-amber-300 tabular-nums">
-                    {sales.total_nao_atribuidos}
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Leads atribuídos</p>
+                  <p className="text-lg font-bold text-sky-700 dark:text-sky-300 tabular-nums min-h-[1.75rem]">
+                    {salesLoading ? (
+                      <span className="inline-block h-5 w-12 rounded bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                    ) : (
+                      sales.total_leads
+                    )}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-stone-500 dark:text-stone-400">Captadores c/ lead</p>
-                  <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums">
-                    {assignedWithLeads.length}
+                  <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums min-h-[1.75rem]">
+                    {salesLoading ? (
+                      <span className="inline-block h-5 w-10 rounded bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                    ) : (
+                      assignedWithLeads.length
+                    )}
                   </p>
                 </div>
               </div>
@@ -1169,7 +1183,7 @@ export default function LeadsSection({
               <button
                 type="button"
                 onClick={() => setShowAssignedBreakdown((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-sky-500/35 text-sky-800 dark:text-sky-300 hover:bg-sky-500/10 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-amber-500/35 text-amber-800 dark:text-amber-300 hover:bg-amber-500/10 transition-colors"
               >
                 {showAssignedBreakdown ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 Por captador ({assignedWithLeads.length})
@@ -1177,8 +1191,8 @@ export default function LeadsSection({
             )}
           </div>
           {!isCaptador && showAssignedBreakdown && assignedRowsVisible.length > 0 && (
-            <div className="border-t border-sky-500/20">
-              <div className="px-4 py-2 flex flex-wrap items-center justify-between gap-2 bg-sky-500/5 text-xs text-stone-500 dark:text-stone-400">
+            <div className="border-t border-amber-500/20">
+              <div className="px-4 py-2 flex flex-wrap items-center justify-between gap-2 bg-amber-500/5 text-xs text-stone-500 dark:text-stone-400">
                 <span>
                   Ordenado por leads · {assignedWithLeads.length} com lead
                   {assignedWithoutLeads.length > 0 ? ` · ${assignedWithoutLeads.length} sem lead` : ''}
@@ -1187,7 +1201,7 @@ export default function LeadsSection({
                   <button
                     type="button"
                     onClick={() => setShowZeroAssignedCaptadores((v) => !v)}
-                    className="font-semibold text-sky-700 dark:text-sky-300 hover:underline"
+                    className="font-semibold text-amber-700 dark:text-amber-300 hover:underline"
                   >
                     {showZeroAssignedCaptadores ? 'Ocultar sem lead' : 'Mostrar sem lead'}
                   </button>
@@ -1196,7 +1210,7 @@ export default function LeadsSection({
               <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10">
-                    <tr className="text-left text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 bg-sky-50 dark:bg-sky-950/60">
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 bg-amber-50 dark:bg-amber-950/60">
                       <th className="px-4 py-2.5 font-semibold w-10">#</th>
                       <th className="px-4 py-2.5 font-semibold">Captador</th>
                       <th className="px-4 py-2.5 font-semibold text-right">Atribuídos</th>
@@ -1204,15 +1218,15 @@ export default function LeadsSection({
                       <th className="px-4 py-2.5 font-semibold text-right">Taxa</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-sky-500/10">
+                  <tbody className="divide-y divide-amber-500/10">
                     {assignedRowsVisible.map((c, idx) => (
                       <tr
                         key={c.id}
-                        className={`hover:bg-sky-500/5 ${c.total_leads > 0 ? '' : 'opacity-50'}`}
+                        className={`hover:bg-amber-500/5 ${c.total_leads > 0 ? '' : 'opacity-50'}`}
                       >
                         <td className="px-4 py-2.5 tabular-nums text-stone-400 text-xs">{idx + 1}</td>
                         <td className="px-4 py-2.5 font-semibold text-stone-900 dark:text-stone-50">{c.name}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums font-bold text-sky-700 dark:text-sky-300">
+                        <td className="px-4 py-2.5 text-right tabular-nums font-bold text-amber-700 dark:text-amber-300">
                           {c.total_leads}
                         </td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-stone-700 dark:text-stone-300">
@@ -1240,8 +1254,12 @@ export default function LeadsSection({
               <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700/80 dark:text-emerald-300/80">
                 Vendas fechadas
               </p>
-              <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums">
-                {sales.total_vendas}
+              <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums min-h-[2.25rem]">
+                {salesLoading ? (
+                  <span className="inline-block h-8 w-16 rounded-md bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                ) : (
+                  sales.total_vendas
+                )}
               </p>
               <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
                 {formatPeriodLabel(fPeriod, fDate)}
@@ -1254,11 +1272,23 @@ export default function LeadsSection({
             <div className="flex gap-6 text-sm">
               <div>
                 <p className="text-xs text-stone-500 dark:text-stone-400">Base (atribuídos)</p>
-                <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums">{sales.total_leads}</p>
+                <p className="text-lg font-bold text-stone-800 dark:text-stone-100 tabular-nums min-h-[1.75rem]">
+                  {salesLoading ? (
+                    <span className="inline-block h-5 w-12 rounded bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                  ) : (
+                    sales.total_leads
+                  )}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-stone-500 dark:text-stone-400">Taxa</p>
-                <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">{sales.taxa}%</p>
+                <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums min-h-[1.75rem]">
+                  {salesLoading ? (
+                    <span className="inline-block h-5 w-10 rounded bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                  ) : (
+                    <>{sales.taxa}%</>
+                  )}
+                </p>
               </div>
             </div>
             {!isCaptador && salesWithVendas.length > 0 && (
