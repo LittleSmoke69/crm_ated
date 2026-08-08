@@ -65,6 +65,8 @@ type SalesSummary = {
   total_vendas: number;
   taxa: number;
   total_nao_atribuidos: number;
+  /** Chegadas do dia: TAG ads + ligacao. */
+  total_chegadas_ads_ligacao: number;
   by_captador: CaptadorSalesRow[];
 };
 
@@ -402,6 +404,7 @@ export default function LeadsSection({
     total_vendas: 0,
     taxa: 0,
     total_nao_atribuidos: 0,
+    total_chegadas_ads_ligacao: 0,
     by_captador: [],
   });
   const [salesLoading, setSalesLoading] = useState(true);
@@ -527,6 +530,7 @@ export default function LeadsSection({
         total_vendas: json.data.sales.total_vendas || 0,
         taxa: json.data.sales.taxa || 0,
         total_nao_atribuidos: json.data.sales.total_nao_atribuidos || 0,
+        total_chegadas_ads_ligacao: json.data.sales.total_chegadas_ads_ligacao || 0,
         by_captador: Array.isArray(json.data.sales.by_captador) ? json.data.sales.by_captador : [],
       });
     } catch {
@@ -1136,11 +1140,7 @@ export default function LeadsSection({
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
-                {isCaptador
-                  ? 'Leads atribuídos'
-                  : isGerente
-                    ? 'Aguardando captador'
-                    : 'Não atribuídos'}
+                {isCaptador ? 'Leads atribuídos' : 'Leads do dia'}
               </p>
               <p className="text-3xl font-bold text-stone-900 dark:text-stone-50 tabular-nums min-h-[2.25rem]">
                 {salesLoading ? (
@@ -1148,15 +1148,27 @@ export default function LeadsSection({
                 ) : isCaptador ? (
                   sales.total_leads
                 ) : (
-                  sales.total_nao_atribuidos
+                  sales.total_chegadas_ads_ligacao
                 )}
               </p>
               <p className="text-sm text-stone-600 dark:text-stone-400 mt-0.5">
-                {formatPeriodLabel(fPeriod, fDate)}
+                {isCaptador ? formatPeriodLabel(fPeriod, fDate) : 'ADS + Ligação · Hoje'}
               </p>
             </div>
             {!isCaptador && (
               <div className="flex gap-6 text-sm">
+                <div>
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    {isGerente ? 'Aguardando captador' : 'Não atribuídos'}
+                  </p>
+                  <p className="text-lg font-bold text-amber-700 dark:text-amber-300 tabular-nums min-h-[1.75rem]">
+                    {salesLoading ? (
+                      <span className="inline-block h-5 w-12 rounded bg-stone-200/80 dark:bg-stone-700/80 animate-pulse" />
+                    ) : (
+                      sales.total_nao_atribuidos
+                    )}
+                  </p>
+                </div>
                 <div>
                   <p className="text-xs text-stone-500 dark:text-stone-400">Leads atribuídos</p>
                   <p className="text-lg font-bold text-sky-700 dark:text-sky-300 tabular-nums min-h-[1.75rem]">

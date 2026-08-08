@@ -263,6 +263,8 @@ type SalesSummary = {
   taxa: number;
   /** Pool sem captador — só admin/super_admin/gerente; captador sempre 0. */
   total_nao_atribuidos: number;
+  /** Leads com TAG ads ou ligacao criados no período (chegadas do dia / filtro). */
+  total_chegadas_ads_ligacao: number;
   by_captador: CaptadorSalesRow[];
 };
 
@@ -356,17 +358,66 @@ async function countUnassignedLeads(params: {
   return total;
 }
 
+/** Conta leads TAG ads + ligacao no período (chegadas para revisão). */
+async function countAdsLigacaoChegadas(params: {
+  isCaptador: boolean;
+  isGerente: boolean;
+  userId: string;
+  zaplotoId: string;
+  teamCaptadorIds?: Set<string>;
+  fromIso?: string;
+  toIso?: string;
+}): Promise<number> {
+  const { isCaptador, isGerente, userId, zaplotoId, teamCaptadorIds, fromIso, toIso } = params;
+
+  let query = supabaseServiceRole
+    .from('crm_leads')
+    .select('id', { count: 'exact', head: true })
+    .in('acquisition_tag', ['ads', 'ligacao']);
+
+  if (isCaptador) {
+    query = query.eq('user_id', userId);
+  } else if (isGerente) {
+    const team = [...(teamCaptadorIds || [])];
+    if (team.length > 0) {
+      query = query.or(`gerente_id.eq.${userId},user_id.in.(${team.join(',')})`);
+    } else {
+      query = query.eq('gerente_id', userId);
+    }
+  } else {
+    query = query.or(`zaploto_id.eq.${zaplotoId},zaploto_id.is.null`);
+  }
+
+  if (fromIso) query = query.gte('created_at', fromIso);
+  if (toIso) query = query.lt('created_at', toIso);
+
+  const { count, error } = await query;
+  if (error) throw new Error(error.message);
+  return count || 0;
+}
+
+/** Janela do dia local (servidor) para o contador de chegadas ADS + Ligação. */
+function localTodayRangeIso(): { fromIso: string; toIso: string } {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 1);
+  return { fromIso: from.toISOString(), toIso: to.toISOString() };
+}
+
 async function countWonSales(
   captadorIds: string[],
   nameById: Map<string, string>,
   totalNaoAtribuidos = 0,
-  range?: { fromIso?: string; toIso?: string }
+  range?: { fromIso?: string; toIso?: string },
+  totalChegadasAdsLigacao = 0,
 ): Promise<SalesSummary> {
   const empty: SalesSummary = {
     total_leads: 0,
     total_vendas: 0,
     taxa: 0,
     total_nao_atribuidos: totalNaoAtribuidos,
+    total_chegadas_ads_ligacao: totalChegadasAdsLigacao,
     by_captador: [],
   };
   if (captadorIds.length === 0) return empty;
@@ -496,6 +547,7 @@ async function countWonSales(
     total_vendas: totalVendas,
     taxa,
     total_nao_atribuidos: totalNaoAtribuidos,
+    total_chegadas_ads_ligacao: totalChegadasAdsLigacao,
     by_captador: byCaptador,
   };
 }
@@ -797,15 +849,33 @@ export async function GET(req: NextRequest) {
       if (isCaptador) {
         nameById.set(userId, profile.full_name || profile.email || 'Captador');
       }
-      const totalNaoAtribuidos = await countUnassignedLeads({
-        isCaptador,
-        isGerente,
-        userId,
-        zaplotoId,
-        fromIso,
-        toIso,
-      });
-      const sales = await countWonSales(salesScopeIds, nameById, totalNaoAtribuidos, { fromIso, toIso });
+      const todayRange = localTodayRangeIso();
+      const [totalNaoAtribuidos, totalChegadasAdsLigacao] = await Promise.all([
+        countUnassignedLeads({
+          isCaptador,
+          isGerente,
+          userId,
+          zaplotoId,
+          fromIso,
+          toIso,
+        }),
+        countAdsLigacaoChegadas({
+          isCaptador,
+          isGerente,
+          userId,
+          zaplotoId,
+          teamCaptadorIds,
+          fromIso: todayRange.fromIso,
+          toIso: todayRange.toIso,
+        }),
+      ]);
+      const sales = await countWonSales(
+        salesScopeIds,
+        nameById,
+        totalNaoAtribuidos,
+        { fromIso, toIso },
+        totalChegadasAdsLigacao,
+      );
       return successResponse({ sales, period, date: periodDate || null });
     }
 
@@ -823,7 +893,14 @@ export async function GET(req: NextRequest) {
         page: 1,
         page_size: PAGE_SIZE_DEFAULT,
         sales: includeSales
-          ? { total_leads: 0, total_vendas: 0, taxa: 0, total_nao_atribuidos: 0, by_captador: [] }
+          ? {
+              total_leads: 0,
+              total_vendas: 0,
+              taxa: 0,
+              total_nao_atribuidos: 0,
+              total_chegadas_ads_ligacao: 0,
+              by_captador: [],
+            }
           : undefined,
         columns,
         default_column_key: DEFAULT_ASSIGN_COLUMN,
@@ -987,19 +1064,35 @@ export async function GET(req: NextRequest) {
     }
 
     const sales = includeSales
-      ? await countWonSales(
-          salesScopeIds,
-          nameById,
-          await countUnassignedLeads({
-            isCaptador,
-            isGerente,
-            userId,
-            zaplotoId,
-            fromIso,
-            toIso,
-          }),
-          { fromIso, toIso }
-        )
+      ? await (async () => {
+          const todayRange = localTodayRangeIso();
+          const [totalNaoAtribuidos, totalChegadasAdsLigacao] = await Promise.all([
+            countUnassignedLeads({
+              isCaptador,
+              isGerente,
+              userId,
+              zaplotoId,
+              fromIso,
+              toIso,
+            }),
+            countAdsLigacaoChegadas({
+              isCaptador,
+              isGerente,
+              userId,
+              zaplotoId,
+              teamCaptadorIds,
+              fromIso: todayRange.fromIso,
+              toIso: todayRange.toIso,
+            }),
+          ]);
+          return countWonSales(
+            salesScopeIds,
+            nameById,
+            totalNaoAtribuidos,
+            { fromIso, toIso },
+            totalChegadasAdsLigacao,
+          );
+        })()
       : undefined;
 
     return successResponse({
