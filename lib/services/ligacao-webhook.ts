@@ -415,6 +415,27 @@ export async function processLigacaoWebhookPayload(
     if (error || !created) throw error || new Error('Falha ao criar lead de ligação');
     lead = created as LigacaoLeadRow;
   } else {
+    // Nova ligação autorizada: devolve ao pool Não atribuídos para revisão
+    const poolReset =
+      toPool || !resolvedProfile
+        ? {
+            user_id: null,
+            gerente_id: null,
+            assigned_by: null,
+            assigned_at: null,
+            capture_status: 'pendente',
+            status: 'novo',
+            // Reaparece no filtro "Hoje" da tela Leads
+            created_at: nowIso,
+          }
+        : {};
+    if (poolReset.user_id === null && lead.user_id) {
+      await supabaseServiceRole
+        .from('crm_lead_stage')
+        .delete()
+        .eq('user_id', lead.user_id)
+        .eq('lead_external_id', String(lead.external_id));
+    }
     const { error } = await supabaseServiceRole
       .from('crm_leads')
       .update({
@@ -423,9 +444,13 @@ export async function processLigacaoWebhookPayload(
         source: 'ligacao',
         updated_at: nowIso,
         zaploto_id: lead.zaploto_id || tenantId,
+        ...poolReset,
       })
       .eq('id', lead.id);
     if (error) throw error;
+    if (poolReset.user_id === null) {
+      lead = { ...lead, user_id: null, gerente_id: null };
+    }
   }
 
   if (toPool || !resolvedProfile) {
