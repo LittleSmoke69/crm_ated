@@ -95,6 +95,17 @@ jobs:
             sed -i '/^EVOLUTION_WEBHOOK_ALLOW_NO_TOKEN=/d' .env || true
             sed -i '/^EVOLUTION_WEBHOOK_ALLOW_LOCALHOST=/d' .env || true
 
+            # Webhook ligação → leads (tenant + mapa CRM; Allan sem perfil = pool)
+            upsert_env WEBHOOK_LIGACAO_EVENT_TYPE "ligação"
+            current_lig_zap="$(sed -n 's/^WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID=//p' .env | tr -d '\r' | tr -d ' ')"
+            if [ -z "$current_lig_zap" ]; then
+              upsert_env WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID "ec433182-0431-4a09-b047-ca57116a2127"
+            fi
+            current_lig_map="$(sed -n 's/^WEBHOOK_LIGACAO_CRM_MAP=//p' .env | tr -d '\r')"
+            if [ -z "$current_lig_map" ]; then
+              upsert_env WEBHOOK_LIGACAO_CRM_MAP "Allan:"
+            fi
+
             # Garante franklin (e carlinhosbig) em SUPER_ADMIN_USERNAMES — fora da equipe na Gestão do Chat
             current_sa="$(sed -n 's/^SUPER_ADMIN_USERNAMES=//p' .env | tr -d '\r' | tr -d ' ')"
             if [ -z "$current_sa" ]; then

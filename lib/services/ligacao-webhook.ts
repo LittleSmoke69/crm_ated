@@ -4,10 +4,46 @@
  *
  * Payload esperado:
  * { "numero": "19999999999", "autorizou": "sim", "crm": "Allan" }
+ *
+ * Env:
+ * - WEBHOOK_LIGACAO_EVENT_TYPE — tipo gravado no evento (default: ligação)
+ * - WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID — tenant quando o webhook chega sem slug
+ * - WEBHOOK_LIGACAO_CRM_MAP — mapa crm→username/uuid (ex.: Allan:wesley,Outro:)
+ *   valor vazio = cria lead sem captador (aparece em Não atribuídos)
  */
 import { supabaseServiceRole } from '@/lib/services/supabase-service';
 
 const DEFAULT_KANBAN_COLUMN = 'novo';
+
+function getLigacaoDefaultZaplotoId(): string | null {
+  const fromEnv = String(
+    process.env.WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID ||
+      process.env.DEFAULT_ZAPLOTO_ID ||
+      '',
+  )
+    .trim();
+  return fromEnv || null;
+}
+
+/** Mapa case-insensitive: nome do CRM no payload → username, e-mail ou UUID (vazio = pool). */
+function getLigacaoCrmMap(): Map<string, string> {
+  const raw = String(process.env.WEBHOOK_LIGACAO_CRM_MAP || '').trim();
+  const map = new Map<string, string>();
+  if (!raw) return map;
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(':');
+    if (colon < 0) {
+      map.set(trimmed.toLowerCase(), '');
+      continue;
+    }
+    const key = trimmed.slice(0, colon).trim().toLowerCase();
+    const value = trimmed.slice(colon + 1).trim();
+    if (key) map.set(key, value);
+  }
+  return map;
+}
 
 function phoneDigits(value: unknown): string {
   return String(value || '').replace(/\D/g, '');
@@ -111,9 +147,77 @@ async function findLeadByPhone(tenantId: string | null, phone: string): Promise<
   }) as LigacaoLeadRow | undefined;
 }
 
-async function resolveCrmProfile(crmName: string, zaplotoId: string | null) {
+type CrmProfile = {
+  id: string;
+  full_name: string | null;
+  username: string | null;
+  status: string | null;
+  enroller: string | null;
+  zaploto_id: string | null;
+};
+
+async function resolveProfileByIdentifier(
+  identifier: string,
+  zaplotoId: string | null,
+): Promise<CrmProfile | null> {
+  const id = identifier.trim();
+  if (!id) return null;
+
+  const uuidRe =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (uuidRe.test(id)) {
+    const { data } = await supabaseServiceRole
+      .from('profiles')
+      .select('id, full_name, username, status, enroller, zaploto_id')
+      .eq('id', id)
+      .maybeSingle();
+    return (data as CrmProfile | null) || null;
+  }
+
+  const safe = sanitizeIlike(id);
+  let query = supabaseServiceRole
+    .from('profiles')
+    .select('id, full_name, username, status, enroller, zaploto_id')
+    .or(`username.ilike.${safe},email.ilike.${safe},full_name.ilike.%${safe}%`)
+    .in('status', ['captador', 'gerente', 'admin', 'super_admin'])
+    .limit(20);
+  if (zaplotoId) query = query.eq('zaploto_id', zaplotoId);
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = (data || []) as CrmProfile[];
+  if (rows.length === 0) return null;
+
+  const norm = (v: unknown) =>
+    String(v || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  const target = norm(safe);
+  return (
+    rows.find((r) => norm(r.username) === target) ||
+    rows.find((r) => norm(r.full_name) === target) ||
+    rows[0]
+  );
+}
+
+async function resolveCrmProfile(
+  crmName: string,
+  zaplotoId: string | null,
+): Promise<CrmProfile | null | 'pool'> {
   const safe = sanitizeIlike(crmName);
   if (!safe) return null;
+
+  const map = getLigacaoCrmMap();
+  const mapped = map.get(safe.toLowerCase());
+  if (mapped !== undefined) {
+    // Chave no mapa com valor vazio ⇒ pool (Não atribuídos)
+    if (!mapped) return 'pool';
+    const fromMap = await resolveProfileByIdentifier(mapped, zaplotoId);
+    if (fromMap) return fromMap;
+    console.warn(`[LIGACAO] CRM map "${safe}" → "${mapped}" não resolvido; lead vai ao pool`);
+    return 'pool';
+  }
 
   let query = supabaseServiceRole
     .from('profiles')
@@ -128,7 +232,7 @@ async function resolveCrmProfile(crmName: string, zaplotoId: string | null) {
 
   const { data, error } = await query;
   if (error) throw error;
-  const rows = data || [];
+  const rows = (data || []) as CrmProfile[];
   if (rows.length === 0) return null;
 
   const norm = (v: unknown) =>
@@ -143,8 +247,11 @@ async function resolveCrmProfile(crmName: string, zaplotoId: string | null) {
     rows.find((r) => norm(r.full_name) === target) ||
     rows.find((r) => norm(r.username) === target);
   const captador =
-    rows.find((r) => r.status === 'captador' && (norm(r.full_name).includes(target) || norm(r.username).includes(target))) ||
-    rows.find((r) => r.status === 'captador');
+    rows.find(
+      (r) =>
+        r.status === 'captador' &&
+        (norm(r.full_name).includes(target) || norm(r.username).includes(target)),
+    ) || rows.find((r) => r.status === 'captador');
 
   return exact || captador || rows[0];
 }
@@ -227,6 +334,7 @@ export type LigacaoProcessResult = {
 /**
  * Cria/atualiza lead com TAG ligação e atribui ao perfil indicado em `crm`
  * quando `autorizou` é "sim" (ou omitido).
+ * Sem perfil CRM (ou mapa com valor vazio): lead fica no pool Não atribuídos.
  */
 export async function processLigacaoWebhookPayload(
   payload: unknown,
@@ -244,19 +352,42 @@ export async function processLigacaoWebhookPayload(
 
   // Só cria/atribui lead quando autorizado (ou sem flag). "não" só registra o evento.
   if (autorizou === 'nao') {
+    if (opts.eventId) {
+      await supabaseServiceRole
+        .from('evolution_webhook_events')
+        .update({ processed_at: nowIso })
+        .eq('id', opts.eventId);
+    }
     return { processed: true, leadId: null, assignedTo: null, skippedReason: 'autorizou_nao' };
   }
 
-  let profile = crmName ? await resolveCrmProfile(crmName, opts.zaplotoId) : null;
-  const tenantId = opts.zaplotoId || profile?.zaploto_id || null;
+  let profileOrPool = crmName ? await resolveCrmProfile(crmName, opts.zaplotoId) : null;
+  const profile = profileOrPool && profileOrPool !== 'pool' ? profileOrPool : null;
+  const forcePool = profileOrPool === 'pool';
+
+  const tenantId =
+    opts.zaplotoId ||
+    profile?.zaploto_id ||
+    getLigacaoDefaultZaplotoId() ||
+    null;
+
   if (!tenantId) {
-    console.warn('[LIGACAO] Sem zaploto_id para criar lead');
+    console.warn(
+      '[LIGACAO] Sem zaploto_id — configure WEBHOOK_LIGACAO_DEFAULT_ZAPLOTO_ID no .env',
+    );
     return { processed: false, leadId: null, assignedTo: null, skippedReason: 'missing_tenant' };
   }
 
-  if (crmName && !profile) {
-    profile = await resolveCrmProfile(crmName, null);
+  if (crmName && !profile && !forcePool) {
+    // Tenta sem filtro de tenant (perfil pode estar em outro zaploto_id legado)
+    const retry = await resolveCrmProfile(crmName, null);
+    if (retry && retry !== 'pool') {
+      profileOrPool = retry;
+    }
   }
+  const resolvedProfile =
+    profileOrPool && profileOrPool !== 'pool' ? profileOrPool : null;
+  const toPool = forcePool || !resolvedProfile;
 
   let lead = await findLeadByPhone(tenantId, phone);
   if (!lead) {
@@ -294,31 +425,36 @@ export async function processLigacaoWebhookPayload(
     if (error) throw error;
   }
 
-  if (!profile) {
-    console.warn(`[LIGACAO] Perfil CRM não encontrado: ${crmName || '(vazio)'}`);
+  if (toPool || !resolvedProfile) {
+    console.warn(
+      `[LIGACAO] Lead ${lead.id} no pool (crm=${crmName || '(vazio)'} não mapeado). Configure WEBHOOK_LIGACAO_CRM_MAP se quiser autoatribuir.`,
+    );
     if (opts.eventId) {
       await supabaseServiceRole
         .from('evolution_webhook_events')
-        .update({ processed_at: nowIso })
+        .update({ processed_at: nowIso, zaploto_id: tenantId })
         .eq('id', opts.eventId);
     }
-    return { processed: true, leadId: lead.id, assignedTo: null, skippedReason: 'crm_not_found' };
+    return {
+      processed: true,
+      leadId: lead.id,
+      assignedTo: null,
+      skippedReason: 'crm_not_found_pool',
+    };
   }
 
-  const status = String(profile.status || '').toLowerCase();
+  const status = String(resolvedProfile.status || '').toLowerCase();
   const leadUpdate: Record<string, unknown> = { updated_at: nowIso, zaploto_id: tenantId };
 
   if (status === 'captador') {
-    leadUpdate.user_id = profile.id;
-    leadUpdate.gerente_id = profile.enroller || lead.gerente_id || null;
-    leadUpdate.assigned_by = profile.id;
+    leadUpdate.user_id = resolvedProfile.id;
+    leadUpdate.gerente_id = resolvedProfile.enroller || lead.gerente_id || null;
+    leadUpdate.assigned_by = resolvedProfile.id;
     leadUpdate.assigned_at = nowIso;
   } else if (status === 'gerente') {
-    leadUpdate.gerente_id = profile.id;
-    // Mantém captador se já tinha; senão fica aguardando captador
+    leadUpdate.gerente_id = resolvedProfile.id;
   } else {
-    // admin/super_admin: associa como gerente do pool
-    leadUpdate.gerente_id = profile.id;
+    leadUpdate.gerente_id = resolvedProfile.id;
   }
 
   const { error: assignErr } = await supabaseServiceRole
@@ -332,9 +468,9 @@ export async function processLigacaoWebhookPayload(
     if (column) {
       await placeLeadOnCaptadorKanban({
         lead,
-        captadorId: profile.id,
+        captadorId: resolvedProfile.id,
         column,
-        movedBy: profile.id,
+        movedBy: resolvedProfile.id,
         nowIso,
       });
     }
@@ -343,17 +479,52 @@ export async function processLigacaoWebhookPayload(
   if (opts.eventId) {
     await supabaseServiceRole
       .from('evolution_webhook_events')
-      .update({ processed_at: nowIso })
+      .update({ processed_at: nowIso, zaploto_id: tenantId })
       .eq('id', opts.eventId);
   }
 
   console.log(
-    `✅ [LIGACAO] lead=${lead.id} phone=${phone} crm=${profile.full_name || profile.username} status=${status}`,
+    `✅ [LIGACAO] lead=${lead.id} phone=${phone} crm=${resolvedProfile.full_name || resolvedProfile.username} status=${status}`,
   );
 
   return {
     processed: true,
     leadId: lead.id,
-    assignedTo: profile.id,
+    assignedTo: resolvedProfile.id,
   };
+}
+
+/** Reprocessa eventos de ligação ainda sem processed_at (ex.: falha por tenant). */
+export async function reprocessPendingLigacaoEvents(opts?: {
+  limit?: number;
+  sinceIso?: string;
+}): Promise<{ scanned: number; created: number; errors: number }> {
+  const limit = Math.min(Math.max(opts?.limit ?? 100, 1), 500);
+  let q = supabaseServiceRole
+    .from('evolution_webhook_events')
+    .select('id, payload, zaploto_id')
+    .is('processed_at', null)
+    .or('event_type.eq.ligação,event_type.eq.ligacao,event_type.eq.call')
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (opts?.sinceIso) q = q.gte('created_at', opts.sinceIso);
+
+  const { data: events, error } = await q;
+  if (error) throw error;
+
+  let created = 0;
+  let errors = 0;
+  for (const ev of events || []) {
+    try {
+      const result = await processLigacaoWebhookPayload(ev.payload, {
+        zaplotoId: ev.zaploto_id || getLigacaoDefaultZaplotoId(),
+        eventId: ev.id,
+      });
+      if (result.processed && result.leadId) created += 1;
+    } catch (e) {
+      errors += 1;
+      console.error('[LIGACAO] reprocess error', ev.id, e);
+    }
+  }
+  return { scanned: (events || []).length, created, errors };
 }
